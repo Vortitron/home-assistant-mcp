@@ -24,6 +24,7 @@ src/
 	ha/wsClient.ts      createHaWsClient(config, logger) -> WS registries (area/device/entity)
 	ha/types.ts         structural HA payload types
 	esphome/dashboardClient.ts  REST (edit/devices) + WS command runner (validate/compile/upload)
+	vomehome/client.ts  createVomeHomeClient(config, logger) -> portal /api/v1/instances (Bearer PAT)
 	tools/helpers.ts    ToolContext, result helpers, runTool() error wrapper
 	tools/*.ts          one registerXxxTools(server, ctx) per group
 	tools/index.ts      registerAllTools(server, ctx)
@@ -45,14 +46,41 @@ src/
 
 ## Tools
 
-26 tools across: system, states, services, registry, templates, automations,
-logs/diagnostics, ESPHome. See `README.md` for the full table.
+31 tools across: system, states, services, registry, templates, automations,
+logs/diagnostics, ESPHome, VomeHome. See `README.md` for the full table.
 
 ## Environment
 
 See `.env.example` / the README table. Required: `HA_URL`, `HA_TOKEN`. Writes:
 `HA_ALLOW_WRITE`, `HA_DENY_DOMAINS`, `HA_ALLOW_DOMAINS`, `HA_ALLOW_CONFIG_WRITE`.
 ESPHome: `ESPHOME_DASHBOARD_URL` (+ optional auth).
+VomeHome: `VOMEHOME_API_URL` (default `https://vome.io`), `VOMEHOME_TOKEN`,
+`VOMEHOME_ALLOW_CREATE`.
+
+## VomeHome integration & required portal API
+
+The `vomehome_*` tools talk to a token-authenticated JSON API on the VomeHome
+portal (Flask app at `konhas.com/portal`). The portal today has session-cookie
+routes and an unused JWT helper, but **no PAT issuance and no JSON create/login
+endpoints** — so these endpoints must be added portal-side for the tools to work
+against a live account. Contract the client expects (all `Authorization: Bearer
+<pat>`, CSRF-exempt, scoped to the token's user):
+
+| Method | Path | Response |
+| --- | --- | --- |
+| GET | `/api/v1/instances` | `{ instances: [{ id, name, status, tier, ha_url, custom_domain, created_at, live: { reachable, ha_state, ha_health } }] }` |
+| GET | `/api/v1/instances/{id}` | `{ instance: {…same…} }` |
+| POST | `/api/v1/instances/{id}/restart` | `{ success, message }` (wraps `restart_server()`) |
+| POST | `/api/v1/instances` | body `{ name, timezone? }` → `{ instance: { id, name, status } }` (wraps `create_user_instance()`) |
+| GET | `/api/v1/instances/{id}/login-url` | `{ url, expires_at? }` (wraps `ha_backdoor.create_login_url()`, honour `backdoor_disabled`) |
+
+Plus a PAT system: a `users`-linked `api_tokens` table, a GitHub-session-gated
+UI to create/revoke tokens (show plaintext once, store a hash), and PAT-aware
+`api_auth_required` (accept `vh_…` PATs alongside the existing JWT). The client
+tolerates snake_case or camelCase keys and passes unknown fields through.
+
+The client/tools are written against this contract and unit-tested with a mocked
+`fetch`; they degrade to clear errors until the portal ships the endpoints.
 
 ## Testing
 
@@ -61,19 +89,20 @@ ESPHome: `ESPHOME_DASHBOARD_URL` (+ optional auth).
 - `config.test.ts` — env parsing + validation.
 - `restClient.test.ts` — REST behaviour with mocked `fetch`.
 - `tools.test.ts` — tools via a fake MCP server + injected fake clients.
+- `vomehome.test.ts` — VomeHome client (mocked `fetch`) + tool-layer guards.
 
 Mocks are used only for tests. No live HA is required to develop or test.
 
 ## Roadmap
 
-1. **VomeHome test installs** — provision a throwaway HA sandbox via VomeHome for
-   agents to try changes before touching a real home (the modular client layer
-   exists to make this drop-in). This is the headline next step.
+1. **VomeHome test installs** — `vomehome_*` tools ship now (list/get/reboot/
+   create/login-url). Remaining: portal endpoints above, then auto-retarget
+   `HA_URL`/`HA_TOKEN` at a freshly created sandbox so agents iterate there first.
 2. ESPHome live-log streaming + device adoption.
 3. MCP resources for entities/areas alongside tools.
 4. Optional HTTP/SSE transport for remote use.
 
 ## Open questions
 
-- Token handling for the VomeHome sandbox flow (per-session ephemeral tokens?).
+- PAT vs short-lived OAuth-device tokens for VomeHome (start with revocable PATs).
 - Whether to expose a "dry-run" mode that previews service calls without sending.

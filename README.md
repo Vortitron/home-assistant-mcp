@@ -78,6 +78,21 @@ policy (see [Safety](#safety)).
 | `esphome_compile` | Compile firmware. |
 | `esphome_upload` | Compile + flash a device, OTA by default (write-gated). |
 
+### VomeHome (require `VOMEHOME_TOKEN`)
+
+[VomeHome](https://vome.io) is managed Home Assistant hosting. Log in to the
+portal with GitHub, mint a personal access token under **Account → API tokens**,
+and the agent can manage your instances from the editor. Advanced management
+stays behind a full browser login on the portal.
+
+| Tool | Description |
+| --- | --- |
+| `vomehome_list_instances` | List your HA instances with status, tier, URL and live health. |
+| `vomehome_get_instance` | Details + live status for one instance. |
+| `vomehome_reboot_instance` | Reboot an instance's VM (write-gated). |
+| `vomehome_create_instance` | Create a throwaway test instance (needs `VOMEHOME_ALLOW_CREATE`). |
+| `vomehome_get_login_url` | Mint a one-click HA login URL to open in a new tab. |
+
 ---
 
 ## Install
@@ -121,6 +136,9 @@ config.
 | `ESPHOME_DASHBOARD_URL` | _(disabled)_ | ESPHome dashboard URL to enable ESPHome tools. |
 | `ESPHOME_DASHBOARD_TOKEN` | — | Bearer token, if the dashboard is behind an auth proxy. |
 | `ESPHOME_DASHBOARD_USERNAME` / `..._PASSWORD` | — | HTTP basic auth alternative. |
+| `VOMEHOME_API_URL` | `https://vome.io` | VomeHome portal base URL. |
+| `VOMEHOME_TOKEN` | _(disabled)_ | VomeHome personal access token; enables the `vomehome_*` tools. |
+| `VOMEHOME_ALLOW_CREATE` | `false` | Extra guard required (with `HA_ALLOW_WRITE`) to create an instance. |
 | `HA_TIMEOUT_MS` | `15000` | HTTP/WebSocket request timeout. |
 | `MAX_RESULTS` | `500` | Max items a list tool returns before truncating. |
 | `LOG_LEVEL` | `info` | `error` \| `warn` \| `info` \| `debug` (logs go to stderr). |
@@ -215,6 +233,9 @@ Designed to be safe to point at a real home:
    reach a denied domain.
 5. **Separate config-write switch.** Editing automation YAML additionally requires
    `HA_ALLOW_CONFIG_WRITE=true`.
+6. **VomeHome guards.** Rebooting an instance respects the master `HA_ALLOW_WRITE`
+   switch; creating one additionally requires `VOMEHOME_ALLOW_CREATE=true`. The
+   VomeHome token is scoped server-side to your own account.
 
 Tools are also annotated with MCP hints (`readOnlyHint`, `destructiveHint`) so
 clients can warn before destructive calls.
@@ -233,6 +254,8 @@ clients can warn before destructive calls.
   → `ha_check_config` → `ha_trigger_automation`.
 - *"Add a sensor to this ESPHome node and flash it"* → `esphome_get_config` →
   `esphome_save_config` → `esphome_validate` → `esphome_upload`.
+- *"Spin up a sandbox and open it"* → `vomehome_create_instance` →
+  `vomehome_get_instance` (poll status) → `vomehome_get_login_url` (open the link).
 
 ---
 
@@ -268,6 +291,7 @@ src/
 	logger.ts             # stderr logger
 	ha/                   # Home Assistant REST + WebSocket clients
 	esphome/              # ESPHome dashboard client
+	vomehome/             # VomeHome portal client
 	tools/                # one module per tool group
 	cli/doctor.ts         # connectivity check
 tests/                  # vitest unit tests
@@ -277,10 +301,11 @@ tests/                  # vitest unit tests
 
 ## Roadmap
 
-- **VomeHome test installs.** Spin up a throwaway Home Assistant instance on
-  VomeHome so an agent can try changes against a sandbox before touching a real
-  home, then promote what works. This is the next milestone and the main reason
-  the client layer is kept modular.
+- **VomeHome test installs.** The `vomehome_*` tools already list, create, reboot
+  and open instances. Next: point `HA_URL`/`HA_TOKEN` at a freshly created sandbox
+  automatically so an agent can try changes there before touching a real home,
+  then promote what works. (Requires the portal API endpoints described in
+  [`project_outline.md`](./project_outline.md).)
 - ESPHome live-log streaming and device adoption.
 - MCP resources for entities/areas (in addition to tools).
 - Optional HTTP/SSE transport for remote use.

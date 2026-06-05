@@ -3,8 +3,10 @@ import type { Config } from "../config.js";
 import type { Logger } from "../logger.js";
 import type { HaRestClient } from "../ha/restClient.js";
 import { HaApiError } from "../ha/restClient.js";
+import { VomeHomeError } from "../vomehome/client.js";
 import type { HaWsClient } from "../ha/wsClient.js";
 import type { EsphomeDashboardClient } from "../esphome/dashboardClient.js";
+import type { VomeHomeClient } from "../vomehome/client.js";
 
 /**
  * Everything a tool handler needs, assembled once in index.ts and threaded
@@ -16,6 +18,7 @@ export interface ToolContext {
 	rest: HaRestClient;
 	ws: HaWsClient;
 	esphome: EsphomeDashboardClient;
+	vomehome: VomeHomeClient;
 }
 
 export function textResult(text: string): CallToolResult {
@@ -31,7 +34,7 @@ export function errorResult(message: string): CallToolResult {
 }
 
 export function toErrorMessage(error: unknown): string {
-	if (error instanceof HaApiError) {
+	if (error instanceof HaApiError || error instanceof VomeHomeError) {
 		const body = error.body ? ` Body: ${error.body.slice(0, 800)}` : "";
 		return `${error.message}${error.status ? ` (status ${error.status})` : ""}.${body}`;
 	}

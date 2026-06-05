@@ -8,6 +8,7 @@ import { registerAutomationTools } from "./automations.js";
 import { registerLogTools } from "./logs.js";
 import { registerSystemTools } from "./system.js";
 import { registerEsphomeTools } from "./esphome.js";
+import { registerVomeHomeTools } from "./vomehome.js";
 
 /** Registers every tool group on the given server. */
 export function registerAllTools(server: McpServer, ctx: ToolContext): void {
@@ -19,4 +20,5 @@ export function registerAllTools(server: McpServer, ctx: ToolContext): void {
 	registerAutomationTools(server, ctx);
 	registerLogTools(server, ctx);
 	registerEsphomeTools(server, ctx);
+	registerVomeHomeTools(server, ctx);
 }

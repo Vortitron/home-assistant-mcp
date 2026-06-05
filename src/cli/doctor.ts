@@ -4,6 +4,7 @@ import type { Logger } from "../logger.js";
 import { createHaRestClient } from "../ha/restClient.js";
 import { createHaWsClient } from "../ha/wsClient.js";
 import { createEsphomeDashboardClient } from "../esphome/dashboardClient.js";
+import { createVomeHomeClient } from "../vomehome/client.js";
 
 function line(text = ""): void {
 	process.stdout.write(`${text}\n`);
@@ -28,6 +29,7 @@ export async function runDoctor(config: Config, logger: Logger): Promise<number>
 	line(`Deny domains:      ${config.safety.denyDomains.join(", ") || "(none)"}`);
 	line(`Allow domains:     ${config.safety.allowDomains.join(", ") || "(any)"}`);
 	line(`ESPHome dashboard: ${config.esphome.enabled ? config.esphome.dashboardUrl : "(not configured)"}`);
+	line(`VomeHome portal:   ${config.vomehome.enabled ? config.vomehome.apiUrl : "(not configured)"}`);
 	line("");
 
 	const problems = validateConfig(config);
@@ -87,6 +89,16 @@ export async function runDoctor(config: Config, logger: Logger): Promise<number>
 			line("[ok]   ESPHome dashboard reachable");
 		} catch (error) {
 			line(`[warn] ESPHome dashboard: ${describe(error)}`);
+		}
+	}
+
+	if (config.vomehome.enabled) {
+		const vomehome = createVomeHomeClient(config, logger);
+		try {
+			const instances = await vomehome.listInstances();
+			line(`[ok]   VomeHome portal reachable: ${instances.length} instance(s)`);
+		} catch (error) {
+			line(`[warn] VomeHome portal: ${describe(error)}`);
 		}
 	}
 

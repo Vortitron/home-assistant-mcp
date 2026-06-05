@@ -6,6 +6,7 @@ import { createLogger } from "../src/logger.js";
 import type { HaRestClient } from "../src/ha/restClient.js";
 import type { HaWsClient } from "../src/ha/wsClient.js";
 import { createEsphomeDashboardClient } from "../src/esphome/dashboardClient.js";
+import { createVomeHomeClient, type VomeHomeClient } from "../src/vomehome/client.js";
 import { registerAllTools } from "../src/tools/index.js";
 import type { ToolContext } from "../src/tools/helpers.js";
 
@@ -41,6 +42,7 @@ function buildHarness(
 		env?: Record<string, string>;
 		rest?: Partial<HaRestClient>;
 		ws?: Partial<HaWsClient>;
+		vomehome?: Partial<VomeHomeClient>;
 	} = {}
 ): FakeServer {
 	const config = loadConfig({ HA_URL: "http://ha.local:8123", HA_TOKEN: "tok", ...options.env });
@@ -49,7 +51,8 @@ function buildHarness(
 		logger,
 		rest: (options.rest ?? {}) as unknown as HaRestClient,
 		ws: (options.ws ?? {}) as unknown as HaWsClient,
-		esphome: createEsphomeDashboardClient(config, logger)
+		esphome: createEsphomeDashboardClient(config, logger),
+		vomehome: (options.vomehome ?? createVomeHomeClient(config, logger)) as VomeHomeClient
 	};
 	const server = new FakeServer();
 	registerAllTools(server as unknown as McpServer, ctx);

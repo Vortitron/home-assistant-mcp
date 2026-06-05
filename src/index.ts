@@ -7,6 +7,7 @@ import { createLogger } from "./logger.js";
 import { createHaRestClient } from "./ha/restClient.js";
 import { createHaWsClient } from "./ha/wsClient.js";
 import { createEsphomeDashboardClient } from "./esphome/dashboardClient.js";
+import { createVomeHomeClient } from "./vomehome/client.js";
 import { registerAllTools } from "./tools/index.js";
 import type { ToolContext } from "./tools/helpers.js";
 import { runDoctor } from "./cli/doctor.js";
@@ -39,7 +40,8 @@ async function main(): Promise<void> {
 	const rest = createHaRestClient(config, logger);
 	const ws = createHaWsClient(config, logger);
 	const esphome = createEsphomeDashboardClient(config, logger);
-	const ctx: ToolContext = { config, logger, rest, ws, esphome };
+	const vomehome = createVomeHomeClient(config, logger);
+	const ctx: ToolContext = { config, logger, rest, ws, esphome, vomehome };
 
 	const server = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION });
 	registerAllTools(server, ctx);
@@ -47,7 +49,7 @@ async function main(): Promise<void> {
 	const transport = new StdioServerTransport();
 	await server.connect(transport);
 	logger.info(
-		`${SERVER_NAME} v${SERVER_VERSION} ready (writes ${config.safety.allowWrite ? "ENABLED" : "disabled"}, esphome ${config.esphome.enabled ? "enabled" : "disabled"})`
+		`${SERVER_NAME} v${SERVER_VERSION} ready (writes ${config.safety.allowWrite ? "ENABLED" : "disabled"}, esphome ${config.esphome.enabled ? "enabled" : "disabled"}, vomehome ${config.vomehome.enabled ? "enabled" : "disabled"})`
 	);
 
 	const shutdown = (signal: string): void => {

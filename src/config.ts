@@ -26,6 +26,20 @@ export interface EsphomeConfig {
 	enabled: boolean;
 }
 
+export interface VomeHomeConfig {
+	/** Base URL of the VomeHome portal, no trailing slash (e.g. https://vome.io). */
+	apiUrl: string;
+	/** Personal access token minted in the VomeHome portal (Account -> API tokens). */
+	token: string;
+	/**
+	 * Extra guard for the heavyweight "create instance" action. Even with the
+	 * master write switch on, creating a VM additionally requires this.
+	 */
+	allowCreate: boolean;
+	/** True when both an API URL and a token are configured. */
+	enabled: boolean;
+}
+
 export interface Config {
 	haUrl: string;
 	haToken: string;
@@ -34,6 +48,7 @@ export interface Config {
 	logLevel: LogLevel;
 	safety: SafetyConfig;
 	esphome: EsphomeConfig;
+	vomehome: VomeHomeConfig;
 }
 
 export interface ConfigProblem {
@@ -46,6 +61,7 @@ const DEFAULT_DENY_DOMAINS =
 const DEFAULT_TIMEOUT_MS = 15000;
 const DEFAULT_MAX_RESULTS = 500;
 const DEFAULT_LOG_LEVEL: LogLevel = "info";
+const DEFAULT_VOMEHOME_API_URL = "https://vome.io";
 const VALID_LOG_LEVELS: readonly string[] = ["error", "warn", "info", "debug"];
 
 function parseBoolean(value: string | undefined, fallback: boolean): boolean {
@@ -82,6 +98,10 @@ function stripTrailingSlashes(value: string): string {
 
 export function loadConfig(env: NodeJS.ProcessEnv): Config {
 	const esphomeUrl = stripTrailingSlashes((env.ESPHOME_DASHBOARD_URL ?? "").trim());
+	const vomehomeUrl = stripTrailingSlashes(
+		(env.VOMEHOME_API_URL ?? DEFAULT_VOMEHOME_API_URL).trim()
+	);
+	const vomehomeToken = (env.VOMEHOME_TOKEN ?? "").trim();
 	return {
 		haUrl: stripTrailingSlashes((env.HA_URL ?? "").trim()),
 		haToken: (env.HA_TOKEN ?? "").trim(),
@@ -100,6 +120,12 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
 			username: (env.ESPHOME_DASHBOARD_USERNAME ?? "").trim(),
 			password: (env.ESPHOME_DASHBOARD_PASSWORD ?? "").trim(),
 			enabled: esphomeUrl.length > 0
+		},
+		vomehome: {
+			apiUrl: vomehomeUrl,
+			token: vomehomeToken,
+			allowCreate: parseBoolean(env.VOMEHOME_ALLOW_CREATE, false),
+			enabled: vomehomeToken.length > 0 && vomehomeUrl.length > 0
 		}
 	};
 }

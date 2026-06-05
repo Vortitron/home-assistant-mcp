@@ -7,7 +7,9 @@
 				"HA_URL": "http://homeassistant.local:8123",
 				"HA_TOKEN": "paste-your-long-lived-token",
 				"HA_ALLOW_WRITE": "false",
-				"HA_ALLOW_CONFIG_WRITE": "false"
+				"HA_ALLOW_CONFIG_WRITE": "false",
+				"VOMEHOME_TOKEN": "",
+				"VOMEHOME_ALLOW_CREATE": "false"
 			}
 		}
 	}

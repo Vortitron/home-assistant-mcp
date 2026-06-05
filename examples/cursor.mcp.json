@@ -1,0 +1,14 @@
+{
+	"mcpServers": {
+		"home-assistant": {
+			"command": "node",
+			"args": ["/home/vortitron/home-assistant-mcp/dist/index.js"],
+			"env": {
+				"HA_URL": "http://homeassistant.local:8123",
+				"HA_TOKEN": "paste-your-long-lived-token",
+				"HA_ALLOW_WRITE": "false",
+				"HA_ALLOW_CONFIG_WRITE": "false"
+			}
+		}
+	}
+}

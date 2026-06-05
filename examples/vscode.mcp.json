@@ -1,0 +1,22 @@
+{
+	"inputs": [
+		{
+			"id": "ha_token",
+			"type": "promptString",
+			"description": "Home Assistant long-lived access token",
+			"password": true
+		}
+	],
+	"servers": {
+		"home-assistant": {
+			"type": "stdio",
+			"command": "node",
+			"args": ["/home/vortitron/home-assistant-mcp/dist/index.js"],
+			"env": {
+				"HA_URL": "http://homeassistant.local:8123",
+				"HA_TOKEN": "${input:ha_token}",
+				"HA_ALLOW_WRITE": "false"
+			}
+		}
+	}
+}

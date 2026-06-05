@@ -1,0 +1,81 @@
+// =============================================================================
+// home-assistant-mcp — CI Pipeline
+//
+// Install -> Quality Gates (ESLint, typecheck) -> Test (vitest) -> Build (tsc).
+// Runs inside the shared VomeHome Jenkins instance (agent any; Node is
+// available on the built-in node, as used by the VomeSync CI pipeline).
+// Registered by konhas.com/jenkins/casc.yaml as HomeAssistantMCP/ha-mcp-ci.
+// =============================================================================
+
+pipeline {
+	agent any
+
+	options {
+		ansiColor('xterm')
+		timestamps()
+		timeout(time: 20, unit: 'MINUTES')
+		buildDiscarder(logRotator(numToKeepStr: '20'))
+	}
+
+	environment {
+		NODE_OPTIONS = '--max-old-space-size=2048'
+		CI = 'true'
+	}
+
+	stages {
+		stage('Setup') {
+			steps {
+				sh '''
+					echo "── Node.js ──"
+					node --version
+					npm --version
+					npm ci
+				'''
+			}
+		}
+
+		stage('Quality Gates') {
+			parallel {
+				stage('Lint') {
+					steps {
+						sh 'npm run lint'
+					}
+				}
+				stage('Typecheck') {
+					steps {
+						sh 'npm run typecheck'
+					}
+				}
+			}
+		}
+
+		stage('Test') {
+			steps {
+				sh 'npx vitest run --reporter=default --reporter=junit --outputFile.junit=test-report.junit.xml'
+			}
+			post {
+				always {
+					junit allowEmptyResults: true, testResults: 'test-report.junit.xml'
+				}
+			}
+		}
+
+		stage('Build') {
+			steps {
+				sh 'npm run build'
+			}
+		}
+	}
+
+	post {
+		success {
+			echo '✓ home-assistant-mcp CI — all checks passed.'
+		}
+		failure {
+			echo '✗ home-assistant-mcp CI — pipeline failed. See stage logs.'
+		}
+		cleanup {
+			cleanWs()
+		}
+	}
+}

@@ -1,0 +1,96 @@
+import type { Config } from "../config.js";
+import { validateConfig } from "../config.js";
+import type { Logger } from "../logger.js";
+import { createHaRestClient } from "../ha/restClient.js";
+import { createHaWsClient } from "../ha/wsClient.js";
+import { createEsphomeDashboardClient } from "../esphome/dashboardClient.js";
+
+function line(text = ""): void {
+	process.stdout.write(`${text}\n`);
+}
+
+function describe(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * `home-assistant-mcp doctor` — a human-facing connectivity check that runs the
+ * same clients the server uses against the configured Home Assistant. Returns a
+ * process exit code (0 = healthy).
+ */
+export async function runDoctor(config: Config, logger: Logger): Promise<number> {
+	line("home-assistant-mcp doctor");
+	line("=========================");
+	line(`HA_URL:            ${config.haUrl || "(not set)"}`);
+	line(`HA_TOKEN:          ${config.haToken ? `set (${config.haToken.length} chars)` : "(not set)"}`);
+	line(`Writes:            ${config.safety.allowWrite ? "ENABLED" : "disabled"}`);
+	line(`Config writes:     ${config.safety.allowConfigWrite ? "ENABLED" : "disabled"}`);
+	line(`Deny domains:      ${config.safety.denyDomains.join(", ") || "(none)"}`);
+	line(`Allow domains:     ${config.safety.allowDomains.join(", ") || "(any)"}`);
+	line(`ESPHome dashboard: ${config.esphome.enabled ? config.esphome.dashboardUrl : "(not configured)"}`);
+	line("");
+
+	const problems = validateConfig(config);
+	if (problems.length > 0) {
+		line("Configuration problems:");
+		for (const problem of problems) {
+			line(`  - ${problem.field}: ${problem.message}`);
+		}
+		return 1;
+	}
+
+	const rest = createHaRestClient(config, logger);
+	let ok = true;
+
+	try {
+		const status = await rest.ping();
+		line(`[ok]   REST /api reachable: ${status.message}`);
+	} catch (error) {
+		ok = false;
+		line(`[FAIL] REST /api: ${describe(error)}`);
+	}
+
+	try {
+		const haConfig = await rest.getConfig();
+		const components = Array.isArray(haConfig.components) ? haConfig.components.length : "?";
+		line(
+			`[ok]   Home Assistant ${haConfig.version ?? "?"} at "${haConfig.location_name ?? "?"}" (${components} components)`
+		);
+	} catch (error) {
+		ok = false;
+		line(`[FAIL] /api/config: ${describe(error)}`);
+	}
+
+	try {
+		const states = await rest.getStates();
+		line(`[ok]   ${states.length} entities visible`);
+	} catch (error) {
+		ok = false;
+		line(`[FAIL] /api/states: ${describe(error)}`);
+	}
+
+	const ws = createHaWsClient(config, logger);
+	try {
+		const areas = await ws.listAreas();
+		line(`[ok]   WebSocket registry reachable: ${areas.length} areas`);
+	} catch (error) {
+		ok = false;
+		line(`[FAIL] WebSocket registry: ${describe(error)}`);
+	} finally {
+		await ws.close().catch(() => undefined);
+	}
+
+	if (config.esphome.enabled) {
+		const esphome = createEsphomeDashboardClient(config, logger);
+		try {
+			await esphome.listDevices();
+			line("[ok]   ESPHome dashboard reachable");
+		} catch (error) {
+			line(`[warn] ESPHome dashboard: ${describe(error)}`);
+		}
+	}
+
+	line("");
+	line(ok ? "All core checks passed." : "Some checks failed (see above).");
+	return ok ? 0 : 1;
+}

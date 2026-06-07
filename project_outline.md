@@ -22,6 +22,7 @@ src/
 	logger.ts           createLogger(level) -> stderr-only logger
 	ha/restClient.ts    createHaRestClient(config, logger) -> REST surface
 	ha/wsClient.ts      createHaWsClient(config, logger) -> WS registries (area/device/entity)
+	ha/brokeredClient.ts createBrokeredHaRestClient -> routes HA via VomeHome (no HA token)
 	ha/types.ts         structural HA payload types
 	esphome/dashboardClient.ts  REST (edit/devices) + WS command runner (validate/compile/upload)
 	vomehome/client.ts  createVomeHomeClient(config, logger) -> portal /api/v1/instances (Bearer PAT)
@@ -51,36 +52,65 @@ logs/diagnostics, ESPHome, VomeHome. See `README.md` for the full table.
 
 ## Environment
 
-See `.env.example` / the README table. Required: `HA_URL`, `HA_TOKEN`. Writes:
-`HA_ALLOW_WRITE`, `HA_DENY_DOMAINS`, `HA_ALLOW_DOMAINS`, `HA_ALLOW_CONFIG_WRITE`.
-ESPHome: `ESPHOME_DASHBOARD_URL` (+ optional auth).
-VomeHome: `VOMEHOME_API_URL` (default `https://vome.io`), `VOMEHOME_TOKEN`,
-`VOMEHOME_ALLOW_CREATE`.
+See `.env.example` / the README table. Direct mode: `HA_URL`, `HA_TOKEN`.
+Brokered mode (no HA token): `VOMEHOME_TOKEN` + `VOMEHOME_INSTANCE_ID` (and
+empty `HA_TOKEN`). Writes: `HA_ALLOW_WRITE`, `HA_DENY_DOMAINS`,
+`HA_ALLOW_DOMAINS`, `HA_ALLOW_CONFIG_WRITE`. ESPHome: `ESPHOME_DASHBOARD_URL`
+(+ optional auth). VomeHome: `VOMEHOME_API_URL` (default `https://vome.io`),
+`VOMEHOME_TOKEN`, `VOMEHOME_INSTANCE_ID`, `VOMEHOME_ALLOW_CREATE`.
 
-## VomeHome integration & required portal API
+`config.brokered` is derived: true when a VomeHome token + instance id are set
+and `HA_TOKEN` is empty. In that mode `index.ts` injects the brokered REST
+client and an "unavailable" WS stub (registry tools then return a clear error).
 
-The `vomehome_*` tools talk to a token-authenticated JSON API on the VomeHome
-portal (Flask app at `konhas.com/portal`). The portal today has session-cookie
-routes and an unused JWT helper, but **no PAT issuance and no JSON create/login
-endpoints** — so these endpoints must be added portal-side for the tools to work
-against a live account. Contract the client expects (all `Authorization: Bearer
-<pat>`, CSRF-exempt, scoped to the token's user):
+## VomeHome integration & portal API
 
-| Method | Path | Response |
-| --- | --- | --- |
-| GET | `/api/v1/instances` | `{ instances: [{ id, name, status, tier, ha_url, custom_domain, created_at, live: { reachable, ha_state, ha_health } }] }` |
-| GET | `/api/v1/instances/{id}` | `{ instance: {…same…} }` |
-| POST | `/api/v1/instances/{id}/restart` | `{ success, message }` (wraps `restart_server()`) |
-| POST | `/api/v1/instances` | body `{ name, timezone? }` → `{ instance: { id, name, status } }` (wraps `create_user_instance()`) |
-| GET | `/api/v1/instances/{id}/login-url` | `{ url, expires_at? }` (wraps `ha_backdoor.create_login_url()`, honour `backdoor_disabled`) |
+The `vomehome_*` tools and brokered HA mode talk to a token-authenticated JSON
+API on the VomeHome portal (Flask app at `konhas.com/portal`). These endpoints
+are **implemented** there (PAT system + instances API + brokered HA proxy). All
+require `Authorization: Bearer <pat>`, are CSRF-exempt, and are scoped to the
+token's user and (where relevant) re-check instance ownership.
 
-Plus a PAT system: a `users`-linked `api_tokens` table, a GitHub-session-gated
-UI to create/revoke tokens (show plaintext once, store a hash), and PAT-aware
-`api_auth_required` (accept `vh_…` PATs alongside the existing JWT). The client
-tolerates snake_case or camelCase keys and passes unknown fields through.
+Instance management (`portal/instances_api.py`):
 
-The client/tools are written against this contract and unit-tested with a mocked
-`fetch`; they degrade to clear errors until the portal ships the endpoints.
+| Method | Path | Scope | Response |
+| --- | --- | --- | --- |
+| GET | `/api/v1/instances` | `instances:read` | `{ instances: [{ id, name, status, tier, ha_url, custom_domain, created_at, live? }] }` |
+| GET | `/api/v1/instances/{id}` | `instances:read` | `{ instance: {…} }` |
+| POST | `/api/v1/instances/{id}/restart` | `instances:write` | `{ success, message }` |
+| POST | `/api/v1/instances` | `instances:write` | `{ instance: { id, name, status } }` |
+| GET | `/api/v1/instances/{id}/login-url` | `instances:read` | `{ url }` |
+
+Brokered Home Assistant (`portal/ha_proxy_api.py` → `portal/ha_core_api.py`):
+
+| Method | Path | Scope | Notes |
+| --- | --- | --- | --- |
+| GET | `/api/v1/instances/{id}/ha/` | `ha:read` | HA `/api/` ping |
+| GET | `/api/v1/instances/{id}/ha/config` | `ha:read` | HA `/api/config` |
+| GET | `/api/v1/instances/{id}/ha/states[/{eid}]` | `ha:read` | states |
+| GET | `/api/v1/instances/{id}/ha/services` | `ha:read` | services |
+| POST | `/api/v1/instances/{id}/ha/template` | `ha:read` | render (eval only) |
+| POST | `/api/v1/instances/{id}/ha/services/{domain}/{service}` | `ha:write` | deny-domain + cross-domain checked |
+
+How the portal reaches HA: it can't hit tenant VMs directly, so it reuses
+`supervisor_api._get_vm_access` (refresh→access token) and runs `curl` on the
+container server over SSH (`ha_core_api.ha_request`). The HA token never leaves
+the server.
+
+Supporting pieces (all portal-side):
+- **PATs** (`portal/api_tokens.py`): `api_tokens` table; tokens carry **scopes**
+  (`instances:read/write`, `ha:read/ha:write`); read-only is the default; only a
+  SHA-256 hash is stored; `token_meta()` is the single validator and `verify_pat`
+  wraps it. GitHub-session UI to create/revoke (`account_tokens.py` +
+  `templates/account_api_tokens.html`, with scope checkboxes).
+- **Scope gate** (`portal/api_scopes.py`): `require_scopes(*needed)` — PATs use
+  their stored scopes; other bearer tokens (Auth0/session) get full scopes.
+- **Audit** (`portal/ha_audit.py`): `ha_audit_log` table; every brokered call
+  (allowed or denied, read or write) is recorded against token + user.
+
+Server-side deny-list mirrors the MCP default and is overridable via
+`HA_BROKER_DENY_DOMAINS`. Portal changes are covered by
+`tests/test_ha_broker.py` and `tests/test_api_tokens.py`.
 
 ## Testing
 
@@ -88,6 +118,7 @@ The client/tools are written against this contract and unit-tested with a mocked
 - `safety.test.ts` — the write-guard matrix.
 - `config.test.ts` — env parsing + validation.
 - `restClient.test.ts` — REST behaviour with mocked `fetch`.
+- `brokeredClient.test.ts` — brokered routing, policy-denial surfacing, mode detection.
 - `tools.test.ts` — tools via a fake MCP server + injected fake clients.
 - `vomehome.test.ts` — VomeHome client (mocked `fetch`) + tool-layer guards.
 
@@ -95,12 +126,16 @@ Mocks are used only for tests. No live HA is required to develop or test.
 
 ## Roadmap
 
-1. **VomeHome test installs** — `vomehome_*` tools ship now (list/get/reboot/
-   create/login-url). Remaining: portal endpoints above, then auto-retarget
-   `HA_URL`/`HA_TOKEN` at a freshly created sandbox so agents iterate there first.
-2. ESPHome live-log streaming + device adoption.
-3. MCP resources for entities/areas alongside tools.
-4. Optional HTTP/SSE transport for remote use.
+1. **Brokered HA (the real boundary)** — shipped (MVP): scoped, audited HA
+   reads/writes proxied through VomeHome so the agent never holds the HA token.
+   Remaining: registry (areas/devices) over the broker, brokered config-file
+   editing, and a per-token audit view in the portal.
+2. **VomeHome test installs** — `vomehome_*` tools + portal endpoints ship now.
+   Remaining: auto-retarget a freshly created sandbox so agents iterate there
+   first, then promote what works.
+3. ESPHome live-log streaming + device adoption.
+4. MCP resources for entities/areas alongside tools.
+5. Optional HTTP/SSE transport for remote use.
 
 ## Open questions
 

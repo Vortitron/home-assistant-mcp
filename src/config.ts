@@ -32,6 +32,12 @@ export interface VomeHomeConfig {
 	/** Personal access token minted in the VomeHome portal (Account -> API tokens). */
 	token: string;
 	/**
+	 * Instance (server) id to broker Home Assistant calls to. When set (with a
+	 * token, and no direct HA_TOKEN) the HA tools route through VomeHome instead
+	 * of talking to Home Assistant directly.
+	 */
+	instanceId: string;
+	/**
 	 * Extra guard for the heavyweight "create instance" action. Even with the
 	 * master write switch on, creating a VM additionally requires this.
 	 */
@@ -43,6 +49,13 @@ export interface VomeHomeConfig {
 export interface Config {
 	haUrl: string;
 	haToken: string;
+	/**
+	 * When true, Home Assistant reads/writes are brokered through VomeHome (the
+	 * agent never holds an HA token; policy is enforced server-side). Set
+	 * automatically when a VomeHome token + instance id are present and no direct
+	 * HA_TOKEN is configured.
+	 */
+	brokered: boolean;
 	timeoutMs: number;
 	maxResults: number;
 	logLevel: LogLevel;
@@ -102,9 +115,19 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
 		(env.VOMEHOME_API_URL ?? DEFAULT_VOMEHOME_API_URL).trim()
 	);
 	const vomehomeToken = (env.VOMEHOME_TOKEN ?? "").trim();
+	const vomehomeInstanceId = (env.VOMEHOME_INSTANCE_ID ?? "").trim();
+	const haToken = (env.HA_TOKEN ?? "").trim();
+	// Brokered HA mode: the agent has a VomeHome token + instance but no direct
+	// HA token, so all HA traffic must go through the (policed, audited) portal.
+	const brokered =
+		vomehomeToken.length > 0 &&
+		vomehomeUrl.length > 0 &&
+		vomehomeInstanceId.length > 0 &&
+		haToken.length === 0;
 	return {
 		haUrl: stripTrailingSlashes((env.HA_URL ?? "").trim()),
-		haToken: (env.HA_TOKEN ?? "").trim(),
+		haToken,
+		brokered,
 		timeoutMs: parsePositiveInt(env.HA_TIMEOUT_MS, DEFAULT_TIMEOUT_MS),
 		maxResults: parsePositiveInt(env.MAX_RESULTS, DEFAULT_MAX_RESULTS),
 		logLevel: parseLogLevel(env.LOG_LEVEL),
@@ -124,6 +147,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
 		vomehome: {
 			apiUrl: vomehomeUrl,
 			token: vomehomeToken,
+			instanceId: vomehomeInstanceId,
 			allowCreate: parseBoolean(env.VOMEHOME_ALLOW_CREATE, false),
 			enabled: vomehomeToken.length > 0 && vomehomeUrl.length > 0
 		}
@@ -132,10 +156,29 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
 
 export function validateConfig(config: Config): ConfigProblem[] {
 	const problems: ConfigProblem[] = [];
+	// Brokered mode: validate the VomeHome side instead of direct HA creds.
+	if (config.brokered) {
+		if (!config.vomehome.apiUrl || !/^https?:\/\//i.test(config.vomehome.apiUrl)) {
+			problems.push({
+				field: "VOMEHOME_API_URL",
+				message: "VOMEHOME_API_URL must start with http:// or https:// (e.g. https://vome.io)."
+			});
+		}
+		if (!config.vomehome.token) {
+			problems.push({ field: "VOMEHOME_TOKEN", message: "VOMEHOME_TOKEN is required for brokered mode." });
+		}
+		if (!config.vomehome.instanceId) {
+			problems.push({
+				field: "VOMEHOME_INSTANCE_ID",
+				message: "VOMEHOME_INSTANCE_ID is required for brokered mode (the instance to control)."
+			});
+		}
+		return problems;
+	}
 	if (!config.haUrl) {
 		problems.push({
 			field: "HA_URL",
-			message: "HA_URL is required (e.g. http://homeassistant.local:8123)."
+			message: "HA_URL is required (e.g. http://homeassistant.local:8123). Or use brokered mode: set VOMEHOME_TOKEN + VOMEHOME_INSTANCE_ID and leave HA_TOKEN empty."
 		});
 	} else if (!/^https?:\/\//i.test(config.haUrl)) {
 		problems.push({ field: "HA_URL", message: "HA_URL must start with http:// or https://." });
@@ -143,7 +186,7 @@ export function validateConfig(config: Config): ConfigProblem[] {
 	if (!config.haToken) {
 		problems.push({
 			field: "HA_TOKEN",
-			message: "HA_TOKEN is required (a Home Assistant long-lived access token)."
+			message: "HA_TOKEN is required (a Home Assistant long-lived access token). Or use brokered mode via VomeHome (VOMEHOME_TOKEN + VOMEHOME_INSTANCE_ID)."
 		});
 	}
 	return problems;

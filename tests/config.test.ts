@@ -71,4 +71,27 @@ describe("validateConfig", () => {
 		);
 		expect(problems).toEqual([]);
 	});
+
+	it("passes for a complete brokered config (no direct HA creds needed)", () => {
+		const problems = validateConfig(
+			loadConfig({
+				VOMEHOME_API_URL: "https://vome.io",
+				VOMEHOME_TOKEN: "vh_token",
+				VOMEHOME_INSTANCE_ID: "srv-1"
+			})
+		);
+		expect(problems).toEqual([]);
+	});
+
+	it("reports a missing instance id in brokered mode", () => {
+		// Force brokered detection by supplying token + url + instance, then
+		// blanking the instance to ensure the brokered branch reports it.
+		const config = loadConfig({
+			VOMEHOME_API_URL: "https://vome.io",
+			VOMEHOME_TOKEN: "vh_token",
+			VOMEHOME_INSTANCE_ID: "srv-1"
+		});
+		const broken = { ...config, vomehome: { ...config.vomehome, instanceId: "" } };
+		expect(validateConfig(broken).some((p) => p.field === "VOMEHOME_INSTANCE_ID")).toBe(true);
+	});
 });

@@ -97,24 +97,47 @@ stays behind a full browser login on the portal.
 
 ## Install
 
-Requires **Node.js ≥ 18.18** (Node 20+ recommended).
+Requires **Node.js ≥ 18.18** (Node 20+ recommended). There is nothing to install
+by hand — your editor launches the server on demand with `npx`, so the same
+config works on every machine (no absolute paths).
 
-### From npm (once published)
+### One‑click (Cursor)
 
-```bash
-npx -y home-assistant-mcp doctor   # one-off connectivity check
+[![Add to Cursor](https://img.shields.io/badge/Add%20to-Cursor-000?logo=cursor)](cursor://anysphere.cursor-deeplink/mcp/install?name=home-assistant&config=eyJjb21tYW5kIjoibnB4IiwiYXJncyI6WyIteSIsIkB2b3J0aXRyb24vaG9tZS1hc3Npc3RhbnQtbWNwIl0sImVudiI6eyJIQV9VUkwiOiJodHRwOi8vaG9tZWFzc2lzdGFudC5sb2NhbDo4MTIzIiwiSEFfVE9LRU4iOiJZT1VSX0hBX0xPTkdfTElWRURfVE9LRU4iLCJIQV9BTExPV19XUklURSI6ImZhbHNlIn19)
+
+Click it, then edit the pre‑filled `HA_URL` and `HA_TOKEN`. (If the button does
+nothing, copy the [`cursor://` link from the source of this section](#) into your
+browser's address bar.)
+
+### One‑line config
+
+Add this to `~/.cursor/mcp.json` (all projects) or `.cursor/mcp.json` (one
+project) and fill in your token — that's the whole install:
+
+```json
+{
+	"mcpServers": {
+		"home-assistant": {
+			"command": "npx",
+			"args": ["-y", "@vortitron/home-assistant-mcp"],
+			"env": {
+				"HA_URL": "http://homeassistant.local:8123",
+				"HA_TOKEN": "paste-your-long-lived-token",
+				"HA_ALLOW_WRITE": "false"
+			}
+		}
+	}
+}
 ```
 
-Most users do not run it by hand — the editor launches it for you via the MCP
-config below.
-
-### From source
+### Verify / from source
 
 ```bash
+npx -y @vortitron/home-assistant-mcp doctor   # one-off connectivity check
+
+# or hack on it:
 git clone https://github.com/Vortitron/home-assistant-mcp.git
-cd home-assistant-mcp
-npm install
-npm run build
+cd home-assistant-mcp && npm install && npm run build
 ```
 
 ---
@@ -138,6 +161,7 @@ config.
 | `ESPHOME_DASHBOARD_USERNAME` / `..._PASSWORD` | — | HTTP basic auth alternative. |
 | `VOMEHOME_API_URL` | `https://vome.io` | VomeHome portal base URL. |
 | `VOMEHOME_TOKEN` | _(disabled)_ | VomeHome personal access token; enables the `vomehome_*` tools. |
+| `VOMEHOME_INSTANCE_ID` | _(direct mode)_ | Instance to broker HA calls to. With a token and **no** `HA_TOKEN`, HA tools route through VomeHome (see [Brokered mode](#brokered-mode-the-real-boundary)). |
 | `VOMEHOME_ALLOW_CREATE` | `false` | Extra guard required (with `HA_ALLOW_WRITE`) to create an instance. |
 | `HA_TIMEOUT_MS` | `15000` | HTTP/WebSocket request timeout. |
 | `MAX_RESULTS` | `500` | Max items a list tool returns before truncating. |
@@ -156,15 +180,16 @@ This is a standard stdio MCP server, so the same binary works everywhere.
 
 ### Cursor
 
-Create `.cursor/mcp.json` in your project (or `~/.cursor/mcp.json` for all
-projects). See [`examples/cursor.mcp.json`](./examples/cursor.mcp.json):
+Use the [one‑click button](#one-click-cursor) above, or create `.cursor/mcp.json`
+in your project (or `~/.cursor/mcp.json` for all projects). See
+[`examples/cursor.mcp.json`](./examples/cursor.mcp.json):
 
 ```json
 {
 	"mcpServers": {
 		"home-assistant": {
-			"command": "node",
-			"args": ["/home/vortitron/home-assistant-mcp/dist/index.js"],
+			"command": "npx",
+			"args": ["-y", "@vortitron/home-assistant-mcp"],
 			"env": {
 				"HA_URL": "http://homeassistant.local:8123",
 				"HA_TOKEN": "paste-your-long-lived-token",
@@ -174,9 +199,6 @@ projects). See [`examples/cursor.mcp.json`](./examples/cursor.mcp.json):
 	}
 }
 ```
-
-Once published to npm you can swap `command`/`args` for
-`"command": "npx", "args": ["-y", "home-assistant-mcp"]`.
 
 ### VS Code
 
@@ -191,8 +213,8 @@ VS Code can prompt for the token so it is not stored in the file:
 	"servers": {
 		"home-assistant": {
 			"type": "stdio",
-			"command": "node",
-			"args": ["/home/vortitron/home-assistant-mcp/dist/index.js"],
+			"command": "npx",
+			"args": ["-y", "@vortitron/home-assistant-mcp"],
 			"env": {
 				"HA_URL": "http://homeassistant.local:8123",
 				"HA_TOKEN": "${input:ha_token}"
@@ -209,7 +231,7 @@ Add the same block under `mcpServers` in `claude_desktop_config.json`.
 ### Verify
 
 ```bash
-node dist/index.js doctor   # or: npx -y home-assistant-mcp doctor
+npx -y @vortitron/home-assistant-mcp doctor
 ```
 
 `doctor` checks REST, the WebSocket registry and (if configured) the ESPHome
@@ -239,6 +261,63 @@ Designed to be safe to point at a real home:
 
 Tools are also annotated with MCP hints (`readOnlyHint`, `destructiveHint`) so
 clients can warn before destructive calls.
+
+### What the write‑guard protects (and what it doesn't)
+
+The guard constrains what **these tools** will do, and it's a strong guardrail
+when the MCP server is the agent's *only* route to Home Assistant. It is **not** a
+cryptographic boundary: a Home Assistant long‑lived token grants full access, so
+an agent that *also* holds that token can call the HA API directly and bypass the
+guard. So keep the token in your editor's MCP config (ideally `~/.cursor/mcp.json`,
+outside any repo the agent can read) — not in files the agent browses.
+
+For a genuine boundary, point the agent at **VomeHome** instead: it holds only a
+revocable `VOMEHOME_TOKEN` while the powerful HA credential stays server‑side,
+where access is policed and audited — so the agent *can't* go around the policy.
+See [Brokered mode](#brokered-mode-the-real-boundary).
+
+---
+
+## Brokered mode (the real boundary)
+
+Direct mode is convenient, but the write‑guard only helps if the agent doesn't
+*also* hold the HA token. **Brokered mode closes that gap**: the agent is given a
+revocable, scoped [VomeHome](https://vome.io) token and an instance id — and
+**no Home Assistant token at all**. Every HA read/write is proxied through the
+VomeHome portal, which:
+
+- keeps the HA credential server‑side (the agent never sees it);
+- enforces **read‑only vs read/write per token** — a read‑only token genuinely
+  cannot change anything, no matter how it's used;
+- blocks sensitive domains (locks, alarms, …) server‑side, including via generic
+  services (`homeassistant.turn_on` can't reach a lock);
+- **audits every call** (allowed or denied) against the token that made it.
+
+Because the policy lives on the server, the agent cannot bypass it — that's the
+difference between a guardrail and a boundary.
+
+```json
+{
+	"mcpServers": {
+		"home-assistant": {
+			"command": "npx",
+			"args": ["-y", "@vortitron/home-assistant-mcp"],
+			"env": {
+				"VOMEHOME_TOKEN": "vh_paste-your-token",
+				"VOMEHOME_INSTANCE_ID": "your-instance-id"
+			}
+		}
+	}
+}
+```
+
+Mint the token at **Account → API tokens** in the portal (tick "Control Home
+Assistant" only if you want a read/write token). Get the instance id from the
+dashboard or the `vomehome_list_instances` tool.
+
+Brokered mode currently proxies the everyday loop — list/get entities, list
+services, call services, read config, render templates. Registry tools (areas/
+devices) and config‑file editing need direct mode for now.
 
 ---
 
@@ -289,7 +368,7 @@ src/
 	config.ts             # env parsing + validation
 	safety.ts             # write-guard policy
 	logger.ts             # stderr logger
-	ha/                   # Home Assistant REST + WebSocket clients
+	ha/                   # Home Assistant REST + WebSocket + brokered clients
 	esphome/              # ESPHome dashboard client
 	vomehome/             # VomeHome portal client
 	tools/                # one module per tool group
@@ -301,6 +380,12 @@ tests/                  # vitest unit tests
 
 ## Roadmap
 
+- **VomeHome‑brokered HA access (the real boundary) — shipped (MVP).** HA
+  reads/writes can be proxied *through* VomeHome with a revocable `VOMEHOME_TOKEN`
+  so the HA credential never reaches the agent and the read‑only / deny‑domain /
+  audit policy is enforced **server‑side**. See [Brokered mode](#brokered-mode-the-real-boundary).
+  Next: registry (areas/devices) over the broker, brokered config‑file editing,
+  and a per‑token audit view in the portal.
 - **VomeHome test installs.** The `vomehome_*` tools already list, create, reboot
   and open instances. Next: point `HA_URL`/`HA_TOKEN` at a freshly created sandbox
   automatically so an agent can try changes there before touching a real home,

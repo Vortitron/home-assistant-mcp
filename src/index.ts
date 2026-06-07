@@ -6,6 +6,7 @@ import { loadConfig, validateConfig } from "./config.js";
 import { createLogger } from "./logger.js";
 import { createHaRestClient } from "./ha/restClient.js";
 import { createHaWsClient } from "./ha/wsClient.js";
+import { createBrokeredHaRestClient, createUnavailableWsClient } from "./ha/brokeredClient.js";
 import { createEsphomeDashboardClient } from "./esphome/dashboardClient.js";
 import { createVomeHomeClient } from "./vomehome/client.js";
 import { registerAllTools } from "./tools/index.js";
@@ -37,8 +38,10 @@ async function main(): Promise<void> {
 		process.exit(1);
 	}
 
-	const rest = createHaRestClient(config, logger);
-	const ws = createHaWsClient(config, logger);
+	const rest = config.brokered
+		? createBrokeredHaRestClient(config, logger)
+		: createHaRestClient(config, logger);
+	const ws = config.brokered ? createUnavailableWsClient() : createHaWsClient(config, logger);
 	const esphome = createEsphomeDashboardClient(config, logger);
 	const vomehome = createVomeHomeClient(config, logger);
 	const ctx: ToolContext = { config, logger, rest, ws, esphome, vomehome };
@@ -49,7 +52,7 @@ async function main(): Promise<void> {
 	const transport = new StdioServerTransport();
 	await server.connect(transport);
 	logger.info(
-		`${SERVER_NAME} v${SERVER_VERSION} ready (writes ${config.safety.allowWrite ? "ENABLED" : "disabled"}, esphome ${config.esphome.enabled ? "enabled" : "disabled"}, vomehome ${config.vomehome.enabled ? "enabled" : "disabled"})`
+		`${SERVER_NAME} v${SERVER_VERSION} ready (HA ${config.brokered ? `brokered via VomeHome instance ${config.vomehome.instanceId}` : "direct"}, writes ${config.safety.allowWrite ? "ENABLED" : "disabled"}, esphome ${config.esphome.enabled ? "enabled" : "disabled"}, vomehome ${config.vomehome.enabled ? "enabled" : "disabled"})`
 	);
 
 	const shutdown = (signal: string): void => {

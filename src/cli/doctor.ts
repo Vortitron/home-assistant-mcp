@@ -3,6 +3,7 @@ import { validateConfig } from "../config.js";
 import type { Logger } from "../logger.js";
 import { createHaRestClient } from "../ha/restClient.js";
 import { createHaWsClient } from "../ha/wsClient.js";
+import { createBrokeredHaRestClient } from "../ha/brokeredClient.js";
 import { createEsphomeDashboardClient } from "../esphome/dashboardClient.js";
 import { createVomeHomeClient } from "../vomehome/client.js";
 
@@ -22,6 +23,7 @@ function describe(error: unknown): string {
 export async function runDoctor(config: Config, logger: Logger): Promise<number> {
 	line("home-assistant-mcp doctor");
 	line("=========================");
+	line(`HA mode:           ${config.brokered ? `brokered via VomeHome (instance ${config.vomehome.instanceId})` : "direct"}`);
 	line(`HA_URL:            ${config.haUrl || "(not set)"}`);
 	line(`HA_TOKEN:          ${config.haToken ? `set (${config.haToken.length} chars)` : "(not set)"}`);
 	line(`Writes:            ${config.safety.allowWrite ? "ENABLED" : "disabled"}`);
@@ -41,7 +43,9 @@ export async function runDoctor(config: Config, logger: Logger): Promise<number>
 		return 1;
 	}
 
-	const rest = createHaRestClient(config, logger);
+	const rest = config.brokered
+		? createBrokeredHaRestClient(config, logger)
+		: createHaRestClient(config, logger);
 	let ok = true;
 
 	try {
@@ -71,15 +75,19 @@ export async function runDoctor(config: Config, logger: Logger): Promise<number>
 		line(`[FAIL] /api/states: ${describe(error)}`);
 	}
 
-	const ws = createHaWsClient(config, logger);
-	try {
-		const areas = await ws.listAreas();
-		line(`[ok]   WebSocket registry reachable: ${areas.length} areas`);
-	} catch (error) {
-		ok = false;
-		line(`[FAIL] WebSocket registry: ${describe(error)}`);
-	} finally {
-		await ws.close().catch(() => undefined);
+	if (config.brokered) {
+		line("[info] WebSocket registry: skipped (not exposed in brokered mode; use ha_list_entities)");
+	} else {
+		const ws = createHaWsClient(config, logger);
+		try {
+			const areas = await ws.listAreas();
+			line(`[ok]   WebSocket registry reachable: ${areas.length} areas`);
+		} catch (error) {
+			ok = false;
+			line(`[FAIL] WebSocket registry: ${describe(error)}`);
+		} finally {
+			await ws.close().catch(() => undefined);
+		}
 	}
 
 	if (config.esphome.enabled) {

@@ -1,0 +1,13 @@
+{
+	"mcpServers": {
+		"home-assistant": {
+			"command": "npx",
+			"args": ["-y", "@vortitron/home-assistant-mcp"],
+			"env": {
+				"VOMEHOME_API_URL": "https://vome.io",
+				"VOMEHOME_TOKEN": "vh_paste-your-token",
+				"VOMEHOME_INSTANCE_ID": "your-instance-id"
+			}
+		}
+	}
+}

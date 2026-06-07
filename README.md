@@ -319,6 +319,14 @@ Brokered mode currently proxies the everyday loop — list/get entities, list
 services, call services, read config, render templates. Registry tools (areas/
 devices) and config‑file editing need direct mode for now.
 
+**Bring your own Home Assistant.** The instance you broker to does not have to be
+a VomeHome VM. In the VomeHome portal, **Account → Connect HA** lets you attach a
+Home Assistant you host yourself (public URL / external IP, or Nabu Casa Remote
+UI) with a long‑lived access token. It then appears in `vomehome_list_instances`
+with an `ext-…` id — set `VOMEHOME_INSTANCE_ID` to that, and the same scoped,
+deny‑listed, audited boundary applies. Your HA token stays on the VomeHome server;
+the agent only ever gets the revocable VomeHome token.
+
 ---
 
 ## Example agent workflows

@@ -22,8 +22,14 @@ export interface EsphomeConfig {
 	token: string;
 	username: string;
 	password: string;
-	/** True when a dashboard URL has been configured. */
+	/** True when ESPHome tools are available (direct dashboard URL or brokered). */
 	enabled: boolean;
+	/**
+	 * True when ESPHome is reached through the VomeHome relay broker rather than a
+	 * direct dashboard URL. The REST subset (list/version/read+write YAML) is
+	 * brokered; streaming build commands need a direct ESPHOME_DASHBOARD_URL.
+	 */
+	brokered: boolean;
 }
 
 export interface VomeHomeConfig {
@@ -142,7 +148,10 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
 			token: (env.ESPHOME_DASHBOARD_TOKEN ?? "").trim(),
 			username: (env.ESPHOME_DASHBOARD_USERNAME ?? "").trim(),
 			password: (env.ESPHOME_DASHBOARD_PASSWORD ?? "").trim(),
-			enabled: esphomeUrl.length > 0
+			// Brokered ESPHome only when brokering HA and no direct dashboard URL is
+			// set (a direct URL wins, since it also supports streaming builds).
+			brokered: brokered && esphomeUrl.length === 0,
+			enabled: esphomeUrl.length > 0 || (brokered && esphomeUrl.length === 0)
 		},
 		vomehome: {
 			apiUrl: vomehomeUrl,

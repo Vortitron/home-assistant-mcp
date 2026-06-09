@@ -33,7 +33,7 @@ export function registerEsphomeTools(server: McpServer, ctx: ToolContext): void 
 		{
 			title: "List ESPHome devices",
 			description:
-				"List devices/configurations known to the ESPHome dashboard, including their configuration filenames (needed by the other ESPHome tools). Requires ESPHOME_DASHBOARD_URL.",
+				"List devices/configurations known to the ESPHome dashboard, including their configuration filenames (needed by the other ESPHome tools). Works with a direct ESPHOME_DASHBOARD_URL or in VomeHome brokered mode.",
 			inputSchema: {},
 			annotations: { readOnlyHint: true, openWorldHint: true }
 		},
@@ -90,7 +90,7 @@ export function registerEsphomeTools(server: McpServer, ctx: ToolContext): void 
 		{
 			title: "Validate ESPHome config",
 			description:
-				"Validate (compile-check the config of) an ESPHome configuration and return the output. Fast way to confirm a YAML edit is correct before compiling/flashing. Works on dashboards without a dashboard password.",
+				"Validate (compile-check the config of) an ESPHome configuration and return the output. Fast way to confirm a YAML edit is correct before compiling/flashing. Streams output, so needs a direct ESPHOME_DASHBOARD_URL (not available in VomeHome brokered mode). Works on dashboards without a dashboard password.",
 			inputSchema: {
 				configuration: z.string().describe("Configuration filename, e.g. 'living-room.yaml'."),
 				timeout_seconds: z.number().int().positive().optional().describe("Override the command timeout.")
@@ -108,7 +108,7 @@ export function registerEsphomeTools(server: McpServer, ctx: ToolContext): void 
 		{
 			title: "Compile ESPHome firmware",
 			description:
-				"Compile firmware for an ESPHome configuration and return the build output. Can take several minutes. Works on dashboards without a dashboard password.",
+				"Compile firmware for an ESPHome configuration and return the build output. Can take several minutes. Streams output, so needs a direct ESPHOME_DASHBOARD_URL (not available in VomeHome brokered mode). Works on dashboards without a dashboard password.",
 			inputSchema: {
 				configuration: z.string().describe("Configuration filename, e.g. 'living-room.yaml'."),
 				timeout_seconds: z.number().int().positive().optional().describe("Override the command timeout.")
@@ -126,7 +126,7 @@ export function registerEsphomeTools(server: McpServer, ctx: ToolContext): void 
 		{
 			title: "Upload/flash ESPHome firmware",
 			description:
-				"Compile and upload firmware to a device (OTA by default). 'port' is the device address or 'OTA'. Requires HA_ALLOW_WRITE=true. Works on dashboards without a dashboard password.",
+				"Compile and upload firmware to a device (OTA by default). 'port' is the device address or 'OTA'. Requires HA_ALLOW_WRITE=true. Streams output, so needs a direct ESPHOME_DASHBOARD_URL (not available in VomeHome brokered mode). Works on dashboards without a dashboard password.",
 			inputSchema: {
 				configuration: z.string().describe("Configuration filename, e.g. 'living-room.yaml'."),
 				port: z.string().optional().describe("Device address (IP/hostname) or 'OTA'. Defaults to 'OTA'."),

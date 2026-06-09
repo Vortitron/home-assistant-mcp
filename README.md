@@ -67,7 +67,7 @@ policy (see [Safety](#safety)).
 | `ha_reload_automations` | Reload automations without restarting. |
 | `ha_fire_event` | Fire a custom event on the event bus. |
 
-### ESPHome (require `ESPHOME_DASHBOARD_URL`)
+### ESPHome (`ESPHOME_DASHBOARD_URL`, or brokered to a relay-connected HA)
 
 | Tool | Description |
 | --- | --- |
@@ -156,7 +156,7 @@ config.
 | `HA_DENY_DOMAINS` | `lock,alarm_control_panel,cover,climate,vacuum,valve,water_heater,lawn_mower,camera` | Domains that can never be written. Set empty to clear. |
 | `HA_ALLOW_DOMAINS` | _(any)_ | If set, only these domains may be written. |
 | `HA_ALLOW_CONFIG_WRITE` | `false` | Allow editing automation config (with `HA_ALLOW_WRITE`). |
-| `ESPHOME_DASHBOARD_URL` | _(disabled)_ | ESPHome dashboard URL to enable ESPHome tools. |
+| `ESPHOME_DASHBOARD_URL` | _(disabled)_ | ESPHome dashboard URL to enable ESPHome tools directly. In brokered mode (relay-connected HA) the REST subset works without it. |
 | `ESPHOME_DASHBOARD_TOKEN` | — | Bearer token, if the dashboard is behind an auth proxy. |
 | `ESPHOME_DASHBOARD_USERNAME` / `..._PASSWORD` | — | HTTP basic auth alternative. |
 | `VOMEHOME_API_URL` | `https://vome.io` | VomeHome portal base URL. |
@@ -324,8 +324,16 @@ services, read config, render templates — **plus automation editing**:
 `ha_check_config`. Reading an automation needs `ha:read`; writing one needs the
 separate **`ha:config`** scope on the token *and* `HA_ALLOW_WRITE=true` +
 `HA_ALLOW_CONFIG_WRITE=true` on the client (defence in depth — both the server
-scope and the client guard must agree). Registry tools (areas/devices), logs,
-history and ESPHome still need direct mode for now.
+scope and the client guard must agree). Registry tools (areas/devices), logs and
+history still need direct mode for now.
+
+**ESPHome over the relay.** When you broker to a **relay-connected** Home
+Assistant (your own HA linked via the Vome component's outbound tunnel), the
+ESPHome dashboard's REST subset is brokered too — `esphome_list_devices`,
+`esphome_get_config` and `esphome_save_config` work with no `ESPHOME_DASHBOARD_URL`
+(reads need `ha:read`; saving YAML needs `ha:config` + the client write guards).
+The streaming build commands (`esphome_validate` / `_compile` / `_upload`) stream
+output, so they still need a directly-reachable `ESPHOME_DASHBOARD_URL`.
 
 **Bring your own Home Assistant.** The instance you broker to does not have to be
 a VomeHome VM. In the VomeHome portal, **Account → Connect HA** lets you attach a
@@ -399,9 +407,10 @@ tests/                  # vitest unit tests
 - **VomeHome‑brokered HA access (the real boundary) — shipped (MVP).** HA
   reads/writes can be proxied *through* VomeHome with a revocable `VOMEHOME_TOKEN`
   so the HA credential never reaches the agent and the read‑only / deny‑domain /
-  audit policy is enforced **server‑side**. See [Brokered mode](#brokered-mode-the-real-boundary).
-  Next: registry (areas/devices) over the broker, brokered config‑file editing,
-  and a per‑token audit view in the portal.
+  audit policy is enforced **server‑side**. Automation editing and the ESPHome
+  REST subset are brokered too (the latter over a relay-connected HA). See
+  [Brokered mode](#brokered-mode-the-real-boundary). Next: registry (areas/devices)
+  over the broker and a per‑token audit view in the portal.
 - **VomeHome test installs.** The `vomehome_*` tools already list, create, reboot
   and open instances. Next: point `HA_URL`/`HA_TOKEN` at a freshly created sandbox
   automatically so an agent can try changes there before touching a real home,

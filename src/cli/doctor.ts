@@ -5,6 +5,7 @@ import { createHaRestClient } from "../ha/restClient.js";
 import { createHaWsClient } from "../ha/wsClient.js";
 import { createBrokeredHaRestClient } from "../ha/brokeredClient.js";
 import { createEsphomeDashboardClient } from "../esphome/dashboardClient.js";
+import { createBrokeredEsphomeDashboardClient } from "../esphome/brokeredDashboardClient.js";
 import { createVomeHomeClient } from "../vomehome/client.js";
 
 function line(text = ""): void {
@@ -30,7 +31,7 @@ export async function runDoctor(config: Config, logger: Logger): Promise<number>
 	line(`Config writes:     ${config.safety.allowConfigWrite ? "ENABLED" : "disabled"}`);
 	line(`Deny domains:      ${config.safety.denyDomains.join(", ") || "(none)"}`);
 	line(`Allow domains:     ${config.safety.allowDomains.join(", ") || "(any)"}`);
-	line(`ESPHome dashboard: ${config.esphome.enabled ? config.esphome.dashboardUrl : "(not configured)"}`);
+	line(`ESPHome dashboard: ${config.esphome.enabled ? (config.esphome.brokered ? "brokered via VomeHome" : config.esphome.dashboardUrl) : "(not configured)"}`);
 	line(`VomeHome portal:   ${config.vomehome.enabled ? config.vomehome.apiUrl : "(not configured)"}`);
 	line("");
 
@@ -91,10 +92,12 @@ export async function runDoctor(config: Config, logger: Logger): Promise<number>
 	}
 
 	if (config.esphome.enabled) {
-		const esphome = createEsphomeDashboardClient(config, logger);
+		const esphome = config.esphome.brokered
+			? createBrokeredEsphomeDashboardClient(config, logger)
+			: createEsphomeDashboardClient(config, logger);
 		try {
 			await esphome.listDevices();
-			line("[ok]   ESPHome dashboard reachable");
+			line(`[ok]   ESPHome dashboard reachable${config.esphome.brokered ? " (brokered)" : ""}`);
 		} catch (error) {
 			line(`[warn] ESPHome dashboard: ${describe(error)}`);
 		}

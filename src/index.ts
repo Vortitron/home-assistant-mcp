@@ -8,6 +8,7 @@ import { createHaRestClient } from "./ha/restClient.js";
 import { createHaWsClient } from "./ha/wsClient.js";
 import { createBrokeredHaRestClient, createUnavailableWsClient } from "./ha/brokeredClient.js";
 import { createEsphomeDashboardClient } from "./esphome/dashboardClient.js";
+import { createBrokeredEsphomeDashboardClient } from "./esphome/brokeredDashboardClient.js";
 import { createVomeHomeClient } from "./vomehome/client.js";
 import { registerAllTools } from "./tools/index.js";
 import type { ToolContext } from "./tools/helpers.js";
@@ -42,7 +43,9 @@ async function main(): Promise<void> {
 		? createBrokeredHaRestClient(config, logger)
 		: createHaRestClient(config, logger);
 	const ws = config.brokered ? createUnavailableWsClient() : createHaWsClient(config, logger);
-	const esphome = createEsphomeDashboardClient(config, logger);
+	const esphome = config.esphome.brokered
+		? createBrokeredEsphomeDashboardClient(config, logger)
+		: createEsphomeDashboardClient(config, logger);
 	const vomehome = createVomeHomeClient(config, logger);
 	const ctx: ToolContext = { config, logger, rest, ws, esphome, vomehome };
 
@@ -52,7 +55,7 @@ async function main(): Promise<void> {
 	const transport = new StdioServerTransport();
 	await server.connect(transport);
 	logger.info(
-		`${SERVER_NAME} v${SERVER_VERSION} ready (HA ${config.brokered ? `brokered via VomeHome instance ${config.vomehome.instanceId}` : "direct"}, writes ${config.safety.allowWrite ? "ENABLED" : "disabled"}, esphome ${config.esphome.enabled ? "enabled" : "disabled"}, vomehome ${config.vomehome.enabled ? "enabled" : "disabled"})`
+		`${SERVER_NAME} v${SERVER_VERSION} ready (HA ${config.brokered ? `brokered via VomeHome instance ${config.vomehome.instanceId}` : "direct"}, writes ${config.safety.allowWrite ? "ENABLED" : "disabled"}, esphome ${config.esphome.enabled ? (config.esphome.brokered ? "brokered" : "enabled") : "disabled"}, vomehome ${config.vomehome.enabled ? "enabled" : "disabled"})`
 	);
 
 	const shutdown = (signal: string): void => {

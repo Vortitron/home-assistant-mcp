@@ -311,13 +311,21 @@ difference between a guardrail and a boundary.
 }
 ```
 
-Mint the token at **Account → API tokens** in the portal (tick "Control Home
-Assistant" only if you want a read/write token). Get the instance id from the
-dashboard or the `vomehome_list_instances` tool.
+Mint the token at **Account → API tokens** in the portal. Tick "Control Home
+Assistant" for a token that can call services, and/or "Edit automations" for one
+that can read **and write automation config**. Get the instance id from the
+dashboard or the `vomehome_list_instances` tool. (The portal's token page
+generates this snippet for you, with the write flags pre‑filled to match the
+token's scopes.)
 
-Brokered mode currently proxies the everyday loop — list/get entities, list
-services, call services, read config, render templates. Registry tools (areas/
-devices) and config‑file editing need direct mode for now.
+Brokered mode proxies the everyday loop — list/get entities, list services, call
+services, read config, render templates — **plus automation editing**:
+`ha_get_automation`, `ha_set_automation`, `ha_delete_automation` and
+`ha_check_config`. Reading an automation needs `ha:read`; writing one needs the
+separate **`ha:config`** scope on the token *and* `HA_ALLOW_WRITE=true` +
+`HA_ALLOW_CONFIG_WRITE=true` on the client (defence in depth — both the server
+scope and the client guard must agree). Registry tools (areas/devices), logs,
+history and ESPHome still need direct mode for now.
 
 **Bring your own Home Assistant.** The instance you broker to does not have to be
 a VomeHome VM. In the VomeHome portal, **Account → Connect HA** lets you attach a

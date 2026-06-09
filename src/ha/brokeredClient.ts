@@ -5,6 +5,7 @@ import type { HaRestClient } from "./restClient.js";
 import type { HaWsClient } from "./wsClient.js";
 import type {
 	HaApiStatus,
+	HaCheckConfigResult,
 	HaConfig,
 	HaServiceDomain,
 	HaState,
@@ -20,8 +21,10 @@ import type {
  * never the HA token. The portal keeps the HA credential server-side and
  * enforces the read-only / deny-domain / audit policy there, so it cannot be
  * bypassed. This client therefore exposes the subset of the HA surface the
- * broker proxies (states, services, config, templates); everything else throws
- * a clear "not available in brokered mode" error rather than failing obscurely.
+ * broker proxies — states, services, config, templates, automation config
+ * (read with `ha:read`, write with `ha:config`) and check_config; everything
+ * else throws a clear "not available in brokered mode" error rather than
+ * failing obscurely.
  */
 
 interface BrokerRequestOptions {
@@ -33,11 +36,22 @@ interface BrokerRequestOptions {
 function unsupportedError(feature: string): HaApiError {
 	return new HaApiError(
 		`'${feature}' is not available in VomeHome brokered mode. The broker exposes ` +
-			`list/get entities, services, call_service, config and templates. For the full ` +
-			`tool surface, run with a direct HA_URL + HA_TOKEN instead.`,
+			`list/get entities, services, call_service, config, templates, automation ` +
+			`config and check_config. For the full tool surface (registry, logs, history, ` +
+			`ESPHome), run with a direct HA_URL + HA_TOKEN instead.`,
 		0,
 		""
 	);
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Broker path for an automation's config endpoint. The id is encoded; the
+ * portal also validates it server-side before building the HA path. */
+function automationConfigPath(automationId: string): string {
+	return `/config/automation/config/${encodeURIComponent(automationId)}`;
 }
 
 /** Reject (rather than throw synchronously) so callers using the Promise API
@@ -126,14 +140,24 @@ export function createBrokeredHaRestClient(config: Config, logger: Logger): HaRe
 		getServices: () => broker<HaServiceDomain[]>("/services"),
 		callService,
 		renderTemplate,
-		checkConfig: () => rejectUnsupported("check_config"),
+		checkConfig: () => broker<HaCheckConfigResult>("/check_config", { method: "POST" }),
 		getErrorLog: () => rejectUnsupported("get_error_log"),
 		getLogbook: () => rejectUnsupported("get_logbook"),
 		getHistory: () => rejectUnsupported("get_history"),
 		fireEvent: () => rejectUnsupported("fire_event"),
-		getAutomationConfig: () => rejectUnsupported("get_automation_config"),
-		upsertAutomationConfig: () => rejectUnsupported("upsert_automation_config"),
-		deleteAutomationConfig: () => rejectUnsupported("delete_automation_config")
+		getAutomationConfig: (automationId) =>
+			broker<Record<string, unknown>>(automationConfigPath(automationId)),
+		upsertAutomationConfig: (automationId, automationConfig) => {
+			if (!isPlainObject(automationConfig)) {
+				return Promise.reject(new HaApiError("Automation config must be a JSON object.", 0, ""));
+			}
+			return broker<{ result: string }>(automationConfigPath(automationId), {
+				method: "POST",
+				body: automationConfig
+			});
+		},
+		deleteAutomationConfig: (automationId) =>
+			broker<{ result: string }>(automationConfigPath(automationId), { method: "DELETE" })
 	};
 }
 

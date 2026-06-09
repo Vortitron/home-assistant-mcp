@@ -98,9 +98,70 @@ describe("createBrokeredHaRestClient", () => {
 		).rejects.toThrow(/denied by policy/);
 	});
 
+	it("reads an automation's config through the broker", async () => {
+		const fetchMock = vi.fn(async () => jsonResponse({ alias: "Test", trigger: [], action: [] }));
+		vi.stubGlobal("fetch", fetchMock);
+
+		const config = await client().getAutomationConfig("1744274343050");
+
+		expect(config).toMatchObject({ alias: "Test" });
+		const [url, init] = fetchMock.mock.calls[0]!;
+		expect(url).toBe(
+			"https://vome.io/api/v1/instances/srv-1/ha/config/automation/config/1744274343050"
+		);
+		expect((init as RequestInit).method ?? "GET").toBe("GET");
+	});
+
+	it("creates/updates an automation via a POST of the config body", async () => {
+		const fetchMock = vi.fn(async () => jsonResponse({ result: "ok" }));
+		vi.stubGlobal("fetch", fetchMock);
+
+		const body = { alias: "MCP test", trigger: [], action: [] };
+		const result = await client().upsertAutomationConfig("mcp_test", body);
+
+		expect(result).toEqual({ result: "ok" });
+		const [url, init] = fetchMock.mock.calls[0]!;
+		expect(url).toBe("https://vome.io/api/v1/instances/srv-1/ha/config/automation/config/mcp_test");
+		expect((init as RequestInit).method).toBe("POST");
+		expect(JSON.parse((init as RequestInit).body as string)).toEqual(body);
+	});
+
+	it("rejects a non-object automation config without calling the broker", async () => {
+		const fetchMock = vi.fn(async () => jsonResponse({ result: "ok" }));
+		vi.stubGlobal("fetch", fetchMock);
+
+		await expect(
+			client().upsertAutomationConfig("x", [] as unknown as Record<string, unknown>)
+		).rejects.toThrow(/must be a JSON object/);
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	it("deletes an automation via the broker", async () => {
+		const fetchMock = vi.fn(async () => jsonResponse({ result: "ok" }));
+		vi.stubGlobal("fetch", fetchMock);
+
+		await client().deleteAutomationConfig("mcp_test");
+
+		const [url, init] = fetchMock.mock.calls[0]!;
+		expect(url).toBe("https://vome.io/api/v1/instances/srv-1/ha/config/automation/config/mcp_test");
+		expect((init as RequestInit).method).toBe("DELETE");
+	});
+
+	it("validates the running config via the broker", async () => {
+		const fetchMock = vi.fn(async () => jsonResponse({ result: "valid", errors: null }));
+		vi.stubGlobal("fetch", fetchMock);
+
+		const result = await client().checkConfig();
+
+		expect(result).toMatchObject({ result: "valid" });
+		const [url, init] = fetchMock.mock.calls[0]!;
+		expect(url).toBe("https://vome.io/api/v1/instances/srv-1/ha/check_config");
+		expect((init as RequestInit).method).toBe("POST");
+	});
+
 	it("throws a helpful error for features the broker does not expose", async () => {
 		await expect(client().getErrorLog()).rejects.toThrow(/not available in VomeHome brokered mode/);
-		await expect(client().getAutomationConfig("x")).rejects.toThrow(/brokered mode/);
+		await expect(client().getHistory({ entityIds: ["light.k"] })).rejects.toThrow(/brokered mode/);
 		await expect(client().request("/api/states")).rejects.toThrow(/brokered mode/);
 	});
 });

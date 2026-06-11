@@ -228,6 +228,43 @@ VS Code can prompt for the token so it is not stored in the file:
 
 Add the same block under `mcpServers` in `claude_desktop_config.json`.
 
+### Multiple Home Assistants
+
+Each entry under `mcpServers` is its own server process with its own
+environment, so to control several Home Assistants — each with a different
+token — add one entry per instance and give each a distinct name. The name
+prefixes the tool names in your editor (e.g. `ha-home: ha_list_entities`), so
+the agent always knows which house it is talking to. See
+[`examples/cursor.multi.mcp.json`](./examples/cursor.multi.mcp.json):
+
+```json
+{
+	"mcpServers": {
+		"ha-home": {
+			"command": "npx",
+			"args": ["-y", "@vortitron/home-assistant-mcp"],
+			"env": {
+				"VOMEHOME_TOKEN": "vh_token-for-home",
+				"VOMEHOME_INSTANCE_ID": "rly-aaaaaaaaaaaa"
+			}
+		},
+		"ha-cottage": {
+			"command": "npx",
+			"args": ["-y", "@vortitron/home-assistant-mcp"],
+			"env": {
+				"VOMEHOME_TOKEN": "vh_token-for-cottage",
+				"VOMEHOME_INSTANCE_ID": "rly-bbbbbbbbbbbb"
+			}
+		}
+	}
+}
+```
+
+Brokered and direct entries mix freely (e.g. a brokered home plus a direct
+`HA_URL`/`HA_TOKEN` lab instance), and each entry can carry its own safety
+flags — a read-only token for the family home, writes enabled for the test
+bench.
+
 ### Verify
 
 ```bash

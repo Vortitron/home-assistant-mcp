@@ -1,6 +1,6 @@
 {
 	"name": "@vortitron/home-assistant-mcp",
-	"version": "0.2.0",
+	"version": "0.3.0",
 	"description": "Model Context Protocol (MCP) server that lets coding agents (Cursor, VS Code, Claude) read and control Home Assistant and ESPHome: inspect entities, call services, render templates, debug logs and edit automations.",
 	"type": "module",
 	"license": "MIT",

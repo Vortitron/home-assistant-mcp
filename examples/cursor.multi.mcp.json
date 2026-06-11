@@ -1,0 +1,29 @@
+{
+	"mcpServers": {
+		"ha-home": {
+			"command": "npx",
+			"args": ["-y", "@vortitron/home-assistant-mcp"],
+			"env": {
+				"VOMEHOME_TOKEN": "vh_token-for-home",
+				"VOMEHOME_INSTANCE_ID": "rly-aaaaaaaaaaaa"
+			}
+		},
+		"ha-cottage": {
+			"command": "npx",
+			"args": ["-y", "@vortitron/home-assistant-mcp"],
+			"env": {
+				"VOMEHOME_TOKEN": "vh_token-for-cottage",
+				"VOMEHOME_INSTANCE_ID": "rly-bbbbbbbbbbbb"
+			}
+		},
+		"ha-lab-direct": {
+			"command": "npx",
+			"args": ["-y", "@vortitron/home-assistant-mcp"],
+			"env": {
+				"HA_URL": "http://lab-ha.local:8123",
+				"HA_TOKEN": "paste-a-long-lived-token",
+				"HA_ALLOW_WRITE": "true"
+			}
+		}
+	}
+}

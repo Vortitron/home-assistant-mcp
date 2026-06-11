@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { createRequire } from "node:module";
 import dotenv from "dotenv";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -15,7 +16,11 @@ import type { ToolContext } from "./tools/helpers.js";
 import { runDoctor } from "./cli/doctor.js";
 
 const SERVER_NAME = "home-assistant-mcp";
-const SERVER_VERSION = "0.1.0";
+// Single source of truth for the version: package.json (works from both
+// src/ via tsx and dist/ after build — each is one level below the root).
+const SERVER_VERSION = (
+	createRequire(import.meta.url)("../package.json") as { version: string }
+).version;
 
 async function main(): Promise<void> {
 	dotenv.config();

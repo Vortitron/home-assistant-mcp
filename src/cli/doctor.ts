@@ -6,6 +6,7 @@ import { createHaWsClient } from "../ha/wsClient.js";
 import { createBrokeredHaRestClient } from "../ha/brokeredClient.js";
 import { createEsphomeDashboardClient } from "../esphome/dashboardClient.js";
 import { createBrokeredEsphomeDashboardClient } from "../esphome/brokeredDashboardClient.js";
+import { createNodeRedClient } from "../nodered/client.js";
 import { createVomeHomeClient } from "../vomehome/client.js";
 
 function line(text = ""): void {
@@ -32,6 +33,7 @@ export async function runDoctor(config: Config, logger: Logger): Promise<number>
 	line(`Deny domains:      ${config.safety.denyDomains.join(", ") || "(none)"}`);
 	line(`Allow domains:     ${config.safety.allowDomains.join(", ") || "(any)"}`);
 	line(`ESPHome dashboard: ${config.esphome.enabled ? (config.esphome.brokered ? "brokered via VomeHome" : config.esphome.dashboardUrl) : "(not configured)"}`);
+	line(`Node-RED:          ${config.nodered.enabled ? config.nodered.url : "(not configured)"}`);
 	line(`VomeHome portal:   ${config.vomehome.enabled ? config.vomehome.apiUrl : "(not configured)"}`);
 	line("");
 
@@ -100,6 +102,17 @@ export async function runDoctor(config: Config, logger: Logger): Promise<number>
 			line(`[ok]   ESPHome dashboard reachable${config.esphome.brokered ? " (brokered)" : ""}`);
 		} catch (error) {
 			line(`[warn] ESPHome dashboard: ${describe(error)}`);
+		}
+	}
+
+	if (config.nodered.enabled) {
+		const nodered = createNodeRedClient(config, logger);
+		try {
+			const settings = (await nodered.getSettings()) as { version?: unknown } | undefined;
+			const version = settings && typeof settings.version === "string" ? settings.version : "?";
+			line(`[ok]   Node-RED reachable (version ${version})`);
+		} catch (error) {
+			line(`[warn] Node-RED: ${describe(error)}`);
 		}
 	}
 

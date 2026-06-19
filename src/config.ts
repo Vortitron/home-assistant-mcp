@@ -32,6 +32,19 @@ export interface EsphomeConfig {
 	brokered: boolean;
 }
 
+export interface NodeRedConfig {
+	/** Base URL of the Node-RED editor/admin API, no trailing slash. */
+	url: string;
+	/** Bearer access token for the admin API, if adminAuth is enabled. */
+	token: string;
+	/** Username for adminAuth password grant (used to obtain a token). */
+	username: string;
+	/** Password for adminAuth password grant. */
+	password: string;
+	/** True when a Node-RED admin URL is configured (tools are then exposed). */
+	enabled: boolean;
+}
+
 export interface VomeHomeConfig {
 	/** Base URL of the VomeHome portal, no trailing slash (e.g. https://vome.io). */
 	apiUrl: string;
@@ -67,6 +80,7 @@ export interface Config {
 	logLevel: LogLevel;
 	safety: SafetyConfig;
 	esphome: EsphomeConfig;
+	nodered: NodeRedConfig;
 	vomehome: VomeHomeConfig;
 }
 
@@ -117,6 +131,7 @@ function stripTrailingSlashes(value: string): string {
 
 export function loadConfig(env: NodeJS.ProcessEnv): Config {
 	const esphomeUrl = stripTrailingSlashes((env.ESPHOME_DASHBOARD_URL ?? "").trim());
+	const noderedUrl = stripTrailingSlashes((env.NODERED_URL ?? "").trim());
 	const vomehomeUrl = stripTrailingSlashes(
 		(env.VOMEHOME_API_URL ?? DEFAULT_VOMEHOME_API_URL).trim()
 	);
@@ -152,6 +167,13 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
 			// set (a direct URL wins, since it also supports streaming builds).
 			brokered: brokered && esphomeUrl.length === 0,
 			enabled: esphomeUrl.length > 0 || (brokered && esphomeUrl.length === 0)
+		},
+		nodered: {
+			url: noderedUrl,
+			token: (env.NODERED_TOKEN ?? "").trim(),
+			username: (env.NODERED_USERNAME ?? "").trim(),
+			password: (env.NODERED_PASSWORD ?? "").trim(),
+			enabled: noderedUrl.length > 0
 		},
 		vomehome: {
 			apiUrl: vomehomeUrl,

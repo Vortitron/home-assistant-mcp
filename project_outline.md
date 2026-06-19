@@ -25,6 +25,7 @@ src/
 	ha/brokeredClient.ts createBrokeredHaRestClient -> routes HA via VomeHome (no HA token)
 	ha/types.ts         structural HA payload types
 	esphome/dashboardClient.ts  REST (edit/devices) + WS command runner (validate/compile/upload)
+	nodered/client.ts   createNodeRedClient(config, logger) -> Node-RED admin API (flows/flow/nodes)
 	vomehome/client.ts  createVomeHomeClient(config, logger) -> portal /api/v1/instances (Bearer PAT)
 	tools/helpers.ts    ToolContext, result helpers, runTool() error wrapper
 	tools/*.ts          one registerXxxTools(server, ctx) per group
@@ -47,8 +48,19 @@ src/
 
 ## Tools
 
-31 tools across: system, states, services, registry, templates, automations,
-logs/diagnostics, ESPHome, VomeHome. See `README.md` for the full table.
+38 tools across: system, states, services, registry, templates, automations,
+logs/diagnostics, ESPHome, Node-RED, VomeHome. See `README.md` for the full
+table.
+
+Node-RED (7 tools, `tools/nodered.ts` + `nodered/client.ts`): reads
+(`get_flows`/`get_flow`/`list_nodes`) are open once `NODERED_URL` is set; writes
+(`create_flow`/`update_flow`/`delete_flow`/`set_flows`) reuse the HA config-write
+guard (`evaluateConfigWrite`: `HA_ALLOW_WRITE` + `HA_ALLOW_CONFIG_WRITE`) — flow
+JSON is automation logic, so it gets the same gate as editing HA automations and
+ESPHome YAML. Admin API auth mirrors ESPHome: optional bearer token, or a
+username/password exchanged for one via `/auth/token` (cached per process), or
+nothing for an unsecured admin API behind ingress/a trusted network. Direct-URL
+only for now (no broker), matching ESPHome's streaming-build precedent.
 
 ## Environment
 
@@ -56,8 +68,10 @@ See `.env.example` / the README table. Direct mode: `HA_URL`, `HA_TOKEN`.
 Brokered mode (no HA token): `VOMEHOME_TOKEN` + `VOMEHOME_INSTANCE_ID` (and
 empty `HA_TOKEN`). Writes: `HA_ALLOW_WRITE`, `HA_DENY_DOMAINS`,
 `HA_ALLOW_DOMAINS`, `HA_ALLOW_CONFIG_WRITE`. ESPHome: `ESPHOME_DASHBOARD_URL`
-(+ optional auth). VomeHome: `VOMEHOME_API_URL` (default `https://vome.io`),
-`VOMEHOME_TOKEN`, `VOMEHOME_INSTANCE_ID`, `VOMEHOME_ALLOW_CREATE`.
+(+ optional auth). Node-RED: `NODERED_URL` (+ optional `NODERED_TOKEN` or
+`NODERED_USERNAME`/`NODERED_PASSWORD`). VomeHome: `VOMEHOME_API_URL` (default
+`https://vome.io`), `VOMEHOME_TOKEN`, `VOMEHOME_INSTANCE_ID`,
+`VOMEHOME_ALLOW_CREATE`.
 
 `config.brokered` is derived: true when a VomeHome token + instance id are set
 and `HA_TOKEN` is empty. In that mode `index.ts` injects the brokered REST
@@ -121,6 +135,8 @@ Server-side deny-list mirrors the MCP default and is overridable via
 - `brokeredClient.test.ts` — brokered routing, policy-denial surfacing, mode detection.
 - `tools.test.ts` — tools via a fake MCP server + injected fake clients.
 - `vomehome.test.ts` — VomeHome client (mocked `fetch`) + tool-layer guards.
+- `nodered.test.ts` — Node-RED client (v2 header, token/password-grant auth,
+  deploy headers, error surfacing) + tool-layer config-write guards.
 
 Mocks are used only for tests. No live HA is required to develop or test.
 
@@ -134,8 +150,13 @@ Mocks are used only for tests. No live HA is required to develop or test.
    Remaining: auto-retarget a freshly created sandbox so agents iterate there
    first, then promote what works.
 3. ESPHome live-log streaming + device adoption.
-4. MCP resources for entities/areas alongside tools.
-5. Optional HTTP/SSE transport for remote use.
+4. **Node-RED** — flow read/write/deploy shipped (direct URL). Remaining:
+   broker the admin API through VomeHome (like HA + the ESPHome REST subset) so
+   relay-connected homes need no reachable Node-RED URL; a flow diff/validate
+   preview before deploy; alternative front-ends over the flow JSON (see the
+   VomeHome repo `docs/alt_interfaces_plan.md`).
+5. MCP resources for entities/areas alongside tools.
+6. Optional HTTP/SSE transport for remote use.
 
 ## Open questions
 

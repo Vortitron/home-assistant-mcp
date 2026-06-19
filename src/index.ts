@@ -10,6 +10,7 @@ import { createHaWsClient } from "./ha/wsClient.js";
 import { createBrokeredHaRestClient, createUnavailableWsClient } from "./ha/brokeredClient.js";
 import { createEsphomeDashboardClient } from "./esphome/dashboardClient.js";
 import { createBrokeredEsphomeDashboardClient } from "./esphome/brokeredDashboardClient.js";
+import { createNodeRedClient } from "./nodered/client.js";
 import { createVomeHomeClient } from "./vomehome/client.js";
 import { registerAllTools } from "./tools/index.js";
 import type { ToolContext } from "./tools/helpers.js";
@@ -51,8 +52,9 @@ async function main(): Promise<void> {
 	const esphome = config.esphome.brokered
 		? createBrokeredEsphomeDashboardClient(config, logger)
 		: createEsphomeDashboardClient(config, logger);
+	const nodered = createNodeRedClient(config, logger);
 	const vomehome = createVomeHomeClient(config, logger);
-	const ctx: ToolContext = { config, logger, rest, ws, esphome, vomehome };
+	const ctx: ToolContext = { config, logger, rest, ws, esphome, nodered, vomehome };
 
 	const server = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION });
 	registerAllTools(server, ctx);
@@ -60,7 +62,7 @@ async function main(): Promise<void> {
 	const transport = new StdioServerTransport();
 	await server.connect(transport);
 	logger.info(
-		`${SERVER_NAME} v${SERVER_VERSION} ready (HA ${config.brokered ? `brokered via VomeHome instance ${config.vomehome.instanceId}` : "direct"}, writes ${config.safety.allowWrite ? "ENABLED" : "disabled"}, esphome ${config.esphome.enabled ? (config.esphome.brokered ? "brokered" : "enabled") : "disabled"}, vomehome ${config.vomehome.enabled ? "enabled" : "disabled"})`
+		`${SERVER_NAME} v${SERVER_VERSION} ready (HA ${config.brokered ? `brokered via VomeHome instance ${config.vomehome.instanceId}` : "direct"}, writes ${config.safety.allowWrite ? "ENABLED" : "disabled"}, esphome ${config.esphome.enabled ? (config.esphome.brokered ? "brokered" : "enabled") : "disabled"}, nodered ${config.nodered.enabled ? "enabled" : "disabled"}, vomehome ${config.vomehome.enabled ? "enabled" : "disabled"})`
 	);
 
 	const shutdown = (signal: string): void => {

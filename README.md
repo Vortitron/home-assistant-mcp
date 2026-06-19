@@ -78,6 +78,25 @@ policy (see [Safety](#safety)).
 | `esphome_compile` | Compile firmware. |
 | `esphome_upload` | Compile + flash a device, OTA by default (write-gated). |
 
+### Node-RED (`NODERED_URL`)
+
+[Node-RED](https://nodered.org) is the flow-based editor that ships as a Home
+Assistant add-on. It is powerful but fiddly to edit by hand — so let the agent
+read and write the flow JSON for you. Flows are stored as a JSON array of nodes
+grouped into tabs; these tools work a tab at a time (safe) or on the whole
+config (deliberate). Writes are gated behind the same switches as editing HA
+automations (`HA_ALLOW_WRITE` + `HA_ALLOW_CONFIG_WRITE`).
+
+| Tool | Description |
+| --- | --- |
+| `nodered_get_flows` | Get the full flow config (all tabs) plus the current revision. |
+| `nodered_get_flow` | Get one flow (tab) and its nodes by id. |
+| `nodered_list_nodes` | List installed node modules/types (the palette). |
+| `nodered_create_flow` | Add a new tab without disturbing existing flows (write-gated). |
+| `nodered_update_flow` | Replace one tab by id, leaving others untouched (write-gated). |
+| `nodered_delete_flow` | Delete a tab and its nodes (write-gated). |
+| `nodered_set_flows` | Replace the **entire** flow config and deploy (write-gated). |
+
 ### VomeHome (require `VOMEHOME_TOKEN`)
 
 [VomeHome](https://vome.io) is managed Home Assistant hosting. Log in to the
@@ -159,6 +178,9 @@ config.
 | `ESPHOME_DASHBOARD_URL` | _(disabled)_ | ESPHome dashboard URL to enable ESPHome tools directly. In brokered mode (relay-connected HA) the REST subset works without it. |
 | `ESPHOME_DASHBOARD_TOKEN` | — | Bearer token, if the dashboard is behind an auth proxy. |
 | `ESPHOME_DASHBOARD_USERNAME` / `..._PASSWORD` | — | HTTP basic auth alternative. |
+| `NODERED_URL` | _(disabled)_ | Node-RED editor/admin base URL, e.g. `http://homeassistant.local:1880`. Enables the `nodered_*` tools. |
+| `NODERED_TOKEN` | — | Bearer token if Node-RED `adminAuth` is enabled. |
+| `NODERED_USERNAME` / `NODERED_PASSWORD` | — | Credentials exchanged for a token via `/auth/token`, if you prefer not to mint one by hand. |
 | `VOMEHOME_API_URL` | `https://vome.io` | VomeHome portal base URL. |
 | `VOMEHOME_TOKEN` | _(disabled)_ | VomeHome personal access token; enables the `vomehome_*` tools. |
 | `VOMEHOME_INSTANCE_ID` | _(direct mode)_ | Instance to broker HA calls to. With a token and **no** `HA_TOKEN`, HA tools route through VomeHome (see [Brokered mode](#brokered-mode-the-real-boundary)). |
@@ -394,6 +416,8 @@ the agent only ever gets the revocable VomeHome token.
   → `ha_check_config` → `ha_trigger_automation`.
 - *"Add a sensor to this ESPHome node and flash it"* → `esphome_get_config` →
   `esphome_save_config` → `esphome_validate` → `esphome_upload`.
+- *"Tidy up my Node-RED 'Heating' tab"* → `nodered_get_flows` (find the tab id)
+  → `nodered_get_flow` → edit the nodes → `nodered_update_flow`.
 - *"Spin up a sandbox and open it"* → `vomehome_create_instance` →
   `vomehome_get_instance` (poll status) → `vomehome_get_login_url` (open the link).
 
@@ -410,6 +434,22 @@ the agent only ever gets the revocable VomeHome token.
   helps for the latter.
 
 ---
+
+## Node-RED notes
+
+- The HA **Node-RED add-on** exposes the editor on port `1880`
+  (`http://homeassistant.local:1880`). Point `NODERED_URL` at it.
+- If the add-on has a **credential secret / `adminAuth`** set, supply
+  `NODERED_TOKEN` (or `NODERED_USERNAME`/`NODERED_PASSWORD`, which the client
+  exchanges for a token). An add-on reachable only on your trusted network, or
+  behind HA ingress / an auth-terminating proxy, needs no auth here.
+- `nodered_set_flows` rewrites **everything** — prefer `nodered_create_flow` /
+  `nodered_update_flow` for day-to-day edits. Pass the `rev` from
+  `nodered_get_flows` so a concurrent change in the editor is detected rather
+  than silently overwritten.
+- Node-RED flows are plain JSON, which makes them a natural target for
+  alternative front-ends (PLC-style ladder, Scratch/Blockly). That exploration
+  lives in the VomeHome repo (`docs/alt_interfaces_plan.md`).
 
 ## Development
 
@@ -431,6 +471,7 @@ src/
 	logger.ts             # stderr logger
 	ha/                   # Home Assistant REST + WebSocket + brokered clients
 	esphome/              # ESPHome dashboard client
+	nodered/              # Node-RED admin API client
 	vomehome/             # VomeHome portal client
 	tools/                # one module per tool group
 	cli/doctor.ts         # connectivity check
@@ -454,6 +495,10 @@ tests/                  # vitest unit tests
   then promote what works. (Requires the portal API endpoints described in
   [`project_outline.md`](./project_outline.md).)
 - ESPHome live-log streaming and device adoption.
+- **Node-RED** — flow read/write/deploy shipped. Next: brokering the admin API
+  through VomeHome (as HA and the ESPHome REST subset already are) so a
+  relay-connected home needs no directly-reachable Node-RED URL, and a flow
+  *diff/validate* step before deploy.
 - MCP resources for entities/areas (in addition to tools).
 - Optional HTTP/SSE transport for remote use.
 

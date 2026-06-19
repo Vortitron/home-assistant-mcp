@@ -6,6 +6,8 @@ import { HaApiError } from "../ha/restClient.js";
 import { VomeHomeError } from "../vomehome/client.js";
 import type { HaWsClient } from "../ha/wsClient.js";
 import type { EsphomeDashboardClient } from "../esphome/dashboardClient.js";
+import { NodeRedError } from "../nodered/client.js";
+import type { NodeRedClient } from "../nodered/client.js";
 import type { VomeHomeClient } from "../vomehome/client.js";
 
 /**
@@ -18,6 +20,7 @@ export interface ToolContext {
 	rest: HaRestClient;
 	ws: HaWsClient;
 	esphome: EsphomeDashboardClient;
+	nodered: NodeRedClient;
 	vomehome: VomeHomeClient;
 }
 
@@ -34,7 +37,7 @@ export function errorResult(message: string): CallToolResult {
 }
 
 export function toErrorMessage(error: unknown): string {
-	if (error instanceof HaApiError || error instanceof VomeHomeError) {
+	if (error instanceof HaApiError || error instanceof VomeHomeError || error instanceof NodeRedError) {
 		const body = error.body ? ` Body: ${error.body.slice(0, 800)}` : "";
 		return `${error.message}${error.status ? ` (status ${error.status})` : ""}.${body}`;
 	}

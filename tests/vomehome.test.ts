@@ -12,6 +12,7 @@ import {
 import type { HaRestClient } from "../src/ha/restClient.js";
 import type { HaWsClient } from "../src/ha/wsClient.js";
 import { createEsphomeDashboardClient } from "../src/esphome/dashboardClient.js";
+import { createNodeRedClient } from "../src/nodered/client.js";
 import { registerVomeHomeTools } from "../src/tools/vomehome.js";
 import type { ToolContext } from "../src/tools/helpers.js";
 
@@ -177,6 +178,7 @@ function buildHarness(
 		rest: {} as unknown as HaRestClient,
 		ws: {} as unknown as HaWsClient,
 		esphome: createEsphomeDashboardClient(config, logger),
+		nodered: createNodeRedClient(config, logger),
 		vomehome: (options.vomehome ?? createVomeHomeClient(config, logger)) as VomeHomeClient
 	};
 	const server = new FakeServer();

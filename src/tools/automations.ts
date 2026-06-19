@@ -94,7 +94,7 @@ export function registerAutomationTools(server: McpServer, ctx: ToolContext): vo
 		},
 		async ({ automation_id, config }) =>
 			runTool(ctx.logger, "ha_set_automation", async () => {
-				const decision = evaluateConfigWrite(ctx.config.safety);
+				const decision = evaluateConfigWrite(ctx.instances.currentSafety());
 				if (!decision.allowed) {
 					return errorResult(`Refused: ${decision.reason}`);
 				}
@@ -121,7 +121,7 @@ export function registerAutomationTools(server: McpServer, ctx: ToolContext): vo
 		},
 		async ({ automation_id }) =>
 			runTool(ctx.logger, "ha_delete_automation", async () => {
-				const decision = evaluateConfigWrite(ctx.config.safety);
+				const decision = evaluateConfigWrite(ctx.instances.currentSafety());
 				if (!decision.allowed) {
 					return errorResult(`Refused: ${decision.reason}`);
 				}
@@ -147,7 +147,7 @@ export function registerAutomationTools(server: McpServer, ctx: ToolContext): vo
 		},
 		async ({ automation, skip_condition }) =>
 			runTool(ctx.logger, "ha_trigger_automation", async () => {
-				const decision = evaluateDomainWrite("automation", ctx.config.safety);
+				const decision = evaluateDomainWrite("automation", ctx.instances.currentSafety());
 				if (!decision.allowed) {
 					return errorResult(`Refused: ${decision.reason}`);
 				}

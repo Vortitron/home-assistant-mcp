@@ -45,20 +45,51 @@ export interface NodeRedConfig {
 	enabled: boolean;
 }
 
+/**
+ * Per-instance access entry. WRITE and CONFIG_WRITE are scoped to ONE specific
+ * VomeHome instance — distinct from the account-wide VOMEHOME_ALLOW_CREATE.
+ */
+export interface InstanceAccess {
+	/** VomeHome instance (server) id this entry applies to. */
+	id: string;
+	/** Allow state-changing HA writes (services, fire_event) on THIS instance. */
+	write: boolean;
+	/** Allow editing automation/script/scene config on THIS instance. */
+	config: boolean;
+	/** Optional human label, for logs and tool output. */
+	label?: string;
+	/**
+	 * True when this entry was auto-granted because the instance was created via
+	 * the MCP (VOMEHOME_ALLOW_CREATE) rather than declared in the environment.
+	 */
+	created?: boolean;
+}
+
 export interface VomeHomeConfig {
 	/** Base URL of the VomeHome portal, no trailing slash (e.g. https://vome.io). */
 	apiUrl: string;
 	/** Personal access token minted in the VomeHome portal (Account -> API tokens). */
 	token: string;
 	/**
-	 * Instance (server) id to broker Home Assistant calls to. When set (with a
-	 * token, and no direct HA_TOKEN) the HA tools route through VomeHome instead
-	 * of talking to Home Assistant directly.
+	 * The active/default instance (server) id to broker Home Assistant calls to.
+	 * When set (with a token, and no direct HA_TOKEN) the HA tools route through
+	 * VomeHome instead of talking to Home Assistant directly. The active instance
+	 * can be switched at runtime (vomehome_use_instance / vomehome_create_instance).
 	 */
 	instanceId: string;
 	/**
-	 * Extra guard for the heavyweight "create instance" action. Even with the
-	 * master write switch on, creating a VM additionally requires this.
+	 * Per-instance access registry. Built from VOMEHOME_INSTANCES (JSON) plus the
+	 * default instance (VOMEHOME_INSTANCE_ID with HA_ALLOW_WRITE /
+	 * HA_ALLOW_CONFIG_WRITE folded in). Each entry's write/config flags apply to
+	 * that instance ONLY.
+	 */
+	instances: InstanceAccess[];
+	/** Set when VOMEHOME_INSTANCES was provided but could not be parsed. */
+	instancesError?: string;
+	/**
+	 * Extra guard for the heavyweight "create instance" action. This is
+	 * account-wide. Instances created with it enabled are granted full
+	 * (write + config) access automatically — you own what you create.
 	 */
 	allowCreate: boolean;
 	/** True when both an API URL and a token are configured. */
@@ -129,6 +160,102 @@ function stripTrailingSlashes(value: string): string {
 	return value.replace(/\/+$/, "");
 }
 
+/** Coerces a JSON value (boolean or stringy boolean) to a boolean. */
+function parseFlag(value: unknown): boolean {
+	if (typeof value === "boolean") {
+		return value;
+	}
+	if (typeof value === "string") {
+		return /^(1|true|yes|on)$/i.test(value.trim());
+	}
+	return false;
+}
+
+/** Normalises one raw VOMEHOME_INSTANCES entry into an {@link InstanceAccess}. */
+function parseInstanceEntry(raw: unknown): InstanceAccess | undefined {
+	if (typeof raw === "string") {
+		const id = raw.trim();
+		return id ? { id, write: false, config: false } : undefined;
+	}
+	if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) {
+		const obj = raw as Record<string, unknown>;
+		const id = typeof obj.id === "string" ? obj.id.trim() : "";
+		if (!id) {
+			return undefined;
+		}
+		const entry: InstanceAccess = { id, write: parseFlag(obj.write), config: parseFlag(obj.config) };
+		if (typeof obj.label === "string" && obj.label.trim().length > 0) {
+			entry.label = obj.label.trim();
+		}
+		return entry;
+	}
+	return undefined;
+}
+
+/**
+ * Parses VOMEHOME_INSTANCES, which may be a JSON array of ids/objects or a JSON
+ * object keyed by id. Returns the de-duplicated list and a parse error (if any)
+ * so {@link validateConfig} can surface it rather than failing silently.
+ */
+function parseInstances(raw: string | undefined): { list: InstanceAccess[]; error?: string } {
+	const trimmed = (raw ?? "").trim();
+	if (trimmed.length === 0) {
+		return { list: [] };
+	}
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(trimmed);
+	} catch (error) {
+		return { list: [], error: `VOMEHOME_INSTANCES is not valid JSON: ${(error as Error).message}` };
+	}
+	const entries: InstanceAccess[] = [];
+	if (Array.isArray(parsed)) {
+		for (const item of parsed) {
+			const entry = parseInstanceEntry(item);
+			if (entry) {
+				entries.push(entry);
+			}
+		}
+	} else if (parsed !== null && typeof parsed === "object") {
+		for (const [id, value] of Object.entries(parsed as Record<string, unknown>)) {
+			const merged =
+				value !== null && typeof value === "object" && !Array.isArray(value)
+					? { id, ...(value as Record<string, unknown>) }
+					: { id };
+			const entry = parseInstanceEntry(merged);
+			if (entry) {
+				entries.push(entry);
+			}
+		}
+	} else {
+		return { list: [], error: "VOMEHOME_INSTANCES must be a JSON array or object." };
+	}
+	// De-duplicate by id (last declaration wins).
+	const byId = new Map<string, InstanceAccess>();
+	for (const entry of entries) {
+		byId.set(entry.id, entry);
+	}
+	return { list: [...byId.values()] };
+}
+
+/**
+ * Folds the legacy single-instance env (VOMEHOME_INSTANCE_ID + HA_ALLOW_WRITE +
+ * HA_ALLOW_CONFIG_WRITE) into the registry as the default instance, unless it is
+ * already declared explicitly in VOMEHOME_INSTANCES (explicit wins).
+ */
+function buildInstanceRegistry(
+	parsed: InstanceAccess[],
+	defaultId: string,
+	defaultWrite: boolean,
+	defaultConfig: boolean
+): InstanceAccess[] {
+	const list = parsed.map((entry) => ({ ...entry }));
+	if (defaultId.length > 0 && !list.some((entry) => entry.id === defaultId)) {
+		list.unshift({ id: defaultId, write: defaultWrite, config: defaultConfig, label: "default" });
+	}
+	return list;
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv): Config {
 	const esphomeUrl = stripTrailingSlashes((env.ESPHOME_DASHBOARD_URL ?? "").trim());
 	const noderedUrl = stripTrailingSlashes((env.NODERED_URL ?? "").trim());
@@ -138,12 +265,28 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
 	const vomehomeToken = (env.VOMEHOME_TOKEN ?? "").trim();
 	const vomehomeInstanceId = (env.VOMEHOME_INSTANCE_ID ?? "").trim();
 	const haToken = (env.HA_TOKEN ?? "").trim();
-	// Brokered HA mode: the agent has a VomeHome token + instance but no direct
-	// HA token, so all HA traffic must go through the (policed, audited) portal.
+	const allowWrite = parseBoolean(env.HA_ALLOW_WRITE, false);
+	const allowConfigWrite = parseBoolean(env.HA_ALLOW_CONFIG_WRITE, false);
+	// Per-instance access registry: VOMEHOME_INSTANCES (JSON) plus the default
+	// instance (VOMEHOME_INSTANCE_ID with HA_ALLOW_WRITE / HA_ALLOW_CONFIG_WRITE
+	// folded in). WRITE / CONFIG_WRITE are scoped to each specific instance.
+	const { list: parsedInstances, error: instancesError } = parseInstances(env.VOMEHOME_INSTANCES);
+	const instances = buildInstanceRegistry(
+		parsedInstances,
+		vomehomeInstanceId,
+		allowWrite,
+		allowConfigWrite
+	);
+	// Active/default instance: the explicit VOMEHOME_INSTANCE_ID, else the first
+	// declared instance in VOMEHOME_INSTANCES.
+	const activeInstanceId = vomehomeInstanceId || (instances[0]?.id ?? "");
+	// Brokered HA mode: the agent has a VomeHome token + at least one instance but
+	// no direct HA token, so all HA traffic must go through the (policed, audited)
+	// portal.
 	const brokered =
 		vomehomeToken.length > 0 &&
 		vomehomeUrl.length > 0 &&
-		vomehomeInstanceId.length > 0 &&
+		activeInstanceId.length > 0 &&
 		haToken.length === 0;
 	return {
 		haUrl: stripTrailingSlashes((env.HA_URL ?? "").trim()),
@@ -153,8 +296,8 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
 		maxResults: parsePositiveInt(env.MAX_RESULTS, DEFAULT_MAX_RESULTS),
 		logLevel: parseLogLevel(env.LOG_LEVEL),
 		safety: {
-			allowWrite: parseBoolean(env.HA_ALLOW_WRITE, false),
-			allowConfigWrite: parseBoolean(env.HA_ALLOW_CONFIG_WRITE, false),
+			allowWrite,
+			allowConfigWrite,
 			denyDomains: parseDomainList(env.HA_DENY_DOMAINS, DEFAULT_DENY_DOMAINS),
 			allowDomains: parseDomainList(env.HA_ALLOW_DOMAINS, "")
 		},
@@ -178,7 +321,9 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
 		vomehome: {
 			apiUrl: vomehomeUrl,
 			token: vomehomeToken,
-			instanceId: vomehomeInstanceId,
+			instanceId: activeInstanceId,
+			instances,
+			instancesError,
 			allowCreate: parseBoolean(env.VOMEHOME_ALLOW_CREATE, false),
 			enabled: vomehomeToken.length > 0 && vomehomeUrl.length > 0
 		}
@@ -198,11 +343,15 @@ export function validateConfig(config: Config): ConfigProblem[] {
 		if (!config.vomehome.token) {
 			problems.push({ field: "VOMEHOME_TOKEN", message: "VOMEHOME_TOKEN is required for brokered mode." });
 		}
-		if (!config.vomehome.instanceId) {
+		if (!config.vomehome.instanceId && config.vomehome.instances.length === 0) {
 			problems.push({
 				field: "VOMEHOME_INSTANCE_ID",
-				message: "VOMEHOME_INSTANCE_ID is required for brokered mode (the instance to control)."
+				message:
+					"Brokered mode needs at least one instance: set VOMEHOME_INSTANCE_ID (the instance to control), or declare VOMEHOME_INSTANCES (a JSON registry of instances with per-instance write/config flags)."
 			});
+		}
+		if (config.vomehome.instancesError) {
+			problems.push({ field: "VOMEHOME_INSTANCES", message: config.vomehome.instancesError });
 		}
 		return problems;
 	}

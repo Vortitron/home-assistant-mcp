@@ -7,11 +7,12 @@ import { loadConfig, validateConfig } from "./config.js";
 import { createLogger } from "./logger.js";
 import { createHaRestClient } from "./ha/restClient.js";
 import { createHaWsClient } from "./ha/wsClient.js";
-import { createBrokeredHaRestClient, createUnavailableWsClient } from "./ha/brokeredClient.js";
+import { createUnavailableWsClient } from "./ha/brokeredClient.js";
 import { createEsphomeDashboardClient } from "./esphome/dashboardClient.js";
 import { createBrokeredEsphomeDashboardClient } from "./esphome/brokeredDashboardClient.js";
 import { createNodeRedClient } from "./nodered/client.js";
 import { createVomeHomeClient } from "./vomehome/client.js";
+import { createInstanceManager } from "./vomehome/instances.js";
 import { registerAllTools } from "./tools/index.js";
 import type { ToolContext } from "./tools/helpers.js";
 import { runDoctor } from "./cli/doctor.js";
@@ -45,24 +46,29 @@ async function main(): Promise<void> {
 		process.exit(1);
 	}
 
-	const rest = config.brokered
-		? createBrokeredHaRestClient(config, logger)
-		: createHaRestClient(config, logger);
+	// Direct mode gets a single HA client; brokered mode routes per-instance via
+	// the manager. Either way `instances.rest` is the stable client the tools use.
+	const directRest = config.brokered ? undefined : createHaRestClient(config, logger);
+	const instances = createInstanceManager(config, logger, directRest);
+	const rest = instances.rest;
 	const ws = config.brokered ? createUnavailableWsClient() : createHaWsClient(config, logger);
 	const esphome = config.esphome.brokered
 		? createBrokeredEsphomeDashboardClient(config, logger)
 		: createEsphomeDashboardClient(config, logger);
 	const nodered = createNodeRedClient(config, logger);
 	const vomehome = createVomeHomeClient(config, logger);
-	const ctx: ToolContext = { config, logger, rest, ws, esphome, nodered, vomehome };
+	const ctx: ToolContext = { config, logger, rest, ws, esphome, nodered, vomehome, instances };
 
 	const server = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION });
 	registerAllTools(server, ctx);
 
 	const transport = new StdioServerTransport();
 	await server.connect(transport);
+	const haMode = config.brokered
+		? `brokered via VomeHome instance ${instances.activeId()} (${config.vomehome.instances.length} declared)`
+		: "direct";
 	logger.info(
-		`${SERVER_NAME} v${SERVER_VERSION} ready (HA ${config.brokered ? `brokered via VomeHome instance ${config.vomehome.instanceId}` : "direct"}, writes ${config.safety.allowWrite ? "ENABLED" : "disabled"}, esphome ${config.esphome.enabled ? (config.esphome.brokered ? "brokered" : "enabled") : "disabled"}, nodered ${config.nodered.enabled ? "enabled" : "disabled"}, vomehome ${config.vomehome.enabled ? "enabled" : "disabled"})`
+		`${SERVER_NAME} v${SERVER_VERSION} ready (HA ${haMode}, writes ${config.safety.allowWrite ? "ENABLED" : "disabled"}, esphome ${config.esphome.enabled ? (config.esphome.brokered ? "brokered" : "enabled") : "disabled"}, nodered ${config.nodered.enabled ? "enabled" : "disabled"}, vomehome ${config.vomehome.enabled ? "enabled" : "disabled"})`
 	);
 
 	const shutdown = (signal: string): void => {

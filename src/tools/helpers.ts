@@ -9,6 +9,7 @@ import type { EsphomeDashboardClient } from "../esphome/dashboardClient.js";
 import { NodeRedError } from "../nodered/client.js";
 import type { NodeRedClient } from "../nodered/client.js";
 import type { VomeHomeClient } from "../vomehome/client.js";
+import type { InstanceManager } from "../vomehome/instances.js";
 
 /**
  * Everything a tool handler needs, assembled once in index.ts and threaded
@@ -17,11 +18,14 @@ import type { VomeHomeClient } from "../vomehome/client.js";
 export interface ToolContext {
 	config: Config;
 	logger: Logger;
+	/** Stable HA REST client that always targets the active instance (via `instances`). */
 	rest: HaRestClient;
 	ws: HaWsClient;
 	esphome: EsphomeDashboardClient;
 	nodered: NodeRedClient;
 	vomehome: VomeHomeClient;
+	/** Multi-instance access manager: active instance + per-instance write/config. */
+	instances: InstanceManager;
 }
 
 export function textResult(text: string): CallToolResult {

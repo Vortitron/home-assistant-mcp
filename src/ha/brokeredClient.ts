@@ -60,10 +60,12 @@ function rejectUnsupported<T>(feature: string): Promise<T> {
 	return Promise.reject(unsupportedError(feature));
 }
 
-export function createBrokeredHaRestClient(config: Config, logger: Logger): HaRestClient {
-	const base = `${config.vomehome.apiUrl}/api/v1/instances/${encodeURIComponent(
-		config.vomehome.instanceId
-	)}/ha`;
+export function createBrokeredHaRestClient(
+	config: Config,
+	logger: Logger,
+	instanceId: string = config.vomehome.instanceId
+): HaRestClient {
+	const base = `${config.vomehome.apiUrl}/api/v1/instances/${encodeURIComponent(instanceId)}/ha`;
 
 	async function broker<T>(path: string, options: BrokerRequestOptions = {}): Promise<T> {
 		const method = options.method ?? "GET";

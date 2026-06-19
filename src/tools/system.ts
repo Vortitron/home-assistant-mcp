@@ -45,9 +45,9 @@ export function registerSystemTools(server: McpServer, ctx: ToolContext): void {
 		},
 		async ({ event_type, event_data }) =>
 			runTool(ctx.logger, "ha_fire_event", async () => {
-				if (!ctx.config.safety.allowWrite) {
+				if (!ctx.instances.currentSafety().allowWrite) {
 					return errorResult(
-						"Refused: firing events requires HA_ALLOW_WRITE=true."
+						"Refused: firing events requires writes enabled for the active instance (HA_ALLOW_WRITE, or this instance's write flag in VOMEHOME_INSTANCES)."
 					);
 				}
 				const result = await ctx.rest.fireEvent(event_type, event_data);
@@ -66,7 +66,7 @@ export function registerSystemTools(server: McpServer, ctx: ToolContext): void {
 		},
 		async () =>
 			runTool(ctx.logger, "ha_reload_automations", async () => {
-				const decision = evaluateDomainWrite("automation", ctx.config.safety);
+				const decision = evaluateDomainWrite("automation", ctx.instances.currentSafety());
 				if (!decision.allowed) {
 					return errorResult(`Refused: ${decision.reason}`);
 				}

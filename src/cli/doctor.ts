@@ -25,7 +25,20 @@ function describe(error: unknown): string {
 export async function runDoctor(config: Config, logger: Logger): Promise<number> {
 	line("home-assistant-mcp doctor");
 	line("=========================");
-	line(`HA mode:           ${config.brokered ? `brokered via VomeHome (instance ${config.vomehome.instanceId})` : "direct"}`);
+	line(`HA mode:           ${config.brokered ? `brokered via VomeHome (active instance ${config.vomehome.instanceId})` : "direct"}`);
+	if (config.brokered) {
+		if (config.vomehome.instances.length === 0) {
+			line(`Instances:         (none declared — set VOMEHOME_INSTANCE_ID or VOMEHOME_INSTANCES)`);
+		} else {
+			line(`Instances:         ${config.vomehome.instances.length} declared (write/config are per-instance):`);
+			for (const inst of config.vomehome.instances) {
+				const active = inst.id === config.vomehome.instanceId ? " [active]" : "";
+				const label = inst.label ? ` "${inst.label}"` : "";
+				line(`  - ${inst.id}${label}: write=${inst.write ? "yes" : "no"}, config=${inst.config ? "yes" : "no"}${active}`);
+			}
+		}
+		line(`Create instances:  ${config.vomehome.allowCreate ? "ENABLED (created instances get full access)" : "disabled (VOMEHOME_ALLOW_CREATE)"}`);
+	}
 	line(`HA_URL:            ${config.haUrl || "(not set)"}`);
 	line(`HA_TOKEN:          ${config.haToken ? `set (${config.haToken.length} chars)` : "(not set)"}`);
 	line(`Writes:            ${config.safety.allowWrite ? "ENABLED" : "disabled"}`);

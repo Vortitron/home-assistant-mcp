@@ -106,10 +106,11 @@ stays behind a full browser login on the portal.
 
 | Tool | Description |
 | --- | --- |
-| `vomehome_list_instances` | List your HA instances with status, tier, URL and live health. |
+| `vomehome_list_instances` | List your HA instances with status, tier, URL, live health, the **active** instance and per-instance client write/config access. |
 | `vomehome_get_instance` | Details + live status for one instance. |
+| `vomehome_use_instance` | Switch which instance the `ha_*` tools target (multi-instance — see [Several instances from one token](#several-instances-from-one-token)). |
 | `vomehome_reboot_instance` | Reboot an instance's VM (write-gated). |
-| `vomehome_create_instance` | Create a throwaway test instance (needs `VOMEHOME_ALLOW_CREATE`). |
+| `vomehome_create_instance` | Create a throwaway test/sandbox instance (needs `VOMEHOME_ALLOW_CREATE`; the new instance gets full write+config access and becomes active). |
 | `vomehome_get_login_url` | Mint a one-click HA login URL to open in a new tab. |
 
 ---
@@ -183,8 +184,9 @@ config.
 | `NODERED_USERNAME` / `NODERED_PASSWORD` | — | Credentials exchanged for a token via `/auth/token`, if you prefer not to mint one by hand. |
 | `VOMEHOME_API_URL` | `https://vome.io` | VomeHome portal base URL. |
 | `VOMEHOME_TOKEN` | _(disabled)_ | VomeHome personal access token; enables the `vomehome_*` tools. |
-| `VOMEHOME_INSTANCE_ID` | _(direct mode)_ | Instance to broker HA calls to. With a token and **no** `HA_TOKEN`, HA tools route through VomeHome (see [Brokered mode](#brokered-mode-the-real-boundary)). |
-| `VOMEHOME_ALLOW_CREATE` | `false` | Extra guard required (with `HA_ALLOW_WRITE`) to create an instance. |
+| `VOMEHOME_INSTANCE_ID` | _(direct mode)_ | The active/default instance to broker HA calls to. With a token and **no** `HA_TOKEN`, HA tools route through VomeHome (see [Brokered mode](#brokered-mode-the-real-boundary)). Its write/config flags come from `HA_ALLOW_WRITE` / `HA_ALLOW_CONFIG_WRITE`. |
+| `VOMEHOME_INSTANCES` | _(none)_ | JSON registry of **multiple** instances with **per-instance** `write`/`config` flags, e.g. `[{"id":"rly-house","write":false},{"id":"sbx","write":true,"config":true}]`. Switch between them with `vomehome_use_instance`. See [Several instances from one token](#several-instances-from-one-token). |
+| `VOMEHOME_ALLOW_CREATE` | `false` | Account-wide guard required (with `HA_ALLOW_WRITE`) to create an instance. Instances you create are granted full write+config access automatically. |
 | `HA_TIMEOUT_MS` | `15000` | HTTP/WebSocket request timeout. |
 | `MAX_RESULTS` | `500` | Max items a list tool returns before truncating. |
 | `LOG_LEVEL` | `info` | `error` \| `warn` \| `info` \| `debug` (logs go to stderr). |
@@ -287,6 +289,51 @@ Brokered and direct entries mix freely (e.g. a brokered home plus a direct
 flags — a read-only token for the family home, writes enabled for the test
 bench.
 
+### Several instances from one token
+
+The multi-process layout above is one process per token. When several instances
+live on the **same** VomeHome account (same token), you can instead drive them
+all from **one** server and switch between them at runtime — with **per-instance**
+write/config flags. This is the safe way to keep your real home read-only while
+working on a sandbox.
+
+```json
+{
+	"mcpServers": {
+		"home-assistant": {
+			"command": "npx",
+			"args": ["-y", "@vortitron/home-assistant-mcp"],
+			"env": {
+				"VOMEHOME_TOKEN": "vh_your-account-token",
+				"VOMEHOME_INSTANCE_ID": "rly-house",
+				"HA_ALLOW_WRITE": "false",
+				"VOMEHOME_INSTANCES": "[{\"id\":\"rly-house\",\"write\":false,\"config\":false,\"label\":\"home\"},{\"id\":\"sbx-plc\",\"write\":true,\"config\":true,\"label\":\"PLC sandbox\"}]",
+				"VOMEHOME_ALLOW_CREATE": "true"
+			}
+		}
+	}
+}
+```
+
+- **`VOMEHOME_INSTANCE_ID`** is the *active/default* instance the `ha_*` tools
+  target at startup. Its flags come from `HA_ALLOW_WRITE` / `HA_ALLOW_CONFIG_WRITE`
+  (it is folded into the registry automatically as `"default"`).
+- **`VOMEHOME_INSTANCES`** declares the registry. `write` / `config` are scoped to
+  **each specific instance** and default to `false` (read-only). The example
+  keeps the house read-only and the sandbox fully writable.
+- **`vomehome_use_instance`** switches the active instance for subsequent `ha_*`
+  calls; **`vomehome_list_instances`** shows which one is active and each
+  instance's client access. An *undeclared* but token-reachable instance can be
+  switched to read-only.
+- **`VOMEHOME_ALLOW_CREATE=true`** lets the agent create sandboxes — **you own
+  what you create**: a created instance is granted full write+config access and
+  becomes active automatically. To keep that access across MCP restarts, add its
+  id to `VOMEHOME_INSTANCES`.
+
+In all cases the **server-side token scopes still apply on top** — these
+client-side flags only ever restrict further, they never widen what the token
+can do.
+
 ### Verify
 
 ```bash
@@ -376,6 +423,17 @@ that can read **and write automation config**. Get the instance id from the
 dashboard or the `vomehome_list_instances` tool. (The portal's token page
 generates this snippet for you, with the write flags pre‑filled to match the
 token's scopes.)
+
+> **Token scopes for the `vomehome_*` tools.** The instance-management tools
+> (`vomehome_list_instances`, `_get_instance`, `_use_instance`, `_get_login_url`)
+> need the **`instances:read`** scope, and `vomehome_create_instance` needs
+> **`instances:write`** (which implies read). A token minted with only the HA
+> scopes (`ha:read` / `ha:write` / `ha:config`) can broker Home Assistant calls
+> but will get `403 … missing required scope(s): instances:read` from the
+> instance tools. If you want the agent to spin up sandboxes, mint the token with
+> `instances:write` **and** the `ha:*` scopes, and set `VOMEHOME_ALLOW_CREATE=true`.
+> A default (read-only) token already includes `instances:read` — the 403 only
+> appears when a token was scoped to HA access *without* the instances scopes.
 
 Brokered mode proxies the everyday loop — list/get entities, list services, call
 services, read config, render templates — **plus automation editing**:

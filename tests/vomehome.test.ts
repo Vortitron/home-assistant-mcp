@@ -13,6 +13,7 @@ import type { HaRestClient } from "../src/ha/restClient.js";
 import type { HaWsClient } from "../src/ha/wsClient.js";
 import { createEsphomeDashboardClient } from "../src/esphome/dashboardClient.js";
 import { createNodeRedClient } from "../src/nodered/client.js";
+import { createInstanceManager } from "../src/vomehome/instances.js";
 import { registerVomeHomeTools } from "../src/tools/vomehome.js";
 import type { ToolContext } from "../src/tools/helpers.js";
 
@@ -172,14 +173,16 @@ function buildHarness(
 		VOMEHOME_TOKEN: "pat",
 		...options.env
 	});
+	const instances = createInstanceManager(config, logger, {} as unknown as HaRestClient);
 	const ctx: ToolContext = {
 		config,
 		logger,
-		rest: {} as unknown as HaRestClient,
+		rest: instances.rest,
 		ws: {} as unknown as HaWsClient,
 		esphome: createEsphomeDashboardClient(config, logger),
 		nodered: createNodeRedClient(config, logger),
-		vomehome: (options.vomehome ?? createVomeHomeClient(config, logger)) as VomeHomeClient
+		vomehome: (options.vomehome ?? createVomeHomeClient(config, logger)) as VomeHomeClient,
+		instances
 	};
 	const server = new FakeServer();
 	registerVomeHomeTools(server as unknown as McpServer, ctx);

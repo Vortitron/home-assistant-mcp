@@ -83,15 +83,18 @@ describe("validateConfig", () => {
 		expect(problems).toEqual([]);
 	});
 
-	it("reports a missing instance id in brokered mode", () => {
-		// Force brokered detection by supplying token + url + instance, then
-		// blanking the instance to ensure the brokered branch reports it.
+	it("reports a missing instance in brokered mode (no id and no registry)", () => {
+		// Force brokered detection by supplying token + url + instance, then blank
+		// BOTH the active id and the registry to ensure the brokered branch reports it.
 		const config = loadConfig({
 			VOMEHOME_API_URL: "https://vome.io",
 			VOMEHOME_TOKEN: "vh_token",
 			VOMEHOME_INSTANCE_ID: "srv-1"
 		});
-		const broken = { ...config, vomehome: { ...config.vomehome, instanceId: "" } };
+		const broken = {
+			...config,
+			vomehome: { ...config.vomehome, instanceId: "", instances: [] }
+		};
 		expect(validateConfig(broken).some((p) => p.field === "VOMEHOME_INSTANCE_ID")).toBe(true);
 	});
 });

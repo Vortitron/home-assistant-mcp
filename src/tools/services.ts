@@ -82,14 +82,16 @@ export function registerServiceTools(server: McpServer, ctx: ToolContext): void 
 		},
 		async ({ domain, service, data, target }) =>
 			runTool(ctx.logger, "ha_call_service", async () => {
-				const serviceDecision = evaluateDomainWrite(domain, ctx.config.safety);
+				// Per-instance write policy (deny/allow domains stay global).
+				const safety = ctx.instances.currentSafety();
+				const serviceDecision = evaluateDomainWrite(domain, safety);
 				if (!serviceDecision.allowed) {
 					return errorResult(`Refused: ${serviceDecision.reason}`);
 				}
 				// Guard against bypassing the deny-list via cross-domain services
 				// (e.g. homeassistant.turn_on targeting a lock).
 				for (const entityId of collectEntityIds(data, target)) {
-					const targetDecision = evaluateDomainWrite(extractDomain(entityId), ctx.config.safety);
+					const targetDecision = evaluateDomainWrite(extractDomain(entityId), safety);
 					if (!targetDecision.allowed) {
 						return errorResult(`Refused for target '${entityId}': ${targetDecision.reason}`);
 					}

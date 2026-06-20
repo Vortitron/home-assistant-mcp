@@ -56,7 +56,12 @@ policy (see [Safety](#safety)).
 | `ha_get_error_log` | Tail of the Home Assistant error log. |
 | `ha_get_logbook` | Human-readable logbook entries. |
 
-### Home Assistant — write (require `HA_ALLOW_WRITE=true`)
+### Home Assistant — write (write-gated)
+
+> Write-gating depends on the mode. In **direct** mode the MCP is the only guard,
+> so these refuse until `HA_ALLOW_WRITE=true`. In **brokered** mode your VomeHome
+> API key carries the per-instance `ha:write` / `ha:config` scopes and the server
+> enforces them, so the client flags are optional local-only restrictions.
 
 | Tool | Description |
 | --- | --- |
@@ -110,7 +115,7 @@ stays behind a full browser login on the portal.
 | `vomehome_get_instance` | Details + live status for one instance. |
 | `vomehome_use_instance` | Switch which instance the `ha_*` tools target (multi-instance — see [Several instances from one token](#several-instances-from-one-token)). |
 | `vomehome_reboot_instance` | Reboot an instance's VM (write-gated). |
-| `vomehome_create_instance` | Create a throwaway test/sandbox instance (needs `VOMEHOME_ALLOW_CREATE`; the new instance gets full write+config access and becomes active). |
+| `vomehome_create_instance` | Create a throwaway test/sandbox instance (needs the create scope on your API key; the new instance becomes the active target). |
 | `vomehome_get_login_url` | Mint a one-click HA login URL to open in a new tab. |
 
 ---
@@ -172,10 +177,10 @@ config.
 | --- | --- | --- |
 | `HA_URL` | — (required) | Base URL, e.g. `http://homeassistant.local:8123`. |
 | `HA_TOKEN` | — (required) | Long-lived access token (Profile → Security). |
-| `HA_ALLOW_WRITE` | `false` | Master switch for any state-changing tool. |
+| `HA_ALLOW_WRITE` | off (direct) / permissive (brokered) | Local write guard. In brokered mode the API key's per-instance scope decides (server-enforced); setting `false` only adds a local restriction. In direct mode this is the master switch and defaults off. |
 | `HA_DENY_DOMAINS` | `lock,alarm_control_panel,cover,climate,vacuum,valve,water_heater,lawn_mower,camera` | Domains that can never be written. Set empty to clear. |
 | `HA_ALLOW_DOMAINS` | _(any)_ | If set, only these domains may be written. |
-| `HA_ALLOW_CONFIG_WRITE` | `false` | Allow editing automation config (with `HA_ALLOW_WRITE`). |
+| `HA_ALLOW_CONFIG_WRITE` | off (direct) / permissive (brokered) | Local guard for editing automation config. Same semantics as `HA_ALLOW_WRITE`. |
 | `ESPHOME_DASHBOARD_URL` | _(disabled)_ | ESPHome dashboard URL to enable ESPHome tools directly. In brokered mode (relay-connected HA) the REST subset works without it. |
 | `ESPHOME_DASHBOARD_TOKEN` | — | Bearer token, if the dashboard is behind an auth proxy. |
 | `ESPHOME_DASHBOARD_USERNAME` / `..._PASSWORD` | — | HTTP basic auth alternative. |
@@ -184,9 +189,9 @@ config.
 | `NODERED_USERNAME` / `NODERED_PASSWORD` | — | Credentials exchanged for a token via `/auth/token`, if you prefer not to mint one by hand. |
 | `VOMEHOME_API_URL` | `https://vome.io` | VomeHome portal base URL. |
 | `VOMEHOME_TOKEN` | _(disabled)_ | VomeHome personal access token; enables the `vomehome_*` tools. |
-| `VOMEHOME_INSTANCE_ID` | _(direct mode)_ | The active/default instance to broker HA calls to. With a token and **no** `HA_TOKEN`, HA tools route through VomeHome (see [Brokered mode](#brokered-mode-the-real-boundary)). Its write/config flags come from `HA_ALLOW_WRITE` / `HA_ALLOW_CONFIG_WRITE`. |
-| `VOMEHOME_INSTANCES` | _(none)_ | JSON registry of **multiple** instances with **per-instance** `write`/`config` flags, e.g. `[{"id":"rly-house","write":false},{"id":"sbx","write":true,"config":true}]`. Switch between them with `vomehome_use_instance`. See [Several instances from one token](#several-instances-from-one-token). |
-| `VOMEHOME_ALLOW_CREATE` | `false` | Account-wide guard required (with `HA_ALLOW_WRITE`) to create an instance. Instances you create are granted full write+config access automatically. |
+| `VOMEHOME_INSTANCE_ID` | _(direct mode)_ | The active/default instance to broker HA calls to. With a token and **no** `HA_TOKEN`, HA tools route through VomeHome (see [Brokered mode](#brokered-mode-the-real-boundary)). What it may do is set by your token's per-instance scopes in the portal (server-enforced). |
+| `VOMEHOME_INSTANCES` | _(none)_ | Optional JSON registry to make **multiple** instances known at startup, e.g. `[{"id":"rly-house","label":"home"},{"id":"sbx"}]`. Per-instance `write`/`config` here are optional **local** restrictions (omit to defer to the server). Switch between them with `vomehome_use_instance`. See [Several instances from one token](#several-instances-from-one-token). |
+| `VOMEHOME_ALLOW_CREATE` | _(defer to key)_ | Optional **local** guard for creating an instance. The real authority is the account-wide create scope on your API key; set `false` to block creation locally regardless. Instances you create become the active target for the session. |
 | `HA_TIMEOUT_MS` | `15000` | HTTP/WebSocket request timeout. |
 | `MAX_RESULTS` | `500` | Max items a list tool returns before truncating. |
 | `LOG_LEVEL` | `info` | `error` \| `warn` \| `info` \| `debug` (logs go to stderr). |
@@ -293,9 +298,10 @@ bench.
 
 The multi-process layout above is one process per token. When several instances
 live on the **same** VomeHome account (same token), you can instead drive them
-all from **one** server and switch between them at runtime — with **per-instance**
-write/config flags. This is the safe way to keep your real home read-only while
-working on a sandbox.
+all from **one** server and switch between them at runtime. Permissions live on
+the key — you grant `ha:write` / `ha:config` per instance in the portal and the
+server enforces it — so the config below is just about which instances are known
+at startup (plus any optional local belt-and-braces restrictions).
 
 ```json
 {
@@ -306,9 +312,7 @@ working on a sandbox.
 			"env": {
 				"VOMEHOME_TOKEN": "vh_your-account-token",
 				"VOMEHOME_INSTANCE_ID": "rly-house",
-				"HA_ALLOW_WRITE": "false",
-				"VOMEHOME_INSTANCES": "[{\"id\":\"rly-house\",\"write\":false,\"config\":false,\"label\":\"home\"},{\"id\":\"sbx-plc\",\"write\":true,\"config\":true,\"label\":\"PLC sandbox\"}]",
-				"VOMEHOME_ALLOW_CREATE": "true"
+				"VOMEHOME_INSTANCES": "[{\"id\":\"rly-house\",\"write\":false,\"label\":\"home (locked read-only here)\"},{\"id\":\"sbx-plc\",\"label\":\"PLC sandbox\"}]"
 			}
 		}
 	}
@@ -316,23 +320,25 @@ working on a sandbox.
 ```
 
 - **`VOMEHOME_INSTANCE_ID`** is the *active/default* instance the `ha_*` tools
-  target at startup. Its flags come from `HA_ALLOW_WRITE` / `HA_ALLOW_CONFIG_WRITE`
-  (it is folded into the registry automatically as `"default"`).
-- **`VOMEHOME_INSTANCES`** declares the registry. `write` / `config` are scoped to
-  **each specific instance** and default to `false` (read-only). The example
-  keeps the house read-only and the sandbox fully writable.
+  target at startup (folded into the registry automatically as `"default"`).
+  What it may do is set by your token's per-instance scopes in the portal.
+- **`VOMEHOME_INSTANCES`** declares which instances are known at startup. Listing
+  them is optional — the token already reaches them — but it lets you pin the
+  active target and add local restrictions. A per-instance `write` / `config`
+  here is an **optional local-only** restriction: omit it to defer to the server,
+  or set `false` to keep an instance read-only on this machine regardless of what
+  the key allows (the example locks the house locally).
 - **`vomehome_use_instance`** switches the active instance for subsequent `ha_*`
   calls; **`vomehome_list_instances`** shows which one is active and each
-  instance's client access. An *undeclared* but token-reachable instance can be
-  switched to read-only.
-- **`VOMEHOME_ALLOW_CREATE=true`** lets the agent create sandboxes — **you own
-  what you create**: a created instance is granted full write+config access and
-  becomes active automatically. To keep that access across MCP restarts, add its
-  id to `VOMEHOME_INSTANCES`.
+  instance's effective access.
+- **Creating instances** (`vomehome_create_instance`) needs the create scope on
+  your key — **you own what you create**: a created instance becomes the active
+  target for the session. Add its id to `VOMEHOME_INSTANCES` to keep it known
+  across restarts.
 
-In all cases the **server-side token scopes still apply on top** — these
-client-side flags only ever restrict further, they never widen what the token
-can do.
+The **API key is the single source of truth** and the server has the final say
+(it returns `403` if the key lacks a scope). The client flags above only ever
+restrict further on this machine; they never widen what the token can do.
 
 ### Verify
 
@@ -350,8 +356,10 @@ safe to run any time.
 
 Designed to be safe to point at a real home:
 
-1. **Read-only by default.** Every state-changing tool refuses until
-   `HA_ALLOW_WRITE=true`.
+1. **Read-only by default (direct mode).** With a raw `HA_TOKEN` the MCP is the
+   only guard, so every state-changing tool refuses until `HA_ALLOW_WRITE=true`.
+   In **brokered mode** permissions instead live on your VomeHome API key and are
+   enforced server-side per instance (see [Brokered mode](#brokered-mode-the-real-boundary)).
 2. **Domain deny-list.** Even with writes on, sensitive domains (locks, alarms,
    covers, climate, …) are blocked unless you remove them from `HA_DENY_DOMAINS`.
 3. **Optional allow-list.** Set `HA_ALLOW_DOMAINS` to permit *only* specific
@@ -359,11 +367,12 @@ Designed to be safe to point at a real home:
 4. **Cross-domain guard.** `ha_call_service` checks the domain of every target
    entity, so a generic service (e.g. `homeassistant.turn_on`) cannot be used to
    reach a denied domain.
-5. **Separate config-write switch.** Editing automation YAML additionally requires
-   `HA_ALLOW_CONFIG_WRITE=true`.
-6. **VomeHome guards.** Rebooting an instance respects the master `HA_ALLOW_WRITE`
-   switch; creating one additionally requires `VOMEHOME_ALLOW_CREATE=true`. The
-   VomeHome token is scoped server-side to your own account.
+5. **Separate config-write scope.** Editing automation YAML needs its own
+   `ha:config` scope (brokered) or `HA_ALLOW_CONFIG_WRITE=true` (direct).
+6. **VomeHome guards.** Rebooting or creating an instance is gated by the matching
+   scope on your API key (server-enforced); the optional `VOMEHOME_ALLOW_CREATE`
+   client flag can add a local block. The VomeHome token is scoped server-side to
+   your own account.
 
 Tools are also annotated with MCP hints (`readOnlyHint`, `destructiveHint`) so
 clients can warn before destructive calls.
@@ -393,8 +402,8 @@ revocable, scoped [VomeHome](https://vome.io) token and an instance id — and
 VomeHome portal, which:
 
 - keeps the HA credential server‑side (the agent never sees it);
-- enforces **read‑only vs read/write per token** — a read‑only token genuinely
-  cannot change anything, no matter how it's used;
+- enforces **read / write / config per token, per instance** — a token without
+  `ha:write` for an instance genuinely cannot change it, no matter how it's used;
 - blocks sensitive domains (locks, alarms, …) server‑side, including via generic
   services (`homeassistant.turn_on` can't reach a lock);
 - **audits every call** (allowed or denied) against the token that made it.
@@ -417,12 +426,12 @@ difference between a guardrail and a boundary.
 }
 ```
 
-Mint the token at **Account → API tokens** in the portal. Tick "Control Home
-Assistant" for a token that can call services, and/or "Edit automations" for one
-that can read **and write automation config**. Get the instance id from the
-dashboard or the `vomehome_list_instances` tool. (The portal's token page
-generates this snippet for you, with the write flags pre‑filled to match the
-token's scopes.)
+Mint the token at **Account → API tokens** in the portal. There you grant, **per
+instance**, whether it may control Home Assistant (`ha:write`) and/or edit
+automation config (`ha:config`) — and you can edit those grants after issuing the
+key. The key is the single source of truth; the MCP just carries it. Get the
+instance id from the dashboard or the `vomehome_list_instances` tool. (The portal's
+token page generates this token-only snippet for you.)
 
 > **Token scopes for the `vomehome_*` tools.** The instance-management tools
 > (`vomehome_list_instances`, `_get_instance`, `_use_instance`, `_get_login_url`)
@@ -439,16 +448,16 @@ Brokered mode proxies the everyday loop — list/get entities, list services, ca
 services, read config, render templates — **plus automation editing**:
 `ha_get_automation`, `ha_set_automation`, `ha_delete_automation` and
 `ha_check_config`. Reading an automation needs `ha:read`; writing one needs the
-separate **`ha:config`** scope on the token *and* `HA_ALLOW_WRITE=true` +
-`HA_ALLOW_CONFIG_WRITE=true` on the client (defence in depth — both the server
-scope and the client guard must agree). Registry tools (areas/devices), logs and
-history still need direct mode for now.
+separate **`ha:config`** scope on the token *for that instance*, enforced
+server-side. The client write guards (`HA_ALLOW_WRITE` / `HA_ALLOW_CONFIG_WRITE`)
+default permissive in brokered mode and are optional local restrictions on top.
+Registry tools (areas/devices), logs and history still need direct mode for now.
 
 **ESPHome over the relay.** When you broker to a **relay-connected** Home
 Assistant (your own HA linked via the Vome component's outbound tunnel), the
 ESPHome dashboard's REST subset is brokered too — `esphome_list_devices`,
 `esphome_get_config` and `esphome_save_config` work with no `ESPHOME_DASHBOARD_URL`
-(reads need `ha:read`; saving YAML needs `ha:config` + the client write guards).
+(reads need `ha:read`; saving YAML needs the instance's `ha:config` scope).
 The streaming build commands (`esphome_validate` / `_compile` / `_upload`) stream
 output, so they still need a directly-reachable `ESPHOME_DASHBOARD_URL`.
 

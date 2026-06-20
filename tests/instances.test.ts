@@ -46,16 +46,25 @@ describe("loadConfig VOMEHOME_INSTANCES", () => {
 		expect(sbx).toMatchObject({ write: true, config: true, label: "PLC sandbox" });
 	});
 
-	it("accepts a JSON object map and string-only entries (read-only by default)", () => {
+	it("defaults omitted per-instance flags to permissive in brokered mode (server enforces)", () => {
+		// Permissions live on the API key now: an omitted write/config means
+		// "let the server decide", so the client guard is permissive. An explicit
+		// false is still honoured as a local-only restriction.
 		const config = loadConfig({
 			VOMEHOME_API_URL: "https://vome.io",
 			VOMEHOME_TOKEN: "t",
-			VOMEHOME_INSTANCES: JSON.stringify({ "rly-a": { write: true }, "rly-b": {} })
+			VOMEHOME_INSTANCES: JSON.stringify({
+				"rly-a": { write: true },           // config omitted -> permissive
+				"rly-b": {},                          // both omitted -> permissive
+				"rly-c": { write: false, config: false } // explicit local restriction
+			})
 		});
 		const a = config.vomehome.instances.find((i) => i.id === "rly-a")!;
 		const b = config.vomehome.instances.find((i) => i.id === "rly-b")!;
-		expect(a).toMatchObject({ write: true, config: false });
-		expect(b).toMatchObject({ write: false, config: false });
+		const c = config.vomehome.instances.find((i) => i.id === "rly-c")!;
+		expect(a).toMatchObject({ write: true, config: true });
+		expect(b).toMatchObject({ write: true, config: true });
+		expect(c).toMatchObject({ write: false, config: false });
 		// No explicit VOMEHOME_INSTANCE_ID -> active is the first declared instance.
 		expect(config.vomehome.instanceId).toBe("rly-a");
 		expect(config.brokered).toBe(true);

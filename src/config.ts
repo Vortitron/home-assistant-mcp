@@ -47,7 +47,13 @@ export interface NodeRedConfig {
 
 /**
  * Per-instance access entry. WRITE and CONFIG_WRITE are scoped to ONE specific
- * VomeHome instance — distinct from the account-wide VOMEHOME_ALLOW_CREATE.
+ * VomeHome instance.
+ *
+ * In brokered mode these are *client-side, optional* guards: the VomeHome
+ * portal is the real authority and enforces what the API key may do per
+ * instance (read / write / config / create), so the MCP defaults to permissive
+ * and lets the server decide. Setting a flag to false here only adds a local
+ * belt-and-braces restriction on top of the server's policy.
  */
 export interface InstanceAccess {
 	/** VomeHome instance (server) id this entry applies to. */
@@ -63,6 +69,19 @@ export interface InstanceAccess {
 	 * the MCP (VOMEHOME_ALLOW_CREATE) rather than declared in the environment.
 	 */
 	created?: boolean;
+}
+
+/**
+ * A VOMEHOME_INSTANCES entry as parsed from the environment, before the
+ * mode default is applied. `write`/`config` are left undefined when the user
+ * did not state them, so brokered mode can default them permissive (server
+ * enforces) while still honouring an explicit `false` as a local restriction.
+ */
+interface RawInstanceAccess {
+	id: string;
+	write?: boolean;
+	config?: boolean;
+	label?: string;
 }
 
 export interface VomeHomeConfig {
@@ -81,7 +100,8 @@ export interface VomeHomeConfig {
 	 * Per-instance access registry. Built from VOMEHOME_INSTANCES (JSON) plus the
 	 * default instance (VOMEHOME_INSTANCE_ID with HA_ALLOW_WRITE /
 	 * HA_ALLOW_CONFIG_WRITE folded in). Each entry's write/config flags apply to
-	 * that instance ONLY.
+	 * that instance ONLY, and in brokered mode are an optional client-side guard
+	 * on top of the server's per-key policy (omitted flags default permissive).
 	 */
 	instances: InstanceAccess[];
 	/** Set when VOMEHOME_INSTANCES was provided but could not be parsed. */
@@ -171,11 +191,12 @@ function parseFlag(value: unknown): boolean {
 	return false;
 }
 
-/** Normalises one raw VOMEHOME_INSTANCES entry into an {@link InstanceAccess}. */
-function parseInstanceEntry(raw: unknown): InstanceAccess | undefined {
+/** Normalises one raw VOMEHOME_INSTANCES entry into a {@link RawInstanceAccess}. */
+function parseInstanceEntry(raw: unknown): RawInstanceAccess | undefined {
 	if (typeof raw === "string") {
 		const id = raw.trim();
-		return id ? { id, write: false, config: false } : undefined;
+		// A bare id states no flags, so it inherits the mode default.
+		return id ? { id } : undefined;
 	}
 	if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) {
 		const obj = raw as Record<string, unknown>;
@@ -183,7 +204,15 @@ function parseInstanceEntry(raw: unknown): InstanceAccess | undefined {
 		if (!id) {
 			return undefined;
 		}
-		const entry: InstanceAccess = { id, write: parseFlag(obj.write), config: parseFlag(obj.config) };
+		const entry: RawInstanceAccess = { id };
+		// Only pin a flag the caller actually stated; an omitted flag inherits
+		// the mode default (permissive in brokered mode — the server decides).
+		if ("write" in obj) {
+			entry.write = parseFlag(obj.write);
+		}
+		if ("config" in obj) {
+			entry.config = parseFlag(obj.config);
+		}
 		if (typeof obj.label === "string" && obj.label.trim().length > 0) {
 			entry.label = obj.label.trim();
 		}
@@ -197,7 +226,7 @@ function parseInstanceEntry(raw: unknown): InstanceAccess | undefined {
  * object keyed by id. Returns the de-duplicated list and a parse error (if any)
  * so {@link validateConfig} can surface it rather than failing silently.
  */
-function parseInstances(raw: string | undefined): { list: InstanceAccess[]; error?: string } {
+function parseInstances(raw: string | undefined): { list: RawInstanceAccess[]; error?: string } {
 	const trimmed = (raw ?? "").trim();
 	if (trimmed.length === 0) {
 		return { list: [] };
@@ -208,7 +237,7 @@ function parseInstances(raw: string | undefined): { list: InstanceAccess[]; erro
 	} catch (error) {
 		return { list: [], error: `VOMEHOME_INSTANCES is not valid JSON: ${(error as Error).message}` };
 	}
-	const entries: InstanceAccess[] = [];
+	const entries: RawInstanceAccess[] = [];
 	if (Array.isArray(parsed)) {
 		for (const item of parsed) {
 			const entry = parseInstanceEntry(item);
@@ -231,7 +260,7 @@ function parseInstances(raw: string | undefined): { list: InstanceAccess[]; erro
 		return { list: [], error: "VOMEHOME_INSTANCES must be a JSON array or object." };
 	}
 	// De-duplicate by id (last declaration wins).
-	const byId = new Map<string, InstanceAccess>();
+	const byId = new Map<string, RawInstanceAccess>();
 	for (const entry of entries) {
 		byId.set(entry.id, entry);
 	}
@@ -242,14 +271,29 @@ function parseInstances(raw: string | undefined): { list: InstanceAccess[]; erro
  * Folds the legacy single-instance env (VOMEHOME_INSTANCE_ID + HA_ALLOW_WRITE +
  * HA_ALLOW_CONFIG_WRITE) into the registry as the default instance, unless it is
  * already declared explicitly in VOMEHOME_INSTANCES (explicit wins).
+ *
+ * `fallback` is the per-instance default for entries that did not state a
+ * write/config flag — permissive in brokered mode (the server is authority),
+ * off in direct mode (the MCP is the only guard).
  */
 function buildInstanceRegistry(
-	parsed: InstanceAccess[],
+	parsed: RawInstanceAccess[],
 	defaultId: string,
 	defaultWrite: boolean,
-	defaultConfig: boolean
+	defaultConfig: boolean,
+	fallback: boolean
 ): InstanceAccess[] {
-	const list = parsed.map((entry) => ({ ...entry }));
+	const list: InstanceAccess[] = parsed.map((entry) => {
+		const access: InstanceAccess = {
+			id: entry.id,
+			write: entry.write ?? fallback,
+			config: entry.config ?? fallback
+		};
+		if (entry.label) {
+			access.label = entry.label;
+		}
+		return access;
+	});
 	if (defaultId.length > 0 && !list.some((entry) => entry.id === defaultId)) {
 		list.unshift({ id: defaultId, write: defaultWrite, config: defaultConfig, label: "default" });
 	}
@@ -265,21 +309,13 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
 	const vomehomeToken = (env.VOMEHOME_TOKEN ?? "").trim();
 	const vomehomeInstanceId = (env.VOMEHOME_INSTANCE_ID ?? "").trim();
 	const haToken = (env.HA_TOKEN ?? "").trim();
-	const allowWrite = parseBoolean(env.HA_ALLOW_WRITE, false);
-	const allowConfigWrite = parseBoolean(env.HA_ALLOW_CONFIG_WRITE, false);
-	// Per-instance access registry: VOMEHOME_INSTANCES (JSON) plus the default
-	// instance (VOMEHOME_INSTANCE_ID with HA_ALLOW_WRITE / HA_ALLOW_CONFIG_WRITE
-	// folded in). WRITE / CONFIG_WRITE are scoped to each specific instance.
+	// Per-instance access registry source: VOMEHOME_INSTANCES (JSON) plus the
+	// default instance (VOMEHOME_INSTANCE_ID). Parsed first (ids only) so we can
+	// decide brokered mode before applying the per-instance write/config default.
 	const { list: parsedInstances, error: instancesError } = parseInstances(env.VOMEHOME_INSTANCES);
-	const instances = buildInstanceRegistry(
-		parsedInstances,
-		vomehomeInstanceId,
-		allowWrite,
-		allowConfigWrite
-	);
 	// Active/default instance: the explicit VOMEHOME_INSTANCE_ID, else the first
 	// declared instance in VOMEHOME_INSTANCES.
-	const activeInstanceId = vomehomeInstanceId || (instances[0]?.id ?? "");
+	const activeInstanceId = vomehomeInstanceId || (parsedInstances[0]?.id ?? "");
 	// Brokered HA mode: the agent has a VomeHome token + at least one instance but
 	// no direct HA token, so all HA traffic must go through the (policed, audited)
 	// portal.
@@ -288,6 +324,21 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
 		vomehomeUrl.length > 0 &&
 		activeInstanceId.length > 0 &&
 		haToken.length === 0;
+	// Permissions now live on the VomeHome API key and are enforced server-side
+	// per instance. So in brokered mode the client guards default to permissive
+	// (let the server decide); HA_ALLOW_WRITE / HA_ALLOW_CONFIG_WRITE (and the
+	// per-instance flags in VOMEHOME_INSTANCES) become OPTIONAL local-only
+	// restrictions. In direct mode (a raw HA token) the MCP is the sole guard,
+	// so writes stay off unless explicitly enabled.
+	const allowWrite = parseBoolean(env.HA_ALLOW_WRITE, brokered);
+	const allowConfigWrite = parseBoolean(env.HA_ALLOW_CONFIG_WRITE, brokered);
+	const instances = buildInstanceRegistry(
+		parsedInstances,
+		vomehomeInstanceId,
+		allowWrite,
+		allowConfigWrite,
+		brokered
+	);
 	return {
 		haUrl: stripTrailingSlashes((env.HA_URL ?? "").trim()),
 		haToken,

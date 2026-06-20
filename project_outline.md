@@ -71,7 +71,15 @@ empty `HA_TOKEN`). Writes: `HA_ALLOW_WRITE`, `HA_DENY_DOMAINS`,
 (+ optional auth). Node-RED: `NODERED_URL` (+ optional `NODERED_TOKEN` or
 `NODERED_USERNAME`/`NODERED_PASSWORD`). VomeHome: `VOMEHOME_API_URL` (default
 `https://vome.io`), `VOMEHOME_TOKEN`, `VOMEHOME_INSTANCE_ID`,
-`VOMEHOME_ALLOW_CREATE`.
+`VOMEHOME_INSTANCES`, `VOMEHOME_ALLOW_CREATE`.
+
+**Permission authority depends on mode.** In direct mode the MCP is the sole
+guard, so `HA_ALLOW_WRITE`/`HA_ALLOW_CONFIG_WRITE` default OFF. In brokered mode
+the VomeHome API key carries per-instance `ha:read`/`ha:write`/`ha:config` scopes
+(editable in the portal, enforced server-side with `403` on denial), so those
+env flags — and the per-instance `write`/`config` keys in `VOMEHOME_INSTANCES` —
+default **permissive** and act only as optional local-only restrictions. A
+client `false` narrows; it never widens what the key allows.
 
 `config.brokered` is derived: true when a VomeHome token + instance id are set
 and `HA_TOKEN` is empty. In that mode `index.ts` injects the brokered REST

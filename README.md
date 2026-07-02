@@ -365,8 +365,12 @@ Designed to be safe to point at a real home:
 3. **Optional allow-list.** Set `HA_ALLOW_DOMAINS` to permit *only* specific
    domains.
 4. **Cross-domain guard.** `ha_call_service` checks the domain of every target
-   entity, so a generic service (e.g. `homeassistant.turn_on`) cannot be used to
-   reach a denied domain.
+   entity — including entity ids nested anywhere inside `data` — so a generic
+   service (e.g. `homeassistant.turn_on`) cannot be used to reach a denied
+   domain. Generic services targeting an **area/device/label** are refused while
+   a deny/allow-list is active, because those selectors resolve server-side and
+   cannot be checked here; target entity ids or use the domain-specific service
+   (e.g. `light.turn_on`) instead.
 5. **Separate config-write scope.** Editing automation YAML needs its own
    `ha:config` scope (brokered) or `HA_ALLOW_CONFIG_WRITE=true` (direct).
 6. **VomeHome guards.** Rebooting or creating an instance is gated by the matching

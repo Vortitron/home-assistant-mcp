@@ -11,7 +11,9 @@ import { errorResult, jsonResult, runTool, type ToolContext } from "./helpers.js
  */
 export function registerNodeRedTools(server: McpServer, ctx: ToolContext): void {
 	const guardConfigWrite = (): string | undefined => {
-		const decision = evaluateConfigWrite(ctx.config.safety);
+		// Flow deploys rewrite automation logic, so they use the same per-instance
+		// config-write guard as editing HA automations (active instance).
+		const decision = evaluateConfigWrite(ctx.instances.currentSafety());
 		return decision.allowed ? undefined : `Refused: ${decision.reason}`;
 	};
 

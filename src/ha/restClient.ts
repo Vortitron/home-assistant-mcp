@@ -150,10 +150,13 @@ export function createHaRestClient(config: Config, logger: Logger): HaRestClient
 				}
 			}
 		}
-		return request<HaState[]>(`/api/services/${domain}/${service}`, {
-			method: "POST",
-			body
-		});
+		return request<HaState[]>(
+			`/api/services/${encodeURIComponent(domain)}/${encodeURIComponent(service)}`,
+			{
+				method: "POST",
+				body
+			}
+		);
 	}
 
 	async function renderTemplate(

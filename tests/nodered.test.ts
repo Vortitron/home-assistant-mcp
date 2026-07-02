@@ -8,6 +8,7 @@ import type { HaRestClient } from "../src/ha/restClient.js";
 import type { HaWsClient } from "../src/ha/wsClient.js";
 import { createEsphomeDashboardClient } from "../src/esphome/dashboardClient.js";
 import { createVomeHomeClient, type VomeHomeClient } from "../src/vomehome/client.js";
+import { createInstanceManager } from "../src/vomehome/instances.js";
 import { registerNodeRedTools } from "../src/tools/nodered.js";
 import type { ToolContext } from "../src/tools/helpers.js";
 
@@ -165,14 +166,16 @@ function buildHarness(
 		NODERED_URL: "http://nr.local:1880",
 		...options.env
 	});
+	const mockRest = {} as unknown as HaRestClient;
 	const ctx: ToolContext = {
 		config,
 		logger,
-		rest: {} as unknown as HaRestClient,
+		rest: mockRest,
 		ws: {} as unknown as HaWsClient,
 		esphome: createEsphomeDashboardClient(config, logger),
 		nodered: (options.nodered ?? createNodeRedClient(config, logger)) as NodeRedClient,
-		vomehome: createVomeHomeClient(config, logger) as VomeHomeClient
+		vomehome: createVomeHomeClient(config, logger) as VomeHomeClient,
+		instances: createInstanceManager(config, logger, mockRest)
 	};
 	const server = new FakeServer();
 	registerNodeRedTools(server as unknown as McpServer, ctx);

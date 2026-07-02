@@ -216,6 +216,27 @@ describe("vomehome_reboot_instance safety", () => {
 		expect(restartInstance).toHaveBeenCalledWith("abc");
 		expect(JSON.parse(textOf(result)).rebooting).toBe(true);
 	});
+
+	it("uses per-instance write access in brokered mode", async () => {
+		const restartInstance = vi.fn(async () => ({ success: true, message: "ok" }));
+		const server = buildHarness({
+			env: {
+				HA_URL: "",
+				HA_TOKEN: "",
+				VOMEHOME_INSTANCES: '[{"id":"writable-1","write":true},{"id":"readonly-1","write":false}]'
+			},
+			vomehome: { restartInstance }
+		});
+
+		const refused = await server.call("vomehome_reboot_instance", { instance_id: "readonly-1" });
+		expect(refused.isError).toBe(true);
+		expect(textOf(refused)).toMatch(/write access/);
+		expect(restartInstance).not.toHaveBeenCalled();
+
+		const allowed = await server.call("vomehome_reboot_instance", { instance_id: "writable-1" });
+		expect(allowed.isError).toBeUndefined();
+		expect(restartInstance).toHaveBeenCalledWith("writable-1");
+	});
 });
 
 describe("vomehome_create_instance safety", () => {

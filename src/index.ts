@@ -53,7 +53,7 @@ async function main(): Promise<void> {
 	const rest = instances.rest;
 	const ws = config.brokered ? createUnavailableWsClient() : createHaWsClient(config, logger);
 	const esphome = config.esphome.brokered
-		? createBrokeredEsphomeDashboardClient(config, logger)
+		? createBrokeredEsphomeDashboardClient(config, logger, () => instances.activeId())
 		: createEsphomeDashboardClient(config, logger);
 	const nodered = createNodeRedClient(config, logger);
 	const vomehome = createVomeHomeClient(config, logger);

@@ -76,7 +76,8 @@ export function registerEsphomeTools(server: McpServer, ctx: ToolContext): void 
 		},
 		async ({ configuration, yaml }) =>
 			runTool(ctx.logger, "esphome_save_config", async () => {
-				const decision = evaluateConfigWrite(ctx.config.safety);
+				// Per-instance config policy (matches the active HA instance).
+				const decision = evaluateConfigWrite(ctx.instances.currentSafety());
 				if (!decision.allowed) {
 					return errorResult(`Refused: ${decision.reason}`);
 				}
@@ -136,8 +137,10 @@ export function registerEsphomeTools(server: McpServer, ctx: ToolContext): void 
 		},
 		async ({ configuration, port, timeout_seconds }) =>
 			runTool(ctx.logger, "esphome_upload", async () => {
-				if (!ctx.config.safety.allowWrite) {
-					return errorResult("Refused: uploading firmware requires HA_ALLOW_WRITE=true.");
+				if (!ctx.instances.currentSafety().allowWrite) {
+					return errorResult(
+						"Refused: uploading firmware requires write access for the active instance."
+					);
 				}
 				return runStream("upload", configuration, {
 					port: port ?? "OTA",

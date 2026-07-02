@@ -126,9 +126,14 @@ export function registerVomeHomeTools(server: McpServer, ctx: ToolContext): void
 		},
 		async ({ instance_id }) =>
 			runTool(ctx.logger, "vomehome_reboot_instance", async () => {
-				if (!ctx.config.safety.allowWrite) {
+				// Rebooting is a state change on THAT instance, so it needs write
+				// access for that specific instance — not just the global switch.
+				if (!ctx.instances.safetyFor(instance_id).allowWrite) {
 					return errorResult(
-						"Refused: rebooting an instance requires HA_ALLOW_WRITE=true (the master write switch)."
+						ctx.instances.brokered
+							? `Refused: rebooting '${instance_id}' requires write access for that instance ` +
+								"(grant ha:write on the API token in the portal, or declare it writable in VOMEHOME_INSTANCES)."
+							: "Refused: rebooting an instance requires HA_ALLOW_WRITE=true (the master write switch)."
 					);
 				}
 				const result = await ctx.vomehome.restartInstance(instance_id);

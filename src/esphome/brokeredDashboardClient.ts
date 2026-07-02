@@ -41,15 +41,26 @@ function brokerErrorDetail(body: string): string {
 
 export function createBrokeredEsphomeDashboardClient(
 	config: Config,
-	logger: Logger
+	logger: Logger,
+	activeInstanceId: () => string
 ): EsphomeDashboardClient {
-	const base = `${config.vomehome.apiUrl}/api/v1/instances/${encodeURIComponent(
-		config.vomehome.instanceId
-	)}/esphome`;
+	// Resolve the base per-request so the ESPHome client follows the active
+	// instance (vomehome_use_instance / vomehome_create_instance) exactly like
+	// the brokered HA client — otherwise a switch would leave ESPHome pinned to
+	// the startup instance and read/write the wrong dashboard.
+	function baseFor(): string {
+		const id = activeInstanceId();
+		if (!id) {
+			throw new EsphomeError(
+				"No active VomeHome instance is selected for ESPHome. Call vomehome_use_instance first."
+			);
+		}
+		return `${config.vomehome.apiUrl}/api/v1/instances/${encodeURIComponent(id)}/esphome`;
+	}
 
 	async function broker<T>(path: string, options: BrokerRequestOptions = {}): Promise<T> {
 		const method = options.method ?? "GET";
-		const url = `${base}${path}`;
+		const url = `${baseFor()}${path}`;
 		const controller = new AbortController();
 		const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
 		logger.debug(`VomeHome ESPHome broker ${method} ${path}`);

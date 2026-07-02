@@ -11,8 +11,8 @@ const BROKER_ENV = {
 	VOMEHOME_INSTANCE_ID: "rly-1"
 };
 
-function client() {
-	return createBrokeredEsphomeDashboardClient(loadConfig(BROKER_ENV), logger);
+function client(activeId: () => string = () => "rly-1") {
+	return createBrokeredEsphomeDashboardClient(loadConfig(BROKER_ENV), logger, activeId);
 }
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -97,5 +97,27 @@ describe("createBrokeredEsphomeDashboardClient", () => {
 		vi.stubGlobal("fetch", fetchMock);
 
 		await expect(client().listDevices()).rejects.toThrow(/offline/);
+	});
+
+	it("follows the active instance when it changes between calls", async () => {
+		const fetchMock = vi.fn(async () => jsonResponse([]));
+		vi.stubGlobal("fetch", fetchMock);
+		let active = "rly-1";
+		const c = client(() => active);
+
+		await c.listDevices();
+		active = "rly-2";
+		await c.listDevices();
+
+		expect(fetchMock.mock.calls[0]![0]).toBe(
+			"https://vome.io/api/v1/instances/rly-1/esphome/devices"
+		);
+		expect(fetchMock.mock.calls[1]![0]).toBe(
+			"https://vome.io/api/v1/instances/rly-2/esphome/devices"
+		);
+	});
+
+	it("refuses with a clear error when no instance is active", async () => {
+		await expect(client(() => "").listDevices()).rejects.toThrow(/vomehome_use_instance/);
 	});
 });

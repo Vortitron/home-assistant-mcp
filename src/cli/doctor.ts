@@ -108,7 +108,7 @@ export async function runDoctor(config: Config, logger: Logger): Promise<number>
 
 	if (config.esphome.enabled) {
 		const esphome = config.esphome.brokered
-			? createBrokeredEsphomeDashboardClient(config, logger)
+			? createBrokeredEsphomeDashboardClient(config, logger, () => config.vomehome.instanceId)
 			: createEsphomeDashboardClient(config, logger);
 		try {
 			await esphome.listDevices();

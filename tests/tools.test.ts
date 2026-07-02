@@ -105,6 +105,59 @@ describe("ha_call_service safety", () => {
 		expect(callService).not.toHaveBeenCalled();
 	});
 
+	it("blocks a denied entity_id nested deep inside data", async () => {
+		const callService = vi.fn();
+		const server = buildHarness({ env: { HA_ALLOW_WRITE: "true" }, rest: { callService } });
+		const result = await server.call("ha_call_service", {
+			domain: "homeassistant",
+			service: "turn_on",
+			data: { options: { extra: { entity_id: ["lock.front"] } } }
+		});
+		expect(result.isError).toBe(true);
+		expect(textOf(result)).toMatch(/lock\.front/);
+		expect(callService).not.toHaveBeenCalled();
+	});
+
+	it("blocks generic services targeting an area while a deny-list is active", async () => {
+		const callService = vi.fn();
+		const server = buildHarness({ env: { HA_ALLOW_WRITE: "true" }, rest: { callService } });
+		const result = await server.call("ha_call_service", {
+			domain: "homeassistant",
+			service: "turn_off",
+			target: { area_id: "bedroom" }
+		});
+		expect(result.isError).toBe(true);
+		expect(textOf(result)).toMatch(/area\/device\/label/);
+		expect(callService).not.toHaveBeenCalled();
+	});
+
+	it("allows a domain-specific service to target an area (domain already vetted)", async () => {
+		const callService = vi.fn(async () => []);
+		const server = buildHarness({ env: { HA_ALLOW_WRITE: "true" }, rest: { callService } });
+		const result = await server.call("ha_call_service", {
+			domain: "light",
+			service: "turn_on",
+			target: { area_id: "bedroom" }
+		});
+		expect(result.isError).toBeUndefined();
+		expect(callService).toHaveBeenCalledOnce();
+	});
+
+	it("allows generic services to target an area when no deny/allow-list is active", async () => {
+		const callService = vi.fn(async () => []);
+		const server = buildHarness({
+			env: { HA_ALLOW_WRITE: "true", HA_DENY_DOMAINS: "" },
+			rest: { callService }
+		});
+		const result = await server.call("ha_call_service", {
+			domain: "homeassistant",
+			service: "turn_off",
+			target: { area_id: "bedroom" }
+		});
+		expect(result.isError).toBeUndefined();
+		expect(callService).toHaveBeenCalledOnce();
+	});
+
 	it("calls the service for an allowed domain when writes are enabled", async () => {
 		const callService = vi.fn(async () => [{ entity_id: "light.k", state: "on", attributes: {} }]);
 		const server = buildHarness({ env: { HA_ALLOW_WRITE: "true" }, rest: { callService } });

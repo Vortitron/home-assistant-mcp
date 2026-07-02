@@ -42,7 +42,11 @@ src/
   hence both a REST and a WS client.
 - **Safety is centralised** in `safety.ts` and unit-tested. Writes are off by
   default; sensitive domains are denied; `ha_call_service` also checks target
-  entity domains to prevent cross-domain bypass.
+  entity domains (recursively through `data`) to prevent cross-domain bypass,
+  and refuses generic services targeting area/device/label while a deny/allow-
+  list is active (those selectors resolve server-side, so they can't be vetted
+  client-side). ESPHome/Node-RED/reboot guards and the brokered ESPHome client
+  follow the *active instance* (per-instance policy), not just global flags.
 - **SDK:** `@modelcontextprotocol/sdk` `registerTool(name, { description,
   inputSchema: <zod raw shape>, annotations }, handler)`; zod v3.
 

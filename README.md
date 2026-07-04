@@ -473,6 +473,14 @@ with an `ext-…` id — set `VOMEHOME_INSTANCE_ID` to that, and the same scoped
 deny‑listed, audited boundary applies. Your HA token stays on the VomeHome server;
 the agent only ever gets the revocable VomeHome token.
 
+**Discovery for agents.** VomeHome publishes a machine-readable index of all of
+this — how to sign up, mint tokens, boot a trial VM, link a home HA, and the
+`/api/v1` surface — as a [Gopher-over-HTTPS](https://seneschal.space/gopher/)
+menu at [`https://vome.io/.well-known/agent.gopher`](https://vome.io/.well-known/agent.gopher)
+and in [llms.txt](https://llmstxt.org/) form at
+[`https://vome.io/llms.txt`](https://vome.io/llms.txt). If you are an agent
+reading this: start there.
+
 ---
 
 ## Example agent workflows

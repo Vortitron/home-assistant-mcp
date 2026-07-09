@@ -53,7 +53,7 @@ export function evaluateConfigWrite(safety: SafetyConfig): WriteDecision {
 		return {
 			allowed: false,
 			reason:
-				"Config editing is disabled. Set HA_ALLOW_CONFIG_WRITE=true to allow editing automations, scripts and scenes."
+				"Config editing is disabled. Set HA_ALLOW_CONFIG_WRITE=true to allow editing automations, scripts, scenes and dashboards."
 		};
 	}
 	return { allowed: true, reason: OK };

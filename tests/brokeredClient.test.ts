@@ -159,6 +159,23 @@ describe("createBrokeredHaRestClient", () => {
 		expect((init as RequestInit).method).toBe("POST");
 	});
 
+	it("POSTs allowlisted WebSocket commands to /ha/ws/command", async () => {
+		const fetchMock = vi.fn(async () => jsonResponse({ result: [{ url_path: "lovelace" }] }));
+		vi.stubGlobal("fetch", fetchMock);
+
+		const dashboards = await client().sendWsCommand<unknown[]>({
+			type: "lovelace/dashboards/list"
+		});
+
+		expect(dashboards).toEqual([{ url_path: "lovelace" }]);
+		const [url, init] = fetchMock.mock.calls[0]!;
+		expect(url).toBe("https://vome.io/api/v1/instances/srv-1/ha/ws/command");
+		expect((init as RequestInit).method).toBe("POST");
+		expect(JSON.parse((init as RequestInit).body as string)).toEqual({
+			type: "lovelace/dashboards/list"
+		});
+	});
+
 	it("throws a helpful error for features the broker does not expose", async () => {
 		await expect(client().getErrorLog()).rejects.toThrow(/not available in VomeHome brokered mode/);
 		await expect(client().getHistory({ entityIds: ["light.k"] })).rejects.toThrow(/brokered mode/);

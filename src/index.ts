@@ -48,10 +48,10 @@ async function main(): Promise<void> {
 
 	// Direct mode gets a single HA client; brokered mode routes per-instance via
 	// the manager. Either way `instances.rest` is the stable client the tools use.
-	const directRest = config.brokered ? undefined : createHaRestClient(config, logger);
+	const ws = config.brokered ? createUnavailableWsClient() : createHaWsClient(config, logger);
+	const directRest = config.brokered ? undefined : createHaRestClient(config, logger, ws);
 	const instances = createInstanceManager(config, logger, directRest);
 	const rest = instances.rest;
-	const ws = config.brokered ? createUnavailableWsClient() : createHaWsClient(config, logger);
 	const esphome = config.esphome.brokered
 		? createBrokeredEsphomeDashboardClient(config, logger, () => instances.activeId())
 		: createEsphomeDashboardClient(config, logger);

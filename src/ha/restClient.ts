@@ -9,6 +9,7 @@ import type {
 	HaState,
 	HaTarget
 } from "./types.js";
+import type { HaWsClient } from "./wsClient.js";
 
 /**
  * Thrown for any non-2xx Home Assistant REST response. Carries the HTTP status
@@ -73,6 +74,8 @@ export interface HaRestClient {
 		config: Record<string, unknown>
 	): Promise<{ result: string }>;
 	deleteAutomationConfig(automationId: string): Promise<{ result: string }>;
+	/** Run one Home Assistant WebSocket command (brokered: allowlisted Lovelace subset). */
+	sendWsCommand<T = unknown>(command: Record<string, unknown>): Promise<T>;
 }
 
 function buildQuery(query: HaRequestOptions["query"]): string {
@@ -93,7 +96,11 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-export function createHaRestClient(config: Config, logger: Logger): HaRestClient {
+export function createHaRestClient(
+	config: Config,
+	logger: Logger,
+	wsClient?: HaWsClient
+): HaRestClient {
 	async function request<T>(path: string, options: HaRequestOptions = {}): Promise<T> {
 		const method = options.method ?? "GET";
 		const url = `${config.haUrl}${path}${buildQuery(options.query)}`;
@@ -230,6 +237,14 @@ export function createHaRestClient(config: Config, logger: Logger): HaRestClient
 			request<{ result: string }>(
 				`/api/config/automation/config/${encodeURIComponent(automationId)}`,
 				{ method: "DELETE" }
-			)
+			),
+		sendWsCommand: (command) => {
+			if (!wsClient) {
+				return Promise.reject(
+					new HaApiError("WebSocket client is not available.", 0, "")
+				);
+			}
+			return wsClient.sendCommand(command);
+		}
 	};
 }

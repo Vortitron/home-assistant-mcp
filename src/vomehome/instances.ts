@@ -186,7 +186,8 @@ export function createInstanceManager(
 		getAutomationConfig: (automationId) => currentRest().getAutomationConfig(automationId),
 		upsertAutomationConfig: (automationId, automationConfig) =>
 			currentRest().upsertAutomationConfig(automationId, automationConfig),
-		deleteAutomationConfig: (automationId) => currentRest().deleteAutomationConfig(automationId)
+		deleteAutomationConfig: (automationId) => currentRest().deleteAutomationConfig(automationId),
+		sendWsCommand: (command) => currentRest().sendWsCommand(command)
 	};
 
 	return {

@@ -70,6 +70,19 @@ policy (see [Safety](#safety)).
 | `ha_delete_automation` | Delete an automation (also needs `HA_ALLOW_CONFIG_WRITE`). |
 | `ha_trigger_automation` | Manually run an automation now. |
 | `ha_reload_automations` | Reload automations without restarting. |
+
+### Lovelace dashboards (direct HA or VomeHome brokered)
+
+| Tool | What it does |
+|------|----------------|
+| `ha_list_dashboards` | List dashboards (`url_path`, title, mode, sidebar). |
+| `ha_get_dashboard` | Read one dashboard's full config (views, cards, …). |
+| `ha_save_dashboard` | Save/replace a dashboard config (needs `HA_ALLOW_CONFIG_WRITE`). |
+| `ha_create_dashboard` | Register a new storage-mode dashboard (needs `HA_ALLOW_CONFIG_WRITE`). |
+| `ha_delete_dashboard` | Delete a dashboard by id (needs `HA_ALLOW_CONFIG_WRITE`). |
+
+> Dashboards use Home Assistant's WebSocket API. In brokered mode VomeHome proxies
+> an allowlisted subset via `POST /api/v1/instances/<id>/ha/ws/command`.
 | `ha_fire_event` | Fire a custom event on the event bus. |
 
 ### ESPHome (`ESPHOME_DASHBOARD_URL`, or brokered to a relay-connected HA)
@@ -451,7 +464,10 @@ token page generates this token-only snippet for you.)
 Brokered mode proxies the everyday loop — list/get entities, list services, call
 services, read config, render templates — **plus automation editing**:
 `ha_get_automation`, `ha_set_automation`, `ha_delete_automation` and
-`ha_check_config`. Reading an automation needs `ha:read`; writing one needs the
+`ha_check_config`. **Lovelace dashboards** are brokered too:
+`ha_list_dashboards`, `ha_get_dashboard`, `ha_save_dashboard`,
+`ha_create_dashboard`, `ha_delete_dashboard` (writes need `ha:config`).
+Reading an automation needs `ha:read`; writing one needs the
 separate **`ha:config`** scope on the token *for that instance*, enforced
 server-side. The client write guards (`HA_ALLOW_WRITE` / `HA_ALLOW_CONFIG_WRITE`)
 default permissive in brokered mode and are optional local restrictions on top.

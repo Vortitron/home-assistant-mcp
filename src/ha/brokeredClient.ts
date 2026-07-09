@@ -37,7 +37,7 @@ function unsupportedError(feature: string): HaApiError {
 	return new HaApiError(
 		`'${feature}' is not available in VomeHome brokered mode. The broker exposes ` +
 			`list/get entities, services, call_service, config, templates, automation ` +
-			`config and check_config. For the full tool surface (registry, logs, history, ` +
+			`config, Lovelace dashboard commands and check_config. For the full tool surface (registry, logs, history, ` +
 			`ESPHome), run with a direct HA_URL + HA_TOKEN instead.`,
 		0,
 		""
@@ -159,7 +159,18 @@ export function createBrokeredHaRestClient(
 			});
 		},
 		deleteAutomationConfig: (automationId) =>
-			broker<{ result: string }>(automationConfigPath(automationId), { method: "DELETE" })
+			broker<{ result: string }>(automationConfigPath(automationId), { method: "DELETE" }),
+		sendWsCommand: <T = unknown>(command: Record<string, unknown>) => {
+			if (!isPlainObject(command) || typeof command.type !== "string") {
+				return Promise.reject(
+					new HaApiError("WebSocket command must be an object with a type field.", 0, "")
+				);
+			}
+			return broker<{ result: T }>("/ws/command", {
+				method: "POST",
+				body: command
+			}).then((envelope) => envelope.result);
+		}
 	};
 }
 

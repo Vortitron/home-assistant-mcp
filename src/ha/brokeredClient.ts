@@ -1,12 +1,16 @@
 import type { Config } from "../config.js";
 import type { Logger } from "../logger.js";
 import { HaApiError } from "./restClient.js";
-import type { HaRestClient } from "./restClient.js";
+import type { HaRestClient, HistoryParams, LogbookParams } from "./restClient.js";
 import type { HaWsClient } from "./wsClient.js";
 import type {
 	HaApiStatus,
+	HaArea,
 	HaCheckConfigResult,
 	HaConfig,
+	HaDevice,
+	HaEntityRegistryEntry,
+	HaLogbookEntry,
 	HaServiceDomain,
 	HaState,
 	HaTarget
@@ -22,7 +26,8 @@ import type {
  * enforces the read-only / deny-domain / audit policy there, so it cannot be
  * bypassed. This client therefore exposes the subset of the HA surface the
  * broker proxies — states, services, config, templates, automation config
- * (read with `ha:read`, write with `ha:config`) and check_config; everything
+ * (read with `ha:read`, write with `ha:config`), Lovelace dashboards,
+ * registries (WebSocket), logs/history, events and check_config; everything
  * else throws a clear "not available in brokered mode" error rather than
  * failing obscurely.
  */
@@ -37,8 +42,8 @@ function unsupportedError(feature: string): HaApiError {
 	return new HaApiError(
 		`'${feature}' is not available in VomeHome brokered mode. The broker exposes ` +
 			`list/get entities, services, call_service, config, templates, automation ` +
-			`config, Lovelace dashboard commands and check_config. For the full tool surface (registry, logs, history, ` +
-			`ESPHome), run with a direct HA_URL + HA_TOKEN instead.`,
+			`config, Lovelace dashboard commands, registries, logs, history, events ` +
+			`and check_config. For ESPHome, run with a direct HA_URL + HA_TOKEN instead.`,
 		0,
 		""
 	);
@@ -58,6 +63,13 @@ function automationConfigPath(automationId: string): string {
  * get a normal rejection. */
 function rejectUnsupported<T>(feature: string): Promise<T> {
 	return Promise.reject(unsupportedError(feature));
+}
+
+function buildQuery(params: Record<string, string | undefined>): string {
+	const parts = Object.entries(params)
+		.filter(([, value]) => value !== undefined && value !== "")
+		.map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value as string)}`);
+	return parts.length > 0 ? `?${parts.join("&")}` : "";
 }
 
 export function createBrokeredHaRestClient(
@@ -143,10 +155,34 @@ export function createBrokeredHaRestClient(
 		callService,
 		renderTemplate,
 		checkConfig: () => broker<HaCheckConfigResult>("/check_config", { method: "POST" }),
-		getErrorLog: () => rejectUnsupported("get_error_log"),
-		getLogbook: () => rejectUnsupported("get_logbook"),
-		getHistory: () => rejectUnsupported("get_history"),
-		fireEvent: () => rejectUnsupported("fire_event"),
+		getErrorLog: () => broker<string>("/error_log", { expect: "text" }),
+		getLogbook: (params: LogbookParams) => {
+			const base = params.startTime
+				? `/logbook/${encodeURIComponent(params.startTime)}`
+				: "/logbook";
+			const query = buildQuery({
+				end_time: params.endTime,
+				entity: params.entityId
+			});
+			return broker<HaLogbookEntry[]>(`${base}${query}`);
+		},
+		getHistory: (params: HistoryParams) => {
+			const base = params.startTime
+				? `/history/period/${encodeURIComponent(params.startTime)}`
+				: "/history/period";
+			const query = buildQuery({
+				filter_entity_id: params.entityIds.join(","),
+				end_time: params.endTime,
+				minimal_response: params.minimalResponse ? "true" : undefined,
+				significant_changes_only: params.significantChangesOnly ? "true" : undefined
+			});
+			return broker<HaState[][]>(`${base}${query}`);
+		},
+		fireEvent: (eventType: string, data?: Record<string, unknown>) =>
+			broker<{ message: string }>(`/events/${encodeURIComponent(eventType)}`, {
+				method: "POST",
+				body: data ?? {}
+			}),
 		getAutomationConfig: (automationId) =>
 			broker<Record<string, unknown>>(automationConfigPath(automationId)),
 		upsertAutomationConfig: (automationId, automationConfig) => {
@@ -188,11 +224,21 @@ function brokerErrorMessage(method: string, path: string, status: number, body: 
 }
 
 /**
- * Stand-in WebSocket client for brokered mode. The portal broker does not
- * expose the area/device/entity registries, so these calls throw a clear
- * message instead of silently failing. (Use `ha_list_entities`, which works
- * over REST, to discover entities in brokered mode.)
+ * WebSocket stand-in for brokered mode — registry and Lovelace commands route
+ * through the portal's ``/ha/ws/command`` endpoint via the REST client.
  */
+export function createBrokeredWsClient(getRest: () => HaRestClient): HaWsClient {
+	const send = <T = unknown>(command: Record<string, unknown>) => getRest().sendWsCommand<T>(command);
+	return {
+		sendCommand: send,
+		listAreas: () => send<HaArea[]>({ type: "config/area_registry/list" }),
+		listDevices: () => send<HaDevice[]>({ type: "config/device_registry/list" }),
+		listEntities: () => send<HaEntityRegistryEntry[]>({ type: "config/entity_registry/list" }),
+		close: () => Promise.resolve()
+	};
+}
+
+/** @deprecated Use {@link createBrokeredWsClient} — registries are brokered now. */
 export function createUnavailableWsClient(): HaWsClient {
 	return {
 		sendCommand: () => rejectUnsupported("websocket commands"),

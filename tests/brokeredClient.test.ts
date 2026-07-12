@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadConfig } from "../src/config.js";
 import { createLogger } from "../src/logger.js";
-import { createBrokeredHaRestClient, createUnavailableWsClient } from "../src/ha/brokeredClient.js";
+import { createBrokeredHaRestClient, createBrokeredWsClient, createUnavailableWsClient } from "../src/ha/brokeredClient.js";
 
 const logger = createLogger("error");
 
@@ -176,10 +176,42 @@ describe("createBrokeredHaRestClient", () => {
 		});
 	});
 
-	it("throws a helpful error for features the broker does not expose", async () => {
-		await expect(client().getErrorLog()).rejects.toThrow(/not available in VomeHome brokered mode/);
-		await expect(client().getHistory({ entityIds: ["light.k"] })).rejects.toThrow(/brokered mode/);
+	it("GETs error log through the broker", async () => {
+		const fetchMock = vi.fn(async () => new Response("ERROR: test", { status: 200 }));
+		vi.stubGlobal("fetch", fetchMock);
+
+		const log = await client().getErrorLog();
+
+		expect(log).toBe("ERROR: test");
+		const [url] = fetchMock.mock.calls[0]!;
+		expect(url).toBe("https://vome.io/api/v1/instances/srv-1/ha/error_log");
+	});
+
+	it("GETs history with entity filter query params", async () => {
+		const fetchMock = vi.fn(async () => jsonResponse([[]]));
+		vi.stubGlobal("fetch", fetchMock);
+
+		await client().getHistory({ entityIds: ["light.kitchen", "sensor.temp"] });
+
+		const [url] = fetchMock.mock.calls[0]!;
+		expect(url).toContain("/ha/history/period");
+		expect(url).toContain("filter_entity_id=light.kitchen%2Csensor.temp");
+	});
+
+	it("throws a helpful error for raw request()", async () => {
 		await expect(client().request("/api/states")).rejects.toThrow(/brokered mode/);
+	});
+});
+
+describe("createBrokeredWsClient", () => {
+	it("lists areas via sendWsCommand on the REST client", async () => {
+		const rest = {
+			sendWsCommand: vi.fn(async () => [{ area_id: "kitchen", name: "Kitchen" }])
+		} as unknown as ReturnType<typeof client>;
+		const ws = createBrokeredWsClient(() => rest);
+		const areas = await ws.listAreas();
+		expect(areas).toHaveLength(1);
+		expect(rest.sendWsCommand).toHaveBeenCalledWith({ type: "config/area_registry/list" });
 	});
 });
 

@@ -131,6 +131,17 @@ stays behind a full browser login on the portal.
 | `vomehome_create_instance` | Create a throwaway test/sandbox instance (needs the create scope on your API key; the new instance becomes the active target). |
 | `vomehome_get_login_url` | Mint a one-click HA login URL to open in a new tab. |
 
+### Supervisor / Vome add-on (HAOS / Supervised)
+
+| Tool | Description |
+| --- | --- |
+| `ha_supervisor_api` | Call a Supervisor endpoint via `supervisor/api` (store, add-ons, …). |
+| `ha_addon_install_vome` | Add `https://github.com/Vortitron/VomeSync` to the store, install **Vome**, and start it. |
+
+Needs a Supervised/HAOS target (e.g. a VomeHome VM from `vomehome_create_instance`) and `HA_ALLOW_WRITE=true`. Container-only HA has no add-on store — use HACS for the integration there.
+
+Typical developer flow: `vomehome_create_instance` → wait until running → `ha_addon_install_vome` → restart Core → add the Vome integration.
+
 ---
 
 ## Install

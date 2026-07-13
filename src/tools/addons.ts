@@ -185,6 +185,38 @@ export function registerAddonTools(server: McpServer, ctx: ToolContext): void {
 					const message = error instanceof Error ? error.message : String(error);
 					if (/already installed/i.test(message)) {
 						steps.push({ step: "install", ok: true, slug, note: "already installed" });
+					} else if (/no host internet|internet_host/i.test(message)) {
+						// Supervisor job gate: host_internet false even when git clone worked.
+						try {
+							await supervisorApi(ctx, "/jobs/options", "post", {
+								ignore_conditions: ["internet_host"]
+							});
+							steps.push({
+								step: "ignore_internet_host",
+								ok: true,
+								note: "Supervisor reported no host internet; temporarily ignoring internet_host"
+							});
+							const installed = await supervisorApi(
+								ctx,
+								`/store/addons/${slug}/install`,
+								"post"
+							);
+							steps.push({ step: "install", ok: true, slug, result: unwrap(installed) });
+						} catch (retryError) {
+							const retryMessage =
+								retryError instanceof Error ? retryError.message : String(retryError);
+							steps.push({ step: "install", ok: false, slug, error: retryMessage });
+							return jsonResult({
+								ok: false,
+								slug,
+								steps,
+								error: retryMessage,
+								hint:
+									"Supervisor blocked install (no host internet). On the HA host run: " +
+									"ha jobs options --ignore-conditions internet_host  then retry install, " +
+									"or fix DNS/connectivity so Supervisor's host_internet check passes."
+							});
+						}
 					} else {
 						steps.push({ step: "install", ok: false, slug, error: message });
 						return jsonResult({ ok: false, slug, steps, error: message });

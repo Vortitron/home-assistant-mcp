@@ -48,12 +48,22 @@ async function main(): Promise<void> {
 
 	// Direct mode gets a single HA client; brokered mode routes per-instance via
 	// the manager. Either way `instances.rest` is the stable client the tools use.
-	let instances!: ReturnType<typeof createInstanceManager>;
+	// A small ref breaks the circular init (ws callbacks need the manager before
+	// it exists) without a reassigned `let` that prefer-const rejects.
+	const instancesRef: {
+		current: ReturnType<typeof createInstanceManager> | null;
+	} = { current: null };
 	const ws = config.brokered
-		? createBrokeredWsClient(() => instances.currentRest())
+		? createBrokeredWsClient(() => {
+				if (!instancesRef.current) {
+					throw new Error("VomeHome instance manager is not initialised yet.");
+				}
+				return instancesRef.current.currentRest();
+			})
 		: createHaWsClient(config, logger);
 	const directRest = config.brokered ? undefined : createHaRestClient(config, logger, ws);
-	instances = createInstanceManager(config, logger, directRest);
+	const instances = createInstanceManager(config, logger, directRest);
+	instancesRef.current = instances;
 	const rest = instances.rest;
 	const esphome = config.esphome.brokered
 		? createBrokeredEsphomeDashboardClient(config, logger, () => instances.activeId())

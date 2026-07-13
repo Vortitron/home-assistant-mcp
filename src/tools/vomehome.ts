@@ -6,8 +6,8 @@ import { errorResult, jsonResult, runTool, type ToolContext } from "./helpers.js
 /**
  * Tools for the VomeHome portal: list a user's managed Home Assistant
  * instances, check their status, reboot them, create a throwaway test instance
- * and mint a one-click HA login URL. Reads are always allowed; reboot needs the
- * master write switch and create additionally needs VOMEHOME_ALLOW_CREATE.
+ * and mint a one-click HA login URL. Reads are always allowed; mutating actions
+ * defer to the API key's scopes in brokered mode (optional local env guards only).
  */
 
 /** Drops undefined values so tool output stays compact and snake_cased. */
@@ -118,7 +118,7 @@ export function registerVomeHomeTools(server: McpServer, ctx: ToolContext): void
 		{
 			title: "Reboot VomeHome instance",
 			description:
-				"Reboot a VomeHome Home Assistant instance (reboots the underlying VM). Requires HA_ALLOW_WRITE=true (the master write switch).",
+				"Reboot a VomeHome Home Assistant instance (reboots the underlying VM). In brokered mode the API key's ha:write (or instances:write) scope is authoritative; an optional local VOMEHOME_INSTANCES write:false only adds a client-side block.",
 			inputSchema: {
 				instance_id: z.string().describe("VomeHome instance id (UUID) to reboot.")
 			},
@@ -131,9 +131,10 @@ export function registerVomeHomeTools(server: McpServer, ctx: ToolContext): void
 				if (!ctx.instances.safetyFor(instance_id).allowWrite) {
 					return errorResult(
 						ctx.instances.brokered
-							? `Refused: rebooting '${instance_id}' requires write access for that instance ` +
-								"(grant ha:write on the API token in the portal, or declare it writable in VOMEHOME_INSTANCES)."
-							: "Refused: rebooting an instance requires HA_ALLOW_WRITE=true (the master write switch)."
+							? `Refused: rebooting '${instance_id}' is blocked locally ` +
+								"(this instance is marked write:false in VOMEHOME_INSTANCES). " +
+								"Otherwise the API key's scopes decide — check the portal."
+							: "Refused: rebooting an instance requires HA_ALLOW_WRITE=true (direct-mode master write switch)."
 					);
 				}
 				const result = await ctx.vomehome.restartInstance(instance_id);
@@ -150,7 +151,7 @@ export function registerVomeHomeTools(server: McpServer, ctx: ToolContext): void
 		{
 			title: "Create VomeHome instance",
 			description:
-				"Create a new Home Assistant instance on VomeHome — useful for spinning up a throwaway test/sandbox install. This is a heavyweight action: it requires both HA_ALLOW_WRITE=true and VOMEHOME_ALLOW_CREATE=true (account-wide), and may be subject to your account's instance limit and billing. The new instance is granted full write + config access automatically and becomes the active target.",
+				"Create a new Home Assistant instance on VomeHome — useful for spinning up a throwaway test/sandbox install. In brokered mode the API key's create scope is authoritative (no local env flags required). Optionally set VOMEHOME_ALLOW_CREATE=false to block creation locally. The new instance is granted full write + config access for this session and becomes the active target.",
 			inputSchema: {
 				name: z.string().min(1).describe("Human-friendly name for the new instance."),
 				timezone: z
@@ -162,14 +163,16 @@ export function registerVomeHomeTools(server: McpServer, ctx: ToolContext): void
 		},
 		async ({ name, timezone }) =>
 			runTool(ctx.logger, "vomehome_create_instance", async () => {
-				if (!ctx.config.safety.allowWrite) {
-					return errorResult(
-						"Refused: creating an instance requires HA_ALLOW_WRITE=true (the master write switch)."
-					);
-				}
+				// Account-wide create: only honour an explicit local opt-out.
+				// In brokered mode the default is permissive; the portal enforces
+				// the key's create scope. Do not also require HA_ALLOW_WRITE.
 				if (!ctx.config.vomehome.allowCreate) {
 					return errorResult(
-						"Refused: creating an instance also requires VOMEHOME_ALLOW_CREATE=true (an extra guard for this heavyweight action)."
+						ctx.config.brokered
+							? "Refused: creating instances is disabled locally (VOMEHOME_ALLOW_CREATE=false). " +
+								"Remove that env var to defer to your API key's create scope."
+							: "Refused: creating an instance requires VOMEHOME_ALLOW_CREATE=true in direct mode, " +
+								"or use brokered VomeHome auth (token + instance id, no HA_TOKEN) where the key decides."
 					);
 				}
 				const instance = await ctx.vomehome.createInstance({ name, timezone });
@@ -179,7 +182,7 @@ export function registerVomeHomeTools(server: McpServer, ctx: ToolContext): void
 					instance: serialiseInstance(instance),
 					active_instance: ctx.instances.activeId(),
 					client_access: { write: access.write, config: access.config },
-					note: "You created this instance, so it now has full write + config access and is the active target — HA tools operate on it until you switch (vomehome_use_instance). To keep this access across MCP restarts, add the id to VOMEHOME_INSTANCES."
+					note: "You created this instance, so it now has full write + config access and is the active target — HA tools operate on it until you switch (vomehome_use_instance). To keep this access across MCP restarts, add the id to VOMEHOME_INSTANCES (or a dedicated mcp.json server entry)."
 				});
 			})
 	);

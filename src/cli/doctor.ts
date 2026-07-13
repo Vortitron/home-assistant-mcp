@@ -37,7 +37,7 @@ export async function runDoctor(config: Config, logger: Logger): Promise<number>
 				line(`  - ${inst.id}${label}: write=${inst.write ? "yes" : "no"}, config=${inst.config ? "yes" : "no"}${active}`);
 			}
 		}
-		line(`Create instances:  ${config.vomehome.allowCreate ? "ENABLED (created instances get full access)" : "disabled (VOMEHOME_ALLOW_CREATE)"}`);
+		line(`Create instances:  ${config.vomehome.allowCreate ? "ENABLED (API key / local default)" : "disabled locally (VOMEHOME_ALLOW_CREATE=false)"}`);
 	}
 	line(`HA_URL:            ${config.haUrl || "(not set)"}`);
 	line(`HA_TOKEN:          ${config.haToken ? `set (${config.haToken.length} chars)` : "(not set)"}`);

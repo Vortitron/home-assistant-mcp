@@ -138,7 +138,7 @@ stays behind a full browser login on the portal.
 | `ha_supervisor_api` | Call a Supervisor endpoint via `supervisor/api` (store, add-ons, …). |
 | `ha_addon_install_vome` | Add `https://github.com/Vortitron/VomeSync` to the store, install **Vome**, and start it. |
 
-Needs a Supervised/HAOS target (e.g. a VomeHome VM from `vomehome_create_instance`) and `HA_ALLOW_WRITE=true`. Container-only HA has no add-on store — use HACS for the integration there.
+Needs a Supervised/HAOS target (e.g. a VomeHome sandbox from `vomehome_create_instance`, or the `ha-plc-sandbox` MCP entry). In brokered mode the API key's scopes decide — no `HA_ALLOW_WRITE` / `VOMEHOME_ALLOW_CREATE` env flags required. Container-only HA has no add-on store — use HACS for the integration there.
 
 Typical developer flow: `vomehome_create_instance` → wait until running → `ha_addon_install_vome` → restart Core → add the Vome integration.
 
@@ -468,7 +468,8 @@ token page generates this token-only snippet for you.)
 > scopes (`ha:read` / `ha:write` / `ha:config`) can broker Home Assistant calls
 > but will get `403 … missing required scope(s): instances:read` from the
 > instance tools. If you want the agent to spin up sandboxes, mint the token with
-> `instances:write` **and** the `ha:*` scopes, and set `VOMEHOME_ALLOW_CREATE=true`.
+> `instances:write` **and** the `ha:*` scopes — no local `VOMEHOME_ALLOW_CREATE`
+> env flag is required in brokered mode (set `false` only if you want a local block).
 > A default (read-only) token already includes `instances:read` — the 403 only
 > appears when a token was scoped to HA access *without* the instances scopes.
 

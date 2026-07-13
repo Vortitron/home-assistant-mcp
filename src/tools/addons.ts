@@ -85,8 +85,14 @@ export function registerAddonTools(server: McpServer, ctx: ToolContext): void {
 		},
 		async ({ endpoint, method, data }) =>
 			runTool(ctx.logger, "ha_supervisor_api", async () => {
-				if (!ctx.config.safety.allowWrite && method !== "get") {
-					return errorResult("Writes disabled (set HA_ALLOW_WRITE=true).");
+				const safety = ctx.instances.currentSafety();
+				if (!safety.allowWrite && method !== "get") {
+					return errorResult(
+						ctx.instances.brokered
+							? "Refused: Supervisor writes are blocked locally for this instance " +
+								"(write:false in VOMEHOME_INSTANCES). Otherwise the API key decides."
+							: "Writes disabled (set HA_ALLOW_WRITE=true in direct mode)."
+					);
 				}
 				const result = await supervisorApi(ctx, endpoint, method, data);
 				return jsonResult({ endpoint, method, result: unwrap(result) });
@@ -98,7 +104,7 @@ export function registerAddonTools(server: McpServer, ctx: ToolContext): void {
 		{
 			title: "Install the Vome add-on",
 			description:
-				"Developer helper: add the VomeSync GitHub add-on repository to the Supervisor store (if missing), install the Vome add-on, and start it. Requires HAOS/Supervised, HA_ALLOW_WRITE=true, and ha:config on brokered instances. After install, restart Home Assistant once so custom_components/vomesync is loaded, then add the Vome integration.",
+				"Developer helper: add the VomeSync GitHub add-on repository to the Supervisor store (if missing), install the Vome add-on, and start it. Requires HAOS/Supervised. In brokered mode the API key's ha:config scope is authoritative — no HA_ALLOW_WRITE env flag needed. After install, restart Home Assistant once so custom_components/vomesync is loaded, then add the Vome integration.",
 			inputSchema: {
 				repository_url: z
 					.string()
@@ -113,8 +119,14 @@ export function registerAddonTools(server: McpServer, ctx: ToolContext): void {
 		},
 		async ({ repository_url, skip_start }) =>
 			runTool(ctx.logger, "ha_addon_install_vome", async () => {
-				if (!ctx.config.safety.allowWrite) {
-					return errorResult("Writes disabled (set HA_ALLOW_WRITE=true).");
+				const safety = ctx.instances.currentSafety();
+				if (!safety.allowWrite || !safety.allowConfigWrite) {
+					return errorResult(
+						ctx.instances.brokered
+							? "Refused: installing add-ons is blocked locally for this instance " +
+								"(write/config false in VOMEHOME_INSTANCES). Otherwise the API key decides."
+							: "Refused: installing add-ons needs HA_ALLOW_WRITE and HA_ALLOW_CONFIG_WRITE in direct mode."
+					);
 				}
 				const steps: Array<Record<string, unknown>> = [];
 				const repoUrl = repository_url || DEFAULT_VOME_REPO;

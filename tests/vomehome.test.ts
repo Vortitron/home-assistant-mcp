@@ -230,7 +230,7 @@ describe("vomehome_reboot_instance safety", () => {
 
 		const refused = await server.call("vomehome_reboot_instance", { instance_id: "readonly-1" });
 		expect(refused.isError).toBe(true);
-		expect(textOf(refused)).toMatch(/write access/);
+		expect(textOf(refused)).toMatch(/write:false|blocked locally/);
 		expect(restartInstance).not.toHaveBeenCalled();
 
 		const allowed = await server.call("vomehome_reboot_instance", { instance_id: "writable-1" });
@@ -240,28 +240,54 @@ describe("vomehome_reboot_instance safety", () => {
 });
 
 describe("vomehome_create_instance safety", () => {
-	it("refuses when the master write switch is off", async () => {
+	it("refuses in direct mode when VOMEHOME_ALLOW_CREATE is unset", async () => {
 		const createInstance = vi.fn();
 		const server = buildHarness({ vomehome: { createInstance } });
-		const result = await server.call("vomehome_create_instance", { name: "Sandbox" });
-		expect(result.isError).toBe(true);
-		expect(textOf(result)).toMatch(/HA_ALLOW_WRITE/);
-		expect(createInstance).not.toHaveBeenCalled();
-	});
-
-	it("refuses when writes are on but VOMEHOME_ALLOW_CREATE is off", async () => {
-		const createInstance = vi.fn();
-		const server = buildHarness({ env: { HA_ALLOW_WRITE: "true" }, vomehome: { createInstance } });
 		const result = await server.call("vomehome_create_instance", { name: "Sandbox" });
 		expect(result.isError).toBe(true);
 		expect(textOf(result)).toMatch(/VOMEHOME_ALLOW_CREATE/);
 		expect(createInstance).not.toHaveBeenCalled();
 	});
 
-	it("creates when both switches are on", async () => {
+	it("refuses when VOMEHOME_ALLOW_CREATE is explicitly false", async () => {
+		const createInstance = vi.fn();
+		const server = buildHarness({
+			env: {
+				HA_TOKEN: "",
+				VOMEHOME_API_URL: "https://vome.io",
+				VOMEHOME_TOKEN: "pat",
+				VOMEHOME_INSTANCE_ID: "rly-1",
+				VOMEHOME_ALLOW_CREATE: "false"
+			},
+			vomehome: { createInstance }
+		});
+		const result = await server.call("vomehome_create_instance", { name: "Sandbox" });
+		expect(result.isError).toBe(true);
+		expect(textOf(result)).toMatch(/VOMEHOME_ALLOW_CREATE=false/);
+		expect(createInstance).not.toHaveBeenCalled();
+	});
+
+	it("creates in brokered mode without local create/write env flags (API key decides)", async () => {
 		const createInstance = vi.fn(async () => ({ id: "new", name: "Sandbox", status: "creating" }));
 		const server = buildHarness({
-			env: { HA_ALLOW_WRITE: "true", VOMEHOME_ALLOW_CREATE: "true" },
+			env: {
+				HA_TOKEN: "",
+				VOMEHOME_API_URL: "https://vome.io",
+				VOMEHOME_TOKEN: "pat",
+				VOMEHOME_INSTANCE_ID: "rly-1"
+			},
+			vomehome: { createInstance }
+		});
+		const result = await server.call("vomehome_create_instance", { name: "Sandbox" });
+		expect(result.isError).toBeUndefined();
+		expect(createInstance).toHaveBeenCalledWith({ name: "Sandbox", timezone: undefined });
+		expect(JSON.parse(textOf(result)).created).toBe(true);
+	});
+
+	it("creates in direct mode when VOMEHOME_ALLOW_CREATE is on", async () => {
+		const createInstance = vi.fn(async () => ({ id: "new", name: "Sandbox", status: "creating" }));
+		const server = buildHarness({
+			env: { VOMEHOME_ALLOW_CREATE: "true" },
 			vomehome: { createInstance }
 		});
 		const result = await server.call("vomehome_create_instance", { name: "Sandbox" });

@@ -106,12 +106,12 @@ export interface VomeHomeConfig {
 	instances: InstanceAccess[];
 	/** Set when VOMEHOME_INSTANCES was provided but could not be parsed. */
 	instancesError?: string;
-	/**
-	 * Extra guard for the heavyweight "create instance" action. This is
-	 * account-wide. Instances created with it enabled are granted full
-	 * (write + config) access automatically — you own what you create.
-	 */
-	allowCreate: boolean;
+			/**
+			 * Optional local guard for creating instances. In brokered mode this
+			 * defaults permissive — the API key's create scope is the real authority.
+			 * Set VOMEHOME_ALLOW_CREATE=false to block creation locally regardless.
+			 */
+			allowCreate: boolean;
 	/** True when both an API URL and a token are configured. */
 	enabled: boolean;
 }
@@ -375,7 +375,9 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
 			instanceId: activeInstanceId,
 			instances,
 			instancesError,
-			allowCreate: parseBoolean(env.VOMEHOME_ALLOW_CREATE, false),
+			// Same rule as writes: in brokered mode defer to the API key (default
+			// permissive); an explicit VOMEHOME_ALLOW_CREATE=false is a local block.
+			allowCreate: parseBoolean(env.VOMEHOME_ALLOW_CREATE, brokered),
 			enabled: vomehomeToken.length > 0 && vomehomeUrl.length > 0
 		}
 	};

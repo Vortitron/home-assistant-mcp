@@ -12,6 +12,7 @@ import { registerEsphomeTools } from "./esphome.js";
 import { registerNodeRedTools } from "./nodered.js";
 import { registerVomeHomeTools } from "./vomehome.js";
 import { registerAddonTools } from "./addons.js";
+import { registerIntegrationTools } from "./integrations.js";
 
 /** Registers every tool group on the given server. */
 export function registerAllTools(server: McpServer, ctx: ToolContext): void {
@@ -27,4 +28,5 @@ export function registerAllTools(server: McpServer, ctx: ToolContext): void {
 	registerNodeRedTools(server, ctx);
 	registerVomeHomeTools(server, ctx);
 	registerAddonTools(server, ctx);
+	registerIntegrationTools(server, ctx);
 }

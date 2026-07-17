@@ -189,6 +189,20 @@ git clone https://github.com/Vortitron/home-assistant-mcp.git
 cd home-assistant-mcp && npm install && npm run build
 ```
 
+### LAN TCP tunnels (RDP, etc.)
+
+```bash
+npx -y @vortitron/home-assistant-mcp tunnel --token <jwt> --local-port 3390
+```
+
+Opens a local listener on `127.0.0.1:<local-port>` and forwards it, over the
+same outbound relay Vome already uses (no port-forwarding on your router), to
+a `tcp`-scheme LAN route on a Vome-linked Home Assistant — e.g. an RDP host.
+Point `mstsc`/Remmina/any TCP client at that local address. Get a token from
+Home Assistant: **Developer Tools → Actions → `vomesync.mint_lan_tcp_token`**
+(or the Vome App's ingress panel → LAN tunnels → "Get tunnel token"). Tokens
+are short-lived and scoped to one instance + one route.
+
 ---
 
 ## Configuration
@@ -572,7 +586,7 @@ Layout:
 
 ```
 src/
-	index.ts              # entry: MCP stdio server + `doctor` CLI
+	index.ts              # entry: MCP stdio server + `doctor`/`tunnel` CLI
 	config.ts             # env parsing + validation
 	safety.ts             # write-guard policy
 	logger.ts             # stderr logger
@@ -582,6 +596,7 @@ src/
 	vomehome/             # VomeHome portal client
 	tools/                # one module per tool group
 	cli/doctor.ts         # connectivity check
+	cli/tunnel.ts         # raw-TCP LAN tunnel client (RDP, etc.)
 tests/                  # vitest unit tests
 ```
 

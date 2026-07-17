@@ -16,6 +16,7 @@ import { createInstanceManager } from "./vomehome/instances.js";
 import { registerAllTools } from "./tools/index.js";
 import type { ToolContext } from "./tools/helpers.js";
 import { runDoctor } from "./cli/doctor.js";
+import { runTunnel } from "./cli/tunnel.js";
 
 const SERVER_NAME = "home-assistant-mcp";
 // Single source of truth for the version: package.json (works from both
@@ -32,6 +33,11 @@ async function main(): Promise<void> {
 
 	if (command === "doctor") {
 		const exitCode = await runDoctor(config, logger);
+		process.exit(exitCode);
+	}
+
+	if (command === "tunnel") {
+		const exitCode = await runTunnel(process.argv.slice(3), logger);
 		process.exit(exitCode);
 	}
 

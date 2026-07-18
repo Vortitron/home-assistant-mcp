@@ -43,6 +43,70 @@ function printUsage(): void {
 }
 
 /**
+ * Bridge one accepted local TCP connection to `<wsUrl>` (presenting `token` as
+ * a bearer header) and pump bytes both ways until either side closes.
+ *
+ * Exported for tests. The pre-open buffer is load-bearing: a TCP client
+ * (mstsc, curl, …) usually writes its first bytes the instant it connects —
+ * before this outbound WebSocket has finished its handshake — so anything that
+ * arrives while CONNECTING must be held and flushed on open, or those opening
+ * bytes are lost and the peer just hangs.
+ */
+export function bridgeConnection(
+	socket: net.Socket,
+	wsUrl: string,
+	token: string,
+	logger: Logger,
+): WebSocket {
+	const ws = new WebSocket(wsUrl, { headers: { Authorization: `Bearer ${token}` } });
+	let opened = false;
+	const preOpen: Buffer[] = [];
+
+	ws.on("open", () => {
+		opened = true;
+		for (const chunk of preOpen) {
+			ws.send(chunk);
+		}
+		preOpen.length = 0;
+	});
+	ws.on("message", (data, isBinary) => {
+		if (isBinary && Buffer.isBuffer(data)) {
+			socket.write(data);
+		}
+	});
+	ws.on("close", (code, reason) => {
+		if (!opened) {
+			logger.error(`Tunnel rejected (code ${code}): ${reason.toString() || "no reason given"}`);
+		}
+		socket.destroy();
+	});
+	ws.on("error", (err) => {
+		logger.error(`Tunnel WebSocket error: ${err.message}`);
+		socket.destroy();
+	});
+
+	socket.on("data", (chunk) => {
+		if (ws.readyState === WebSocket.OPEN) {
+			ws.send(chunk);
+		} else if (ws.readyState === WebSocket.CONNECTING) {
+			preOpen.push(chunk);
+		}
+	});
+	socket.on("close", () => {
+		if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+			ws.close();
+		}
+	});
+	socket.on("error", (err) => {
+		logger.debug(`Local connection error: ${err.message}`);
+		if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+			ws.close();
+		}
+	});
+	return ws;
+}
+
+/**
  * `home-assistant-mcp tunnel` — a generic raw-TCP-over-WebSocket tunnel client.
  *
  * Opens a local listener on 127.0.0.1 only (this exists to replace opening a
@@ -62,46 +126,7 @@ export async function runTunnel(argv: string[], logger: Logger): Promise<number>
 	}
 	const wsUrl = `${relay.replace(/\/+$/, "")}/ws/tcp`;
 
-	const server = net.createServer((socket) => {
-		const ws = new WebSocket(wsUrl, { headers: { Authorization: `Bearer ${token}` } });
-		let opened = false;
-
-		ws.on("open", () => {
-			opened = true;
-		});
-		ws.on("message", (data, isBinary) => {
-			if (isBinary && Buffer.isBuffer(data)) {
-				socket.write(data);
-			}
-		});
-		ws.on("close", (code, reason) => {
-			if (!opened) {
-				logger.error(`Tunnel rejected (code ${code}): ${reason.toString() || "no reason given"}`);
-			}
-			socket.destroy();
-		});
-		ws.on("error", (err) => {
-			logger.error(`Tunnel WebSocket error: ${err.message}`);
-			socket.destroy();
-		});
-
-		socket.on("data", (chunk) => {
-			if (ws.readyState === WebSocket.OPEN) {
-				ws.send(chunk);
-			}
-		});
-		socket.on("close", () => {
-			if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
-				ws.close();
-			}
-		});
-		socket.on("error", (err) => {
-			logger.debug(`Local connection error: ${err.message}`);
-			if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
-				ws.close();
-			}
-		});
-	});
+	const server = net.createServer((socket) => bridgeConnection(socket, wsUrl, token, logger));
 
 	return new Promise((resolve) => {
 		server.on("error", (err) => {

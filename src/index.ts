@@ -1,29 +1,15 @@
 #!/usr/bin/env node
-import { createRequire } from "node:module";
 import dotenv from "dotenv";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { loadConfig, validateConfig } from "./config.js";
 import { createLogger } from "./logger.js";
-import { createHaRestClient } from "./ha/restClient.js";
-import { createHaWsClient } from "./ha/wsClient.js";
-import { createBrokeredWsClient } from "./ha/brokeredClient.js";
-import { createEsphomeDashboardClient } from "./esphome/dashboardClient.js";
-import { createBrokeredEsphomeDashboardClient } from "./esphome/brokeredDashboardClient.js";
-import { createNodeRedClient } from "./nodered/client.js";
-import { createVomeHomeClient } from "./vomehome/client.js";
-import { createInstanceManager } from "./vomehome/instances.js";
+import { createToolContext, describeMode } from "./context.js";
 import { registerAllTools } from "./tools/index.js";
-import type { ToolContext } from "./tools/helpers.js";
 import { runDoctor } from "./cli/doctor.js";
 import { runTunnel } from "./cli/tunnel.js";
-
-const SERVER_NAME = "home-assistant-mcp";
-// Single source of truth for the version: package.json (works from both
-// src/ via tsx and dist/ after build — each is one level below the root).
-const SERVER_VERSION = (
-	createRequire(import.meta.url)("../package.json") as { version: string }
-).version;
+import { runServe } from "./cli/serve.js";
+import { SERVER_NAME, SERVER_VERSION } from "./version.js";
 
 async function main(): Promise<void> {
 	dotenv.config();
@@ -41,6 +27,15 @@ async function main(): Promise<void> {
 		process.exit(exitCode);
 	}
 
+	// Remote (multi-tenant) mode: serve MCP over HTTP instead of stdio, taking
+	// each session's VomeHome token from its Authorization header. Deliberately
+	// before validateConfig — the process itself needs no token, since every
+	// session brings its own.
+	if (command === "serve") {
+		const exitCode = await runServe(process.argv.slice(3), config, logger);
+		process.exit(exitCode);
+	}
+
 	const problems = validateConfig(config);
 	if (problems.length > 0) {
 		for (const problem of problems) {
@@ -52,40 +47,15 @@ async function main(): Promise<void> {
 		process.exit(1);
 	}
 
-	// Direct mode gets a single HA client; brokered mode routes per-instance via
-	// the manager. Either way `instances.rest` is the stable client the tools use.
-	// A small ref breaks the circular init (ws callbacks need the manager before
-	// it exists) without a reassigned `let` that prefer-const rejects.
-	const instancesRef: {
-		current: ReturnType<typeof createInstanceManager> | null;
-	} = { current: null };
-	const ws = config.brokered
-		? createBrokeredWsClient(() => {
-				if (!instancesRef.current) {
-					throw new Error("VomeHome instance manager is not initialised yet.");
-				}
-				return instancesRef.current.currentRest();
-			})
-		: createHaWsClient(config, logger);
-	const directRest = config.brokered ? undefined : createHaRestClient(config, logger, ws);
-	const instances = createInstanceManager(config, logger, directRest);
-	instancesRef.current = instances;
-	const rest = instances.rest;
-	const esphome = config.esphome.brokered
-		? createBrokeredEsphomeDashboardClient(config, logger, () => instances.activeId())
-		: createEsphomeDashboardClient(config, logger);
-	const nodered = createNodeRedClient(config, logger);
-	const vomehome = createVomeHomeClient(config, logger);
-	const ctx: ToolContext = { config, logger, rest, ws, esphome, nodered, vomehome, instances };
+	const ctx = createToolContext(config, logger);
+	const { ws } = ctx;
 
 	const server = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION });
 	registerAllTools(server, ctx);
 
 	const transport = new StdioServerTransport();
 	await server.connect(transport);
-	const haMode = config.brokered
-		? `brokered via VomeHome instance ${instances.activeId()} (${config.vomehome.instances.length} declared)`
-		: "direct";
+	const haMode = describeMode(ctx);
 	logger.info(
 		`${SERVER_NAME} v${SERVER_VERSION} ready (HA ${haMode}, writes ${config.safety.allowWrite ? "ENABLED" : "disabled"}, esphome ${config.esphome.enabled ? (config.esphome.brokered ? "brokered" : "enabled") : "disabled"}, nodered ${config.nodered.enabled ? "enabled" : "disabled"}, vomehome ${config.vomehome.enabled ? "enabled" : "disabled"})`
 	);

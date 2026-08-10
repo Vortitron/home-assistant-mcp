@@ -15,6 +15,8 @@ const silentLogger: Logger = {
 };
 
 const GOOD_TOKEN = "vh_good_token";
+/** Flipped by a test to simulate a grant being revoked between sessions. */
+let revokeSecondInstance = false;
 const NO_INSTANCE_TOKEN = "vh_scopeless_token";
 
 interface FakePortal {
@@ -43,12 +45,21 @@ async function makeFakePortal(): Promise<FakePortal> {
 				instances:
 					token === NO_INSTANCE_TOKEN
 						? []
-						: [{ id: "inst-one", name: "Home", status: "running" }]
+						: revokeSecondInstance
+							? [{ id: "inst-one", name: "Home", status: "running" }]
+							: [
+									{ id: "inst-one", name: "Home", status: "running" },
+									{ id: "inst-two", name: "Cottage", status: "running" }
+								]
 			});
 			return;
 		}
 		if (req.url === "/api/v1/instances/inst-one/ha/config") {
 			json(200, { version: "2026.8.0", location_name: "Test Home" });
+			return;
+		}
+		if (req.url === "/api/v1/instances/inst-two/ha/config") {
+			json(200, { version: "2026.8.0", location_name: "Test Cottage" });
 			return;
 		}
 		json(404, { error: `no route ${req.url}` });
@@ -127,6 +138,7 @@ describe("MCP HTTP server", () => {
 	let endpoint: string;
 
 	beforeEach(async () => {
+		revokeSecondInstance = false;
 		portal = await makeFakePortal();
 		server = await startMcpHttpServer(serveArgs(portal.url), silentLogger);
 		endpoint = `http://127.0.0.1:${server.port}/mcp`;
@@ -204,6 +216,69 @@ describe("MCP HTTP server", () => {
 		);
 		expect(status).toBe(403);
 		expect(body).toContain("different token");
+	});
+
+	it("keeps the chosen instance across a reconnect", async () => {
+		/**
+		 * The reported bug: an agent switched to a second Home Assistant, the
+		 * session was later rebuilt (idle reap, transport reconnect, restart),
+		 * and the new context silently reset to the first instance — so the
+		 * conversation carried on answering about the wrong house.
+		 */
+		const connect = async (): Promise<Client> => {
+			const client = new Client({ name: "test", version: "1.0.0" });
+			await client.connect(
+				new StreamableHTTPClientTransport(new URL(endpoint), {
+					requestInit: { headers: { Authorization: `Bearer ${GOOD_TOKEN}` } }
+				})
+			);
+			return client;
+		};
+		const activeOf = async (client: Client): Promise<string> => {
+			const result = await client.callTool({ name: "vomehome_list_instances", arguments: {} });
+			return JSON.parse((result.content as { text: string }[])[0]?.text ?? "{}").active_instance;
+		};
+
+		const first = await connect();
+		expect(await activeOf(first)).toBe("inst-one");
+		await first.callTool({
+			name: "vomehome_use_instance",
+			arguments: { instance_id: "inst-two" }
+		});
+		expect(await activeOf(first)).toBe("inst-two");
+		await first.close();
+
+		// A brand-new session for the same token must resume inst-two.
+		const second = await connect();
+		expect(await activeOf(second)).toBe("inst-two");
+		const config = await second.callTool({ name: "ha_get_config", arguments: {} });
+		expect((config.content as { text: string }[])[0]?.text).toContain("Test Cottage");
+		await second.close();
+	});
+
+	it("does not resume an instance the token can no longer reach", async () => {
+		/** A remembered choice must never outlive the grant behind it. */
+		const client = new Client({ name: "test", version: "1.0.0" });
+		await client.connect(
+			new StreamableHTTPClientTransport(new URL(endpoint), {
+				requestInit: { headers: { Authorization: `Bearer ${GOOD_TOKEN}` } }
+			})
+		);
+		await client.callTool({ name: "vomehome_use_instance", arguments: { instance_id: "inst-two" } });
+		await client.close();
+
+		// The portal now only offers inst-one for this token.
+		revokeSecondInstance = true;
+		const after = new Client({ name: "test", version: "1.0.0" });
+		await after.connect(
+			new StreamableHTTPClientTransport(new URL(endpoint), {
+				requestInit: { headers: { Authorization: `Bearer ${GOOD_TOKEN}` } }
+			})
+		);
+		const listed = await after.callTool({ name: "vomehome_list_instances", arguments: {} });
+		const active = JSON.parse((listed.content as { text: string }[])[0]?.text ?? "{}").active_instance;
+		expect(active).toBe("inst-one");
+		await after.close();
 	});
 
 	it("completes a full session: discovery, tool list and a brokered HA call", async () => {

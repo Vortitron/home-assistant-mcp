@@ -67,6 +67,10 @@ interface Session {
 	close: () => Promise<void>;
 	/** SHA-256 of the bearer token that opened this session (never the token). */
 	tokenHash: Buffer;
+	/** Hex form of {@link tokenHash}, used to key remembered state per token. */
+	tokenKey: string;
+	/** The instance this session is currently targeting. */
+	activeId: () => string;
 	lastSeen: number;
 }
 
@@ -231,6 +235,20 @@ export async function startMcpHttpServer(args: ServeArgs, logger: Logger): Promi
 	 * portal what this token can reach both turns brokering on and lets the first
 	 * `ha_*` call work without the client having to call `vomehome_use_instance`.
 	 */
+	/**
+	 * Last instance each token selected with `vomehome_use_instance`, keyed by
+	 * token hash and outliving the session that chose it.
+	 *
+	 * Sessions are not permanent: an idle one is reaped, a transport can
+	 * reconnect, and the service can restart. Each of those builds a fresh
+	 * context, which used to silently reset the active instance back to the
+	 * first one the token could see — so an agent mid-conversation would
+	 * carry on querying a *different* Home Assistant and quietly get answers
+	 * about the wrong house. The stdio server never had this failure mode
+	 * because it was one long-lived process per client.
+	 */
+	const lastActiveByToken = new Map<string, { instanceId: string; at: number }>();
+
 	async function contextForToken(token: string): Promise<ReturnType<typeof createToolContext>> {
 		// Bootstrap config: the VomeHome client needs only a token and a URL, so
 		// it can be built before any instance is known.
@@ -243,7 +261,16 @@ export async function startMcpHttpServer(args: ServeArgs, logger: Logger): Promi
 				"This token cannot reach any Home Assistant instance. Check the token's instance scopes in the VomeHome portal under Account -> API tokens."
 			);
 		}
-		return createToolContext(loadConfig(sessionEnv(token, ids[0] as string, ids)), logger);
+		// Resume the token's last explicit choice, so a reconnect does not
+		// silently retarget a conversation at a different house. Only honoured
+		// while the instance is still reachable by this token — a revoked grant
+		// must not be resurrected from memory.
+		const remembered = lastActiveByToken.get(hashToken(token).toString("hex"));
+		const active = remembered && ids.includes(remembered.instanceId) ? remembered.instanceId : (ids[0] as string);
+		if (remembered && active === remembered.instanceId && ids[0] !== active) {
+			logger.debug(`Restored active instance ${active} for a reconnecting token`);
+		}
+		return createToolContext(loadConfig(sessionEnv(token, active, ids)), logger);
 	}
 
 	async function dropSession(sessionId: string): Promise<void> {
@@ -272,6 +299,8 @@ export async function startMcpHttpServer(args: ServeArgs, logger: Logger): Promi
 						await server.close().catch(() => undefined);
 					},
 					tokenHash: hashToken(token),
+					tokenKey: hashToken(token).toString("hex"),
+					activeId: () => ctx.instances.activeId(),
 					lastSeen: Date.now()
 				});
 				logger.info(`MCP session ${sessionId} opened (${sessions.size} open)`);
@@ -333,6 +362,13 @@ export async function startMcpHttpServer(args: ServeArgs, logger: Logger): Promi
 				}
 				existing.lastSeen = Date.now();
 				await existing.transport.handleRequest(req, res, req.method === "POST" ? await readBody(req) : undefined);
+				// Remember whatever instance the session is on now. Reading it
+				// back after the request catches a vomehome_use_instance without
+				// the transport needing to know that tool exists.
+				lastActiveByToken.set(existing.tokenKey, {
+					instanceId: existing.activeId(),
+					at: Date.now()
+				});
 				return;
 			}
 

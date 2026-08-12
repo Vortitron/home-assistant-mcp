@@ -68,7 +68,7 @@ export function registerVomeHomeTools(server: McpServer, ctx: ToolContext): void
 		{
 			title: "Switch active VomeHome instance",
 			description:
-				"Switch which VomeHome instance the Home Assistant tools target. Subsequent ha_* calls (states, services, automations, templates, check_config) operate on this instance, and write/config permission follows that instance's own flags (declared in VOMEHOME_INSTANCES, the default instance, or auto-granted on create). An undeclared but reachable instance becomes read-only here.",
+				"Switch which VomeHome instance the Home Assistant tools target. Subsequent ha_* calls (states, services, automations, templates, check_config) operate on this instance, and write/config permission follows that instance's own flags (declared in VOMEHOME_INSTANCES, the default instance, or auto-granted on create). An undeclared but reachable instance inherits the global default, which in brokered mode defers to the API key's server-side scopes.",
 			inputSchema: {
 				instance_id: z
 					.string()
@@ -90,7 +90,7 @@ export function registerVomeHomeTools(server: McpServer, ctx: ToolContext): void
 					client_access: { write: target.access.write, config: target.access.config },
 					note: target.inRegistry
 						? "Active instance switched. Home Assistant tools now target this instance."
-						: "Active instance switched, but this instance is not declared in VOMEHOME_INSTANCES so it is read-only here. Add it (with write/config) to enable changes."
+						: "Active instance switched. This instance is not declared in VOMEHOME_INSTANCES, so it inherits the global default shown in client_access; the API key's scopes for it still apply server-side."
 				});
 			})
 	);

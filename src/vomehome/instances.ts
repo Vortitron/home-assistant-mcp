@@ -83,8 +83,23 @@ export function createInstanceManager(
 
 	const clientCache = new Map<string, HaRestClient>();
 
-	function readOnlyEntry(id: string): InstanceAccess {
-		return { id, write: false, config: false };
+	/**
+	 * Access for an instance the operator never declared.
+	 *
+	 * This used to be a hard read-only. That predates permissions moving onto
+	 * the API key: in brokered mode the portal already enforces this token's
+	 * per-instance ha:write / ha:config, so a blanket client-side no meant an
+	 * agent holding a fully-scoped key still could not write to an instance it
+	 * had switched to — and, worse, `use()` cached the refusal for the rest of
+	 * the session. It also disagreed with the registry itself, where an entry
+	 * that omits its flags inherits the permissive brokered default.
+	 *
+	 * So an undeclared instance inherits the same global default. That is
+	 * permissive in brokered mode (defer to the key's scopes) but still honours
+	 * an explicit HA_ALLOW_WRITE=false as a local-only restriction.
+	 */
+	function undeclaredEntry(id: string): InstanceAccess {
+		return { id, write: config.safety.allowWrite, config: config.safety.allowConfigWrite };
 	}
 
 	function access(instanceId?: string): InstanceAccess {
@@ -92,7 +107,7 @@ export function createInstanceManager(
 		if (!brokered) {
 			return registry.get(DIRECT_ID) as InstanceAccess;
 		}
-		return registry.get(id) ?? readOnlyEntry(id);
+		return registry.get(id) ?? undeclaredEntry(id);
 	}
 
 	function safetyFor(instanceId?: string): SafetyConfig {
@@ -142,8 +157,9 @@ export function createInstanceManager(
 		}
 		const inRegistry = registry.has(id);
 		if (!inRegistry) {
-			// Allow read-only access to an undeclared (but token-reachable) instance.
-			registry.set(id, readOnlyEntry(id));
+			// Adopt the undeclared (but token-reachable) instance at the global
+			// default so the switch is not a one-way downgrade for the session.
+			registry.set(id, undeclaredEntry(id));
 		}
 		active = id;
 		logger.debug(`Active VomeHome instance -> ${id}`);

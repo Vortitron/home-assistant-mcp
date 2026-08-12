@@ -103,23 +103,50 @@ describe("createInstanceManager (brokered)", () => {
 		expect(mgr.currentSafety()).toMatchObject({ allowWrite: true, allowConfigWrite: false });
 		// Per-instance lookups.
 		expect(mgr.access("sbx-plc")).toMatchObject({ write: true, config: true });
-		// Undeclared instance -> read-only, not added to the declared registry.
-		expect(mgr.access("ghost")).toMatchObject({ write: false, config: false });
+		// Undeclared instance -> inherits the global default (HA_ALLOW_* here),
+		// and is not added to the declared registry by a mere lookup.
+		expect(mgr.access("ghost")).toMatchObject({ write: true, config: false });
 		expect(mgr.has("ghost")).toBe(false);
 		// Global deny-list is preserved across instances.
 		expect(mgr.safetyFor("sbx-plc").denyDomains).toContain("lock");
 	});
 
-	it("switches the active instance and read-only-grants undeclared ones", () => {
+	it("switches the active instance and adopts undeclared ones at the global default", () => {
 		const mgr = createInstanceManager(loadConfig(BROKER_ENV), logger);
 		const target = mgr.use("sbx-plc");
 		expect(target).toMatchObject({ id: "sbx-plc", inRegistry: true });
 		expect(mgr.currentSafety()).toMatchObject({ allowWrite: true, allowConfigWrite: true });
 
+		// Switching to an instance the operator never declared must not silently
+		// downgrade the session: the portal enforces this token's per-instance
+		// scopes, so the client follows the global default (HA_ALLOW_WRITE=true,
+		// HA_ALLOW_CONFIG_WRITE=false here) rather than refusing every write.
 		const ghost = mgr.use("ghost");
 		expect(ghost.inRegistry).toBe(false);
 		expect(mgr.activeId()).toBe("ghost");
+		expect(mgr.currentSafety()).toMatchObject({ allowWrite: true, allowConfigWrite: false });
+	});
+
+	it("keeps an explicit local restriction when adopting an undeclared instance", () => {
+		// HA_ALLOW_WRITE=false is an operator's deliberate client-side block, so
+		// it must survive a switch to an undeclared instance — the permissive
+		// path above is the *default*, not an override.
+		const mgr = createInstanceManager(
+			loadConfig({ ...BROKER_ENV, HA_ALLOW_WRITE: "false" }),
+			logger
+		);
+		mgr.use("ghost");
 		expect(mgr.currentSafety()).toMatchObject({ allowWrite: false, allowConfigWrite: false });
+	});
+
+	it("does not re-downgrade an instance the session already switched to", () => {
+		// The old behaviour cached a read-only entry on first use(), so the
+		// refusal outlived the switch even after returning to it.
+		const mgr = createInstanceManager(loadConfig(BROKER_ENV), logger);
+		mgr.use("ghost");
+		mgr.use("sbx-plc");
+		mgr.use("ghost");
+		expect(mgr.access("ghost")).toMatchObject({ write: true, config: false });
 	});
 
 	it("grants full access to a created instance and makes it active", () => {
@@ -222,10 +249,10 @@ describe("vomehome multi-instance tools", () => {
 		});
 	});
 
-	it("flags an undeclared target as read-only when switching", async () => {
+	it("reports an undeclared target as undeclared but still writable by default", async () => {
 		const server = brokeredHarness({});
 		const payload = jsonOf(await server.call("vomehome_use_instance", { instance_id: "ghost" }));
-		expect(payload).toMatchObject({ active_instance: "ghost", declared: false, client_access: { write: false } });
+		expect(payload).toMatchObject({ active_instance: "ghost", declared: false, client_access: { write: true } });
 	});
 
 	it("grants full access to a created instance and makes it active", async () => {

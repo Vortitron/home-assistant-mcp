@@ -66,6 +66,69 @@ function isCreateEntry(step: ConfigFlowStep): boolean {
 	return step.type === "create_entry";
 }
 
+interface DiscoveryFlow {
+	flow_id?: string;
+	handler?: string;
+	step_id?: string;
+	context?: {
+		source?: string;
+		unique_id?: string;
+		title_placeholders?: Record<string, unknown>;
+		[key: string]: unknown;
+	};
+	[key: string]: unknown;
+}
+
+/**
+ * Pull the identifying details out of a discovery flow's context.
+ *
+ * Integrations put these in wildly different shapes (dhcp uses `ip`/`macaddress`,
+ * zeroconf nests under `properties`, tuya_local carries the Tuya device id), so
+ * this looks for the handful of keys that actually identify a device rather than
+ * assuming any one layout. Everything is still returned in `raw_context`.
+ */
+function summariseDiscovery(flow: DiscoveryFlow): Record<string, unknown> {
+	const context = flow.context ?? {};
+	const nested =
+		(context.properties as Record<string, unknown> | undefined) ??
+		(context.discovery_info as Record<string, unknown> | undefined) ??
+		{};
+	const interesting = [
+		"host",
+		"ip",
+		"ip_address",
+		"address",
+		"hostname",
+		"macaddress",
+		"mac",
+		"port",
+		"device_id",
+		"gwId",
+		"serial",
+		"serial_number",
+		"model",
+		"name",
+		"product_key",
+		"productKey"
+	];
+
+	const summary: Record<string, unknown> = {};
+	for (const key of interesting) {
+		const value = context[key] ?? nested[key];
+		if (value !== undefined && value !== null && value !== "") {
+			summary[key] = value;
+		}
+	}
+	// title_placeholders is where most integrations put the human-facing label,
+	// and for several (tuya_local included) it is the only place the address appears.
+	for (const [key, value] of Object.entries(context.title_placeholders ?? {})) {
+		if (value !== undefined && value !== null && value !== "" && !(key in summary)) {
+			summary[key] = value;
+		}
+	}
+	return summary;
+}
+
 export function registerIntegrationTools(server: McpServer, ctx: ToolContext): void {
 	server.registerTool(
 		"ha_list_config_entries",
@@ -90,6 +153,64 @@ export function registerIntegrationTools(server: McpServer, ctx: ToolContext): v
 				);
 				const rows = Array.isArray(entries) ? entries : [];
 				return jsonResult({ count: rows.length, entries: rows });
+			})
+	);
+
+	server.registerTool(
+		"ha_list_discovery_flows",
+		{
+			title: "List in-progress (discovered) config flows",
+			description:
+				"List config flows Home Assistant has started but not finished — chiefly integrations " +
+				"discovered on the network and waiting to be added. Each row carries the discovery " +
+				"context (host/IP, device id, model, serial) the integration matched on, so this " +
+				"answers 'what has HA found that is not set up yet?'. Optional domain filter.",
+			inputSchema: {
+				domain: z
+					.string()
+					.optional()
+					.describe("Optional integration domain filter (e.g. tuya_local, esphome)"),
+				include_user_flows: z
+					.boolean()
+					.optional()
+					.default(false)
+					.describe(
+						"Include flows the user started by hand; by default only discovered flows are returned"
+					)
+			},
+			annotations: { readOnlyHint: true, openWorldHint: true }
+		},
+		async ({ domain, include_user_flows }) =>
+			runTool(ctx.logger, "ha_list_discovery_flows", async () => {
+				// HA only returns discovery-sourced flows for ?type=integration; user-started
+				// flows are transient and are fetched unfiltered.
+				const flows = await configEntriesGet<DiscoveryFlow[]>(
+					ctx,
+					include_user_flows
+						? "/config/config_entries/flow"
+						: "/config/config_entries/flow?type=integration"
+				);
+				let rows = Array.isArray(flows) ? flows : [];
+				if (domain) {
+					rows = rows.filter((flow) => flow.handler === domain);
+				}
+				return jsonResult({
+					count: rows.length,
+					flows: rows.map((flow) => ({
+						flow_id: flow.flow_id,
+						handler: flow.handler,
+						step_id: flow.step_id,
+						source: flow.context?.source,
+						title: flow.context?.title_placeholders,
+						unique_id: flow.context?.unique_id,
+						discovery: summariseDiscovery(flow),
+						raw_context: flow.context
+					})),
+					hint:
+						rows.length > 0
+							? "Continue one with ha_config_flow using its flow_id."
+							: "Nothing pending. Discovery only surfaces devices on the HA host's own network."
+				});
 			})
 	);
 

@@ -108,3 +108,47 @@ export interface HaTarget {
 	device_id?: string | string[];
 	label_id?: string | string[];
 }
+
+/**
+ * One deduplicated record from Home Assistant's `system_log/list` WebSocket
+ * command. Unlike the raw error log this is grouped: the same error logged 500
+ * times is a single entry with `count: 500`.
+ */
+export interface HaSystemLogEntry {
+	name?: string;
+	message?: string | string[];
+	level?: string;
+	/** `[source_file, line_number]`. */
+	source?: [string, number] | unknown[];
+	/** Epoch seconds (float) of the most recent occurrence. */
+	timestamp?: number;
+	/** Epoch seconds (float) of the first occurrence. */
+	first_occurred?: number;
+	count?: number;
+	exception?: string;
+	[key: string]: unknown;
+}
+
+/** Short form of an automation/script run, from `trace/list`. */
+export interface HaTraceSummary {
+	run_id?: string;
+	domain?: string;
+	item_id?: string;
+	timestamp?: { start?: string; finish?: string };
+	state?: string;
+	script_execution?: string;
+	last_step?: string;
+	error?: string;
+	[key: string]: unknown;
+}
+
+/**
+ * Full run detail from `trace/get`. `trace` maps a step path ("condition/0")
+ * to the list of times that step executed in this run.
+ */
+export interface HaTraceDetail extends HaTraceSummary {
+	trace?: Record<string, unknown[]>;
+	config?: Record<string, unknown>;
+	context?: Record<string, unknown>;
+	variables?: Record<string, unknown>;
+}

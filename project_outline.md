@@ -28,6 +28,8 @@ src/
 	nodered/client.ts   createNodeRedClient(config, logger) -> Node-RED admin API (flows/flow/nodes)
 	vomehome/client.ts  createVomeHomeClient(config, logger) -> portal /api/v1/instances (Bearer PAT)
 	tools/helpers.ts    ToolContext, result helpers, runTool() error wrapper
+	tools/logs.ts       structured system log, log levels, error/supervisor logs
+	tools/traces.ts     automation/script traces, summarised
 	tools/*.ts          one registerXxxTools(server, ctx) per group
 	tools/index.ts      registerAllTools(server, ctx)
 	cli/doctor.ts       connectivity check (human-facing, stdout)
@@ -40,7 +42,8 @@ src/
 - **stdout is sacred.** It is the JSON-RPC channel — all logs go to stderr.
 - **Registries need WebSocket.** Areas/devices/entity-registry are WS-only in HA,
   hence both a REST and a WS client.
-- **Safety is centralised** in `safety.ts` and unit-tested. Writes are off by
+- **Safety is centralised** in `safety.ts` (`evaluateDomainWrite` /
+  `evaluateConfigWrite` / `evaluateDiagnosticWrite`) and unit-tested. Writes are off by
   default; sensitive domains are denied; `ha_call_service` also checks target
   entity domains (recursively through `data`) to prevent cross-domain bypass,
   and refuses generic services targeting area/device/label while a deny/allow-
@@ -52,9 +55,29 @@ src/
 
 ## Tools
 
-38 tools across: system, states, services, registry, templates, automations,
-logs/diagnostics, ESPHome, Node-RED, VomeHome. See `README.md` for the full
-table.
+56 tools across: system, states, services, registry, templates, automations,
+logs/diagnostics, traces, ESPHome, Node-RED, VomeHome. See `README.md` for the
+full table.
+
+Logs/diagnostics (`tools/logs.ts`) prefers Home Assistant's *structured* error
+store (`system_log/list` over WS) to the raw log tail: deduplicated records with
+level/logger/source/count, tracebacks reduced to their final line unless
+`include_exception`. `ha_clear_system_log` + `ha_set_log_level` exist to make the
+clear → reproduce → read loop possible; both go through
+`evaluateDiagnosticWrite` (needs `HA_ALLOW_WRITE` only — no config-write flag,
+and the domain lists don't apply, since neither touches an entity).
+`ha_get_supervisor_log` uses HA's `/api/hassio/*/logs` REST proxy, which is the
+one Supervisor path family an admin token may reach (everything else there 401s —
+that is why `ha_supervisor_api` uses the `supervisor/api` WS command instead).
+Direct mode only: the broker doesn't proxy raw hassio paths.
+
+Traces (`tools/traces.ts`): `trace/list` + `trace/get` over WS, for automations
+and scripts. Raw traces embed the whole config and every step's variables, so
+these summarise by default — ordered steps, the trigger, and `failed_at` (the
+first step that errored or evaluated false), which is the thing logs never say.
+`full: true` returns the raw payload. Item ids are resolved through
+`resolveAutomationId` (exported from `tools/automations.ts`); scripts key on
+their object_id.
 
 Node-RED (7 tools, `tools/nodered.ts` + `nodered/client.ts`): reads
 (`get_flows`/`get_flow`/`list_nodes`) are open once `NODERED_URL` is set; writes
@@ -145,7 +168,9 @@ Server-side deny-list mirrors the MCP default and is overridable via
 - `config.test.ts` — env parsing + validation.
 - `restClient.test.ts` — REST behaviour with mocked `fetch`.
 - `brokeredClient.test.ts` — brokered routing, policy-denial surfacing, mode detection.
-- `tools.test.ts` — tools via a fake MCP server + injected fake clients.
+- `tools.test.ts` — tools via a fake MCP server + injected fake clients
+  (including system-log filtering/summarising, the log-level guards and the
+  trace summariser).
 - `vomehome.test.ts` — VomeHome client (mocked `fetch`) + tool-layer guards.
 - `nodered.test.ts` — Node-RED client (v2 header, token/password-grant auth,
   deploy headers, error surfacing) + tool-layer config-write guards.
@@ -157,7 +182,9 @@ Mocks are used only for tests. No live HA is required to develop or test.
 1. **Brokered HA (the real boundary)** — shipped (MVP): scoped, audited HA
    reads/writes proxied through VomeHome so the agent never holds the HA token.
    Remaining: registry (areas/devices) over the broker, brokered config-file
-   editing, and a per-token audit view in the portal.
+   editing, a per-token audit view in the portal, and Supervisor/add-on logs
+   over the broker (`ha_get_supervisor_log` is direct-mode only — the portal
+   proxies the HA API, not raw `/api/hassio` paths).
 2. **VomeHome test installs** — `vomehome_*` tools + portal endpoints ship now.
    Remaining: auto-retarget a freshly created sandbox so agents iterate there
    first, then promote what works.

@@ -1,5 +1,5 @@
 /**
- * Builds a {@link ToolContext} — everything the 49 registered tools need.
+ * Builds a {@link ToolContext} — everything the 56 registered tools need.
  *
  * Split out of index.ts so the stdio server (one context for the process, from
  * the environment) and the HTTP server (one context per MCP session, from that

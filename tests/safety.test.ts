@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { SafetyConfig } from "../src/config.js";
-import { evaluateConfigWrite, evaluateDomainWrite, extractDomain } from "../src/safety.js";
+import {
+	evaluateConfigWrite,
+	evaluateDiagnosticWrite,
+	evaluateDomainWrite,
+	extractDomain
+} from "../src/safety.js";
 
 function safety(overrides: Partial<SafetyConfig> = {}): SafetyConfig {
 	return {
@@ -70,5 +75,25 @@ describe("evaluateConfigWrite", () => {
 		expect(evaluateConfigWrite(safety({ allowWrite: true, allowConfigWrite: true })).allowed).toBe(
 			true
 		);
+	});
+});
+
+describe("evaluateDiagnosticWrite", () => {
+	it("requires allowWrite", () => {
+		expect(evaluateDiagnosticWrite(safety()).allowed).toBe(false);
+		expect(evaluateDiagnosticWrite(safety()).reason).toMatch(/HA_ALLOW_WRITE/);
+	});
+
+	it("allows on allowWrite alone — no config-write flag needed", () => {
+		expect(evaluateDiagnosticWrite(safety({ allowWrite: true })).allowed).toBe(true);
+	});
+
+	it("ignores the domain deny/allow lists, which don't apply to log plumbing", () => {
+		const restrictive = safety({
+			allowWrite: true,
+			denyDomains: ["logger", "system_log"],
+			allowDomains: ["light"]
+		});
+		expect(evaluateDiagnosticWrite(restrictive).allowed).toBe(true);
 	});
 });

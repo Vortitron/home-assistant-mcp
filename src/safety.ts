@@ -58,3 +58,19 @@ export function evaluateConfigWrite(safety: SafetyConfig): WriteDecision {
 	}
 	return { allowed: true, reason: OK };
 }
+
+/**
+ * Diagnostic writes: clearing the system-log buffer and changing logger levels.
+ * They touch no entity, so the domain deny/allow lists don't apply — but they do
+ * change Home Assistant, so `HA_ALLOW_WRITE` still gates them.
+ */
+export function evaluateDiagnosticWrite(safety: SafetyConfig): WriteDecision {
+	if (!safety.allowWrite) {
+		return {
+			allowed: false,
+			reason:
+				"Writes are disabled. Set HA_ALLOW_WRITE=true to clear the log buffer or change log levels."
+		};
+	}
+	return { allowed: true, reason: OK };
+}

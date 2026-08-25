@@ -53,8 +53,12 @@ policy (see [Safety](#safety)).
 | `ha_list_automations` | Automations with entity_id, unique id, state, last-triggered. |
 | `ha_get_automation` | Full automation config (triggers/conditions/actions). |
 | `ha_check_config` | Validate the configuration (Check configuration). |
-| `ha_get_error_log` | Tail of the Home Assistant error log. |
+| `ha_get_system_log` | **Deduplicated, structured errors** — level, logger, source, count, first/last seen. Start here. |
+| `ha_get_error_log` | Tail of the raw Home Assistant error log. |
+| `ha_get_supervisor_log` | Add-on / Core / Supervisor / host logs (direct mode, HAOS or Supervised). |
 | `ha_get_logbook` | Human-readable logbook entries. |
+| `ha_list_traces` | Recent automation/script runs and how each one stopped. |
+| `ha_get_trace` | Step-by-step detail for one run, with `failed_at` naming the blocking step. |
 
 ### Home Assistant — write (write-gated)
 
@@ -66,6 +70,8 @@ policy (see [Safety](#safety)).
 | Tool | Description |
 | --- | --- |
 | `ha_call_service` | Call any service (turn_on, set_temperature, …). |
+| `ha_clear_system_log` | Empty the structured error store (only needs `HA_ALLOW_WRITE`). |
+| `ha_set_log_level` | Change logging for one integration at runtime (only needs `HA_ALLOW_WRITE`). |
 | `ha_set_automation` | Create or update an automation (also needs `HA_ALLOW_CONFIG_WRITE`). |
 | `ha_delete_automation` | Delete an automation (also needs `HA_ALLOW_CONFIG_WRITE`). |
 | `ha_trigger_automation` | Manually run an automation now. |
@@ -541,6 +547,52 @@ reading this: start there.
   → `nodered_get_flow` → edit the nodes → `nodered_update_flow`.
 - *"Spin up a sandbox and open it"* → `vomehome_create_instance` →
   `vomehome_get_instance` (poll status) → `vomehome_get_login_url` (open the link).
+- *"Why is my Hue integration throwing errors?"* → `ha_get_system_log`
+  (`logger: "hue"`) → read `exception_summary` → `ha_get_system_log` again with
+  `include_exception: true` for the full stack.
+- *"Why didn't my morning automation run?"* → `ha_get_trace`
+  (`item: "automation.morning"`) → read `failed_at`.
+
+---
+
+## Debugging with logs
+
+Four surfaces, roughly in the order to reach for them:
+
+| Question | Tool |
+| --- | --- |
+| What is broken right now? | `ha_get_system_log` |
+| Why didn't this automation do anything? | `ha_get_trace` |
+| What did the add-on / host do? | `ha_get_supervisor_log` |
+| What happened to this entity, and when? | `ha_get_logbook` / `ha_get_history` |
+
+**Start with `ha_get_system_log`, not `ha_get_error_log`.** It reads Home
+Assistant's structured error store, where the same failure logged 500 times is
+*one* record with `count: 500`, a `source` file:line and first/last-seen stamps.
+Tailing the raw log spends far more tokens to say less. Full tracebacks are left
+out by default — you still get `exception_summary`, the final line that names the
+actual exception — so ask for `include_exception: true` once you know which entry
+matters.
+
+**The reproduce loop.** When you can trigger the problem on demand, don't sift
+through history at all — make the log contain only your reproduction:
+
+1. `ha_set_log_level` (`integration: "hue", level: "debug"`) — debug on the one
+   integration, not globally.
+2. `ha_clear_system_log`.
+3. Reproduce it (`ha_call_service`, `ha_trigger_automation`, …).
+4. `ha_get_system_log` — everything returned was caused by step 3.
+
+Levels are runtime-only and reset on restart. Both write tools need
+`HA_ALLOW_WRITE=true` in direct mode, but *not* `HA_ALLOW_CONFIG_WRITE`, and the
+domain deny/allow lists don't apply — they change log plumbing, not entities.
+
+**Traces answer what logs can't.** An automation whose condition returned false
+logs nothing at all; the trace records it. `ha_get_trace` defaults to the most
+recent run and returns `failed_at` — the first step that errored or evaluated
+false — alongside the trigger and the ordered steps. Home Assistant keeps only a
+few traces per item (5 by default) and none from before the last restart, so
+`ha_list_traces` returning nothing usually means "trigger it and look again".
 
 ---
 

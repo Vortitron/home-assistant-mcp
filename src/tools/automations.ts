@@ -23,6 +23,23 @@ async function findAutomationState(
 	return automations.find((state) => automationIdOf(state) === reference);
 }
 
+/**
+ * Resolve an automation reference (entity_id *or* unique id) to the unique id
+ * that the config and trace APIs key on. Returns undefined when an
+ * `automation.*` entity_id has no resolvable unique id (YAML automations
+ * without an `id:`).
+ */
+export async function resolveAutomationId(
+	ctx: ToolContext,
+	reference: string
+): Promise<string | undefined> {
+	if (!reference.startsWith(AUTOMATION_PREFIX)) {
+		return reference;
+	}
+	const state = await findAutomationState(ctx, reference);
+	return state ? automationIdOf(state) : undefined;
+}
+
 export function registerAutomationTools(server: McpServer, ctx: ToolContext): void {
 	server.registerTool(
 		"ha_list_automations",
@@ -62,14 +79,9 @@ export function registerAutomationTools(server: McpServer, ctx: ToolContext): vo
 		},
 		async ({ automation }) =>
 			runTool(ctx.logger, "ha_get_automation", async () => {
-				let id = automation;
-				if (automation.startsWith(AUTOMATION_PREFIX)) {
-					const state = await findAutomationState(ctx, automation);
-					const resolved = state ? automationIdOf(state) : undefined;
-					if (!resolved) {
-						return errorResult(`Could not resolve a unique id for '${automation}'.`);
-					}
-					id = resolved;
+				const id = await resolveAutomationId(ctx, automation);
+				if (!id) {
+					return errorResult(`Could not resolve a unique id for '${automation}'.`);
 				}
 				const config = await ctx.rest.getAutomationConfig(id);
 				return jsonResult({ id, config });

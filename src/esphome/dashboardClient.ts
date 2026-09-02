@@ -55,7 +55,7 @@ export class EsphomeError extends Error {
 	}
 }
 
-function buildAuthHeaders(config: Config): Record<string, string> {
+export function buildAuthHeaders(config: Config): Record<string, string> {
 	const headers: Record<string, string> = {};
 	const { token, username, password } = config.esphome;
 	if (token) {
@@ -76,14 +76,21 @@ function toWebSocketUrl(httpUrl: string, path: string): string {
 	return `${base}${path}`;
 }
 
+/**
+ * @param baseUrlOverride  A dashboard URL found at runtime (see `discovery.ts`)
+ *   rather than configured. Lets an auto-discovered dashboard drive exactly the
+ *   same client — including the streaming build commands — instead of being a
+ *   second, weaker code path.
+ */
 export function createEsphomeDashboardClient(
 	config: Config,
-	logger: Logger
+	logger: Logger,
+	baseUrlOverride?: string
 ): EsphomeDashboardClient {
-	const baseUrl = config.esphome.dashboardUrl;
+	const baseUrl = baseUrlOverride ?? config.esphome.dashboardUrl;
 
 	function assertEnabled(): void {
-		if (!config.esphome.enabled) {
+		if (!baseUrl) {
 			throw new EsphomeError(
 				"ESPHome dashboard is not configured. Set ESPHOME_DASHBOARD_URL to enable ESPHome tools."
 			);

@@ -360,7 +360,12 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
 			// Brokered ESPHome only when brokering HA and no direct dashboard URL is
 			// set (a direct URL wins, since it also supports streaming builds).
 			brokered: brokered && esphomeUrl.length === 0,
-			enabled: esphomeUrl.length > 0 || (brokered && esphomeUrl.length === 0)
+			// Enabled wherever there is *some* route to a home, because the
+			// dashboard address no longer has to be configured to be found —
+			// `esphome/discovery.ts` derives it from the Supervisor and probes it.
+			// Gating on ESPHOME_DASHBOARD_URL here would switch the tools off
+			// before discovery ever got a chance to run.
+			enabled: esphomeUrl.length > 0 || brokered || (env.HA_URL ?? "").trim().length > 0
 		},
 		nodered: {
 			url: noderedUrl,

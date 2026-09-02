@@ -91,16 +91,26 @@ policy (see [Safety](#safety)).
 > an allowlisted subset via `POST /api/v1/instances/<id>/ha/ws/command`.
 | `ha_fire_event` | Fire a custom event on the event bus. |
 
-### ESPHome (`ESPHOME_DASHBOARD_URL`, or brokered to a relay-connected HA)
+### ESPHome (auto-discovered; or `ESPHOME_DASHBOARD_URL`, or brokered to a relay-connected HA)
 
 | Tool | Description |
 | --- | --- |
+| `esphome_dashboard_info` | How ESPHome is reached, and whether flashing/logs are available right now. |
 | `esphome_list_devices` | List dashboard configurations/devices. |
 | `esphome_get_config` | Read a configuration's YAML. |
 | `esphome_save_config` | Write a configuration's YAML (write-gated). |
 | `esphome_validate` | Validate a configuration. |
 | `esphome_compile` | Compile firmware. |
-| `esphome_upload` | Compile + flash a device, OTA by default (write-gated). |
+| `esphome_upload` | Compile + flash a device over the air; validates first (write-gated). |
+| `esphome_logs` | Read a device's live logs — boot, wifi, sensors, crashes. |
+| `esphome_clean` | Delete cached build files after a stale-build compile failure (write-gated). |
+
+You normally do **not** need to set `ESPHOME_DASHBOARD_URL`. When brokered, every
+command — builds and logs included — goes through the VomeHome relay, so there is
+nothing to configure and no port to open. In direct mode the server asks the
+Supervisor which port the ESPHome add-on publishes, works out the host from
+`HA_URL` (or from the URL Home Assistant reports for itself), and probes the
+result. Set the variable to pin a specific dashboard.
 
 ### Node-RED (`NODERED_URL`)
 
@@ -599,12 +609,28 @@ few traces per item (5 by default) and none from before the last restart, so
 ## ESPHome notes
 
 - REST endpoints (`/devices`, `/edit`) are used for listing and reading/writing
-  YAML.
-- `validate`, `compile` and `upload` are WebSocket command channels. The dashboard
-  authorises these with its own cookie/XSRF when a **dashboard password** is set,
-  so these commands work against **password-less** dashboards or ones reachable on
-  a trusted network / behind an auth-terminating proxy. Token/basic auth here only
-  helps for the latter.
+  YAML. These work over the VomeHome relay as well as directly.
+- `validate`, `compile`, `upload`, `logs` and `clean` are WebSocket command
+  channels on the dashboard. Over the relay they are brokered as **jobs**: the
+  portal starts one and this client polls it, which is what lets a multi-minute
+  compile survive the ordinary HTTP timeouts in between.
+- **The relay is preferred over reaching the dashboard directly**, even when both
+  would work. Going direct skips the portal's per-instance scope checks and its
+  audit log — a revoked token would still be able to flash a device that happened
+  to share a network with the agent. It is also the only route that works on a
+  default HAOS install, where the add-on's web port is disabled and its ingress
+  admits only the Supervisor and localhost.
+- **Discovery** (`src/esphome/discovery.ts`) finds a dashboard for direct mode,
+  where there is no relay and so no policy layer to bypass. Call
+  `esphome_dashboard_info` to see which mode is active and, when nothing is
+  reachable, every address that was tried and how each failed.
+- The dashboard authorises WebSocket commands with its own cookie/XSRF when a
+  **dashboard password** is set, so these commands work against **password-less**
+  dashboards or ones reachable on a trusted network / behind an auth-terminating
+  proxy. Token/basic auth here only helps for the latter.
+- `esphome_upload` validates before it flashes. A device that takes a bad build is
+  offline until someone reaches it with a cable, so the cheap check runs first;
+  pass `skip_validate: true` to bypass it.
 
 ---
 
@@ -668,7 +694,11 @@ tests/                  # vitest unit tests
   automatically so an agent can try changes there before touching a real home,
   then promote what works. (Requires the portal API endpoints described in
   [`project_outline.md`](./project_outline.md).)
-- ESPHome live-log streaming and device adoption.
+- **ESPHome over the relay — shipped.** Builds, flashing and device logs are
+  brokered as polled jobs, so a remote agent can flash hardware with no inbound
+  exposure and with scope checks and audit in front of every command. Next:
+  device adoption (the `/import` + wizard flow), so an agent can take a brand-new
+  board from unflashed to working entity without a UI step.
 - **Node-RED** — flow read/write/deploy shipped. Next: brokering the admin API
   through VomeHome (as HA and the ESPHome REST subset already are) so a
   relay-connected home needs no directly-reachable Node-RED URL, and a flow

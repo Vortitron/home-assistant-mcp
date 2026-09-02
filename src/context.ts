@@ -1,5 +1,5 @@
 /**
- * Builds a {@link ToolContext} — everything the 56 registered tools need.
+ * Builds a {@link ToolContext} — everything the 59 registered tools need.
  *
  * Split out of index.ts so the stdio server (one context for the process, from
  * the environment) and the HTTP server (one context per MCP session, from that
@@ -12,8 +12,8 @@ import type { Logger } from "./logger.js";
 import { createHaRestClient } from "./ha/restClient.js";
 import { createHaWsClient } from "./ha/wsClient.js";
 import { createBrokeredWsClient } from "./ha/brokeredClient.js";
-import { createEsphomeDashboardClient } from "./esphome/dashboardClient.js";
 import { createBrokeredEsphomeDashboardClient } from "./esphome/brokeredDashboardClient.js";
+import { createResolvingEsphomeClient } from "./esphome/resolvingClient.js";
 import { createNodeRedClient } from "./nodered/client.js";
 import { createVomeHomeClient } from "./vomehome/client.js";
 import { createInstanceManager } from "./vomehome/instances.js";
@@ -38,9 +38,19 @@ export function createToolContext(config: Config, logger: Logger): ToolContext {
 	const directRest = config.brokered ? undefined : createHaRestClient(config, logger, ws);
 	const instances = createInstanceManager(config, logger, directRest);
 	instancesRef.current = instances;
-	const esphome = config.esphome.brokered
+	// ESPHome resolves its own route on first use: a configured dashboard URL,
+	// else one discovered on the network, else the relay's REST subset. The
+	// brokered client is built here only as that last fallback.
+	const brokeredEsphome = config.esphome.brokered
 		? createBrokeredEsphomeDashboardClient(config, logger, () => instances.activeId())
-		: createEsphomeDashboardClient(config, logger);
+		: null;
+	const esphome = createResolvingEsphomeClient({
+		config,
+		logger,
+		sendCommand: (command) => ws.sendCommand(command),
+		brokered: brokeredEsphome,
+		activeId: () => instances.activeId()
+	});
 	const nodered = createNodeRedClient(config, logger);
 	const vomehome = createVomeHomeClient(config, logger);
 	return {

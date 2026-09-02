@@ -39,8 +39,18 @@ describe("brokered ESPHome detection", () => {
 		expect(config.esphome.brokered).toBe(false);
 	});
 
-	it("is disabled when neither brokered nor a dashboard URL is configured", () => {
+	it("stays enabled with a direct HA and no dashboard URL, so discovery can run", () => {
+		// The dashboard address no longer has to be configured to be usable:
+		// esphome/discovery.ts derives it from the Supervisor and probes it.
+		// Gating on ESPHOME_DASHBOARD_URL would switch the tools off before that
+		// ever happened, which is what made agents report ESPHome as unavailable.
 		const config = loadConfig({ HA_URL: "http://ha:8123", HA_TOKEN: "t" });
+		expect(config.esphome.enabled).toBe(true);
+		expect(config.esphome.brokered).toBe(false);
+	});
+
+	it("is disabled only when there is no route to a home at all", () => {
+		const config = loadConfig({});
 		expect(config.esphome.enabled).toBe(false);
 		expect(config.esphome.brokered).toBe(false);
 	});
@@ -84,10 +94,76 @@ describe("createBrokeredEsphomeDashboardClient", () => {
 		expect(JSON.parse((init as RequestInit).body as string)).toEqual({ yaml: "esphome:\n  name: lr\n" });
 	});
 
-	it("rejects streaming build commands with a direct-dashboard hint", async () => {
+	it("runs a build command as a polled job and returns its output", async () => {
+		// Start, then poll from a cursor until the job reports done — the shape
+		// that lets a multi-minute compile survive ordinary HTTP timeouts.
+		const fetchMock = vi
+			.fn()
+			.mockResolvedValueOnce(jsonResponse({ job_id: "job-1" }))
+			.mockResolvedValueOnce(
+				jsonResponse({ lines: ["Compiling\n"], cursor: 1, done: false })
+			)
+			.mockResolvedValueOnce(
+				jsonResponse({ lines: ["Done\n"], cursor: 2, done: true, exit_code: 0 })
+			);
+		vi.stubGlobal("fetch", fetchMock);
+
+		const result = await client().runCommand({
+			command: "compile",
+			configuration: "lr.yaml"
+		});
+
+		expect(result.exitCode).toBe(0);
+		expect(result.output).toBe("Compiling\nDone\n");
+		const [startUrl, startInit] = fetchMock.mock.calls[0]!;
+		expect(startUrl).toBe("https://vome.io/api/v1/instances/rly-1/esphome/stream");
+		expect(JSON.parse((startInit as RequestInit).body as string)).toEqual({
+			command: "compile",
+			configuration: "lr.yaml"
+		});
+		expect(String(fetchMock.mock.calls[2]![0])).toContain("cursor=1");
+	});
+
+	it("reports a job that ended without an exit code as a failure", async () => {
+		const fetchMock = vi
+			.fn()
+			.mockResolvedValueOnce(jsonResponse({ job_id: "job-1" }))
+			.mockResolvedValueOnce(
+				jsonResponse({
+					lines: [],
+					cursor: 0,
+					done: true,
+					error: "The ESPHome add-on is not running."
+				})
+			);
+		vi.stubGlobal("fetch", fetchMock);
+
 		await expect(
-			client().runCommand({ command: "compile", configuration: "lr.yaml" })
-		).rejects.toThrow(/ESPHOME_DASHBOARD_URL/);
+			client().runCommand({ command: "upload", configuration: "lr.yaml" })
+		).rejects.toThrow(/add-on is not running/);
+	});
+
+	it("cancels the job on the home when it gives up waiting", async () => {
+		// Otherwise an abandoned build would keep running on the user's hardware.
+		const fetchMock = vi
+			.fn()
+			.mockResolvedValueOnce(jsonResponse({ job_id: "job-1" }))
+			// A fresh Response each time: a body can only be read once.
+			.mockImplementation(async () => jsonResponse({ lines: [], cursor: 0, done: false }));
+		vi.stubGlobal("fetch", fetchMock);
+
+		const result = await client().runCommand({
+			command: "compile",
+			configuration: "lr.yaml",
+			timeoutMs: 600
+		});
+
+		expect(result.truncated).toBe(true);
+		const deletes = fetchMock.mock.calls.filter(
+			([, init]) => (init as RequestInit | undefined)?.method === "DELETE"
+		);
+		expect(deletes).toHaveLength(1);
+		expect(String(deletes[0]![0])).toContain("/esphome/stream/job-1");
 	});
 
 	it("surfaces a broker error body", async () => {

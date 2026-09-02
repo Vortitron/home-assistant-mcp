@@ -6,6 +6,20 @@ import { errorResult, jsonResult, runTool, textResult, type ToolContext } from "
 
 const SECONDS_TO_MS = 1000;
 
+/**
+ * Shared tail for the streaming build commands.
+ *
+ * These run over the VomeHome relay when brokered, and against a direct dashboard
+ * otherwise — so in normal use they simply work, and the description says so.
+ * That wording is deliberate: told "not available in brokered mode", models
+ * concluded the feature did not exist and reported that to users, when the
+ * capability was there the whole time.
+ */
+const STREAM_AVAILABILITY =
+	" Works over the VomeHome relay (no ports to open) or against a directly-reachable " +
+	"dashboard. If a call reports no dashboard, run esphome_dashboard_info to see why " +
+	"rather than telling the user this is unsupported.";
+
 export function registerEsphomeTools(server: McpServer, ctx: ToolContext): void {
 	const runStream = async (
 		command: EsphomeStreamCommand,
@@ -29,11 +43,41 @@ export function registerEsphomeTools(server: McpServer, ctx: ToolContext): void 
 	};
 
 	server.registerTool(
+		"esphome_dashboard_info",
+		{
+			title: "Check ESPHome capability",
+			description:
+				"Report how ESPHome is reached and what is possible right now: whether commands go through " +
+				"the VomeHome relay or straight to a dashboard, which URL is in use, and whether the " +
+				"streaming commands (validate/compile/upload/run/logs) are available. When they are not, " +
+				"the result lists every address that was tried and why each failed. Call this before telling " +
+				"a user that flashing or log-reading is unavailable — it usually is available.",
+			inputSchema: {},
+			annotations: { readOnlyHint: true, openWorldHint: true }
+		},
+		async () =>
+			runTool(ctx.logger, "esphome_dashboard_info", async () => {
+				const status = await ctx.esphome.describe();
+				return jsonResult({
+					mode: status.mode,
+					dashboard_url: status.url,
+					streaming_commands_available: status.streaming,
+					can_flash: status.streaming,
+					can_read_device_logs: status.streaming,
+					can_list_and_edit_yaml: status.mode !== "none",
+					instance: status.instance,
+					note: status.note,
+					addresses_tried: status.attempts
+				});
+			})
+	);
+
+	server.registerTool(
 		"esphome_list_devices",
 		{
 			title: "List ESPHome devices",
 			description:
-				"List devices/configurations known to the ESPHome dashboard, including their configuration filenames (needed by the other ESPHome tools). Works with a direct ESPHOME_DASHBOARD_URL or in VomeHome brokered mode.",
+				"List devices/configurations known to the ESPHome dashboard, including their configuration filenames (needed by the other ESPHome tools). Works with a direct or auto-discovered dashboard, and in VomeHome brokered mode.",
 			inputSchema: {},
 			annotations: { readOnlyHint: true, openWorldHint: true }
 		},
@@ -67,7 +111,7 @@ export function registerEsphomeTools(server: McpServer, ctx: ToolContext): void 
 		{
 			title: "Save ESPHome config",
 			description:
-				"Write YAML to an ESPHome configuration file. Requires HA_ALLOW_WRITE=true and HA_ALLOW_CONFIG_WRITE=true. Follow with esphome_validate to confirm it compiles.",
+				"Write YAML to an ESPHome configuration file. Requires HA_ALLOW_WRITE=true and HA_ALLOW_CONFIG_WRITE=true. Follow with esphome_validate to confirm it compiles, then esphome_upload to flash it.",
 			inputSchema: {
 				configuration: z.string().describe("Configuration filename, e.g. 'living-room.yaml'."),
 				yaml: z.string().describe("Full YAML content to write.")
@@ -91,7 +135,8 @@ export function registerEsphomeTools(server: McpServer, ctx: ToolContext): void 
 		{
 			title: "Validate ESPHome config",
 			description:
-				"Validate (compile-check the config of) an ESPHome configuration and return the output. Fast way to confirm a YAML edit is correct before compiling/flashing. Streams output, so needs a direct ESPHOME_DASHBOARD_URL (not available in VomeHome brokered mode). Works on dashboards without a dashboard password.",
+				"Validate (compile-check) an ESPHome configuration and return the output. The fast way to confirm a YAML edit is correct before compiling or flashing." +
+				STREAM_AVAILABILITY,
 			inputSchema: {
 				configuration: z.string().describe("Configuration filename, e.g. 'living-room.yaml'."),
 				timeout_seconds: z.number().int().positive().optional().describe("Override the command timeout.")
@@ -109,7 +154,8 @@ export function registerEsphomeTools(server: McpServer, ctx: ToolContext): void 
 		{
 			title: "Compile ESPHome firmware",
 			description:
-				"Compile firmware for an ESPHome configuration and return the build output. Can take several minutes. Streams output, so needs a direct ESPHOME_DASHBOARD_URL (not available in VomeHome brokered mode). Works on dashboards without a dashboard password.",
+				"Compile firmware for an ESPHome configuration and return the build output. Can take several minutes." +
+				STREAM_AVAILABILITY,
 			inputSchema: {
 				configuration: z.string().describe("Configuration filename, e.g. 'living-room.yaml'."),
 				timeout_seconds: z.number().int().positive().optional().describe("Override the command timeout.")
@@ -125,27 +171,112 @@ export function registerEsphomeTools(server: McpServer, ctx: ToolContext): void 
 	server.registerTool(
 		"esphome_upload",
 		{
-			title: "Upload/flash ESPHome firmware",
+			title: "Flash ESPHome firmware (OTA)",
 			description:
-				"Compile and upload firmware to a device (OTA by default). 'port' is the device address or 'OTA'. Requires HA_ALLOW_WRITE=true. Streams output, so needs a direct ESPHOME_DASHBOARD_URL (not available in VomeHome brokered mode). Works on dashboards without a dashboard password.",
+				"Compile and flash firmware to a device over the air. This is how you update an ESPHome device — no cable, no manual step in the ESPHome UI. 'port' is the device address or 'OTA' (the default). Requires write access." +
+				" By default the config is validated first and the flash is abandoned if validation fails; pass skip_validate=true to bypass that." +
+				STREAM_AVAILABILITY,
 			inputSchema: {
 				configuration: z.string().describe("Configuration filename, e.g. 'living-room.yaml'."),
 				port: z.string().optional().describe("Device address (IP/hostname) or 'OTA'. Defaults to 'OTA'."),
+				skip_validate: z
+					.boolean()
+					.optional()
+					.describe("Skip the pre-flight validation step. Default false."),
 				timeout_seconds: z.number().int().positive().optional().describe("Override the command timeout.")
 			},
 			annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true }
 		},
-		async ({ configuration, port, timeout_seconds }) =>
+		async ({ configuration, port, skip_validate, timeout_seconds }) =>
 			runTool(ctx.logger, "esphome_upload", async () => {
 				if (!ctx.instances.currentSafety().allowWrite) {
 					return errorResult(
-						"Refused: uploading firmware requires write access for the active instance."
+						"Refused: flashing firmware requires write access for the active instance."
 					);
+				}
+				// Pre-flight. A device that takes a bad build is offline until
+				// someone reaches it with a cable, so the cheap check runs first
+				// unless the caller explicitly opts out.
+				if (!skip_validate) {
+					const check = await ctx.esphome.runCommand({ command: "validate", configuration });
+					if (check.exitCode !== 0) {
+						return jsonResult({
+							command: "upload",
+							configuration,
+							success: false,
+							stage: "validate",
+							error:
+								"Validation failed, so nothing was flashed. Fix the config and retry " +
+								"(or pass skip_validate=true to flash anyway).",
+							exit_code: check.exitCode,
+							output: check.output
+						});
+					}
 				}
 				return runStream("upload", configuration, {
 					port: port ?? "OTA",
 					timeoutSeconds: timeout_seconds
 				});
+			})
+	);
+
+	server.registerTool(
+		"esphome_logs",
+		{
+			title: "Read ESPHome device logs",
+			description:
+				"Stream the live logs from an ESPHome device and return what was captured. This is the way to " +
+				"see what a device is actually doing — boot messages, wifi/API connection problems, sensor " +
+				"readings, crashes and reboot reasons. Use it after flashing, or whenever a device is behaving " +
+				"oddly. Returns once the timeout elapses, so set timeout_seconds to how long you want to watch." +
+				STREAM_AVAILABILITY,
+			inputSchema: {
+				configuration: z.string().describe("Configuration filename, e.g. 'living-room.yaml'."),
+				port: z
+					.string()
+					.optional()
+					.describe("Device address (IP/hostname) or 'OTA' for logs over the network. Defaults to 'OTA'."),
+				timeout_seconds: z
+					.number()
+					.int()
+					.positive()
+					.optional()
+					.describe("How long to capture logs for. Defaults to the standard command timeout.")
+			},
+			annotations: { readOnlyHint: true, openWorldHint: true }
+		},
+		async ({ configuration, port, timeout_seconds }) =>
+			runTool(ctx.logger, "esphome_logs", async () =>
+				runStream("logs", configuration, {
+					port: port ?? "OTA",
+					timeoutSeconds: timeout_seconds
+				})
+			)
+	);
+
+	server.registerTool(
+		"esphome_clean",
+		{
+			title: "Clean ESPHome build files",
+			description:
+				"Delete the cached build files for a configuration. Use this when a compile fails for reasons " +
+				"the YAML does not explain — a stale build directory after an ESPHome version change is the " +
+				"usual cause. Then compile again." +
+				STREAM_AVAILABILITY,
+			inputSchema: {
+				configuration: z.string().describe("Configuration filename, e.g. 'living-room.yaml'."),
+				timeout_seconds: z.number().int().positive().optional().describe("Override the command timeout.")
+			},
+			annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true }
+		},
+		async ({ configuration, timeout_seconds }) =>
+			runTool(ctx.logger, "esphome_clean", async () => {
+				if (!ctx.instances.currentSafety().allowWrite) {
+					return errorResult(
+						"Refused: cleaning build files requires write access for the active instance."
+					);
+				}
+				return runStream("clean", configuration, { timeoutSeconds: timeout_seconds });
 			})
 	);
 }

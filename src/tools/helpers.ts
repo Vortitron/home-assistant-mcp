@@ -5,7 +5,7 @@ import type { HaRestClient } from "../ha/restClient.js";
 import { HaApiError } from "../ha/restClient.js";
 import { VomeHomeError } from "../vomehome/client.js";
 import type { HaWsClient } from "../ha/wsClient.js";
-import type { EsphomeDashboardClient } from "../esphome/dashboardClient.js";
+import type { ResolvingEsphomeClient } from "../esphome/resolvingClient.js";
 import { NodeRedError } from "../nodered/client.js";
 import type { NodeRedClient } from "../nodered/client.js";
 import type { VomeHomeClient } from "../vomehome/client.js";
@@ -21,7 +21,7 @@ export interface ToolContext {
 	/** Stable HA REST client that always targets the active instance (via `instances`). */
 	rest: HaRestClient;
 	ws: HaWsClient;
-	esphome: EsphomeDashboardClient;
+	esphome: ResolvingEsphomeClient;
 	nodered: NodeRedClient;
 	vomehome: VomeHomeClient;
 	/** Multi-instance access manager: active instance + per-instance write/config. */

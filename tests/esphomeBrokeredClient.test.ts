@@ -159,6 +159,9 @@ describe("createBrokeredEsphomeDashboardClient", () => {
 		});
 
 		expect(result.truncated).toBe(true);
+		// Flagged so the tool layer can tell "we stopped watching" apart from
+		// "the command failed" — the difference between the two for `logs`.
+		expect(result.timedOut).toBe(true);
 		const deletes = fetchMock.mock.calls.filter(
 			([, init]) => (init as RequestInit | undefined)?.method === "DELETE"
 		);

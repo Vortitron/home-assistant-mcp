@@ -37,6 +37,12 @@ export interface EsphomeCommandResult {
 	exitCode: number | null;
 	output: string;
 	truncated: boolean;
+	/**
+	 * True when *we* stopped watching because the timeout elapsed, rather than
+	 * the command reporting a result. For an open-ended command like `logs`
+	 * that is the normal ending, not a failure.
+	 */
+	timedOut?: boolean;
 }
 
 export interface EsphomeDashboardClient {
@@ -143,7 +149,9 @@ export function createEsphomeDashboardClient(
 			let settled = false;
 			const ws = new WebSocket(url, { headers: buildAuthHeaders(config) });
 
+			let timedOut = false;
 			const overallTimer = setTimeout(() => {
+				timedOut = true;
 				finish(null);
 			}, timeoutMs);
 
@@ -163,7 +171,8 @@ export function createEsphomeDashboardClient(
 					configuration: request.configuration,
 					exitCode,
 					output: lines.join(""),
-					truncated
+					truncated,
+					timedOut
 				});
 			}
 

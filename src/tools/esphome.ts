@@ -24,7 +24,7 @@ export function registerEsphomeTools(server: McpServer, ctx: ToolContext): void 
 	const runStream = async (
 		command: EsphomeStreamCommand,
 		configuration: string,
-		options: { port?: string; timeoutSeconds?: number } = {}
+		options: { port?: string; timeoutSeconds?: number; openEnded?: boolean } = {}
 	) => {
 		const result = await ctx.esphome.runCommand({
 			command,
@@ -32,13 +32,27 @@ export function registerEsphomeTools(server: McpServer, ctx: ToolContext): void 
 			port: options.port,
 			timeoutMs: options.timeoutSeconds ? options.timeoutSeconds * SECONDS_TO_MS : undefined
 		});
+		// `logs` has no natural end — it runs until the caller stops watching,
+		// so reaching the timeout is how it is *supposed* to finish. Reporting
+		// that as success:false told agents a log read had failed when it had
+		// done exactly what was asked.
+		const stoppedByTimeout = result.timedOut === true;
+		const success = stoppedByTimeout ? options.openEnded === true : result.exitCode === 0;
 		return jsonResult({
 			command: result.command,
 			configuration: result.configuration,
 			exit_code: result.exitCode,
-			success: result.exitCode === 0,
+			success,
+			stopped: stoppedByTimeout ? "timeout" : "completed",
 			truncated: result.truncated,
-			output: result.output
+			output: result.output,
+			...(stoppedByTimeout && options.openEnded
+				? {
+						note:
+							"Streaming ran for the full timeout and was stopped. That is the normal " +
+							"end of a log stream, not a failure; raise timeout_seconds to watch longer."
+					}
+				: {})
 		});
 	};
 
@@ -231,7 +245,8 @@ export function registerEsphomeTools(server: McpServer, ctx: ToolContext): void 
 			runTool(ctx.logger, "esphome_logs", async () =>
 				runStream("logs", configuration, {
 					port: port ?? "OTA",
-					timeoutSeconds: timeout_seconds
+					timeoutSeconds: timeout_seconds,
+					openEnded: true
 				})
 			)
 	);

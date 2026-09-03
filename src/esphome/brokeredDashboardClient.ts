@@ -156,7 +156,8 @@ export function createBrokeredEsphomeDashboardClient(
 					configuration: request.configuration,
 					exitCode: null,
 					output: lines.join(""),
-					truncated: true
+					truncated: true,
+					timedOut: true
 				};
 			}
 			await new Promise((resolve) => setTimeout(resolve, wait));

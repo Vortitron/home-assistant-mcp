@@ -96,7 +96,8 @@ policy (see [Safety](#safety)).
 | Tool | Description |
 | --- | --- |
 | `esphome_dashboard_info` | How ESPHome is reached, and whether flashing/logs are available right now. |
-| `esphome_list_devices` | List dashboard configurations/devices. |
+| `esphome_list_devices` | List dashboard configurations/devices; flags configs needing renames. |
+| `esphome_list_migrations` | ESPHome spellings a config still uses that have been renamed. |
 | `esphome_get_config` | Read a configuration's YAML. |
 | `esphome_save_config` | Write a configuration's YAML (write-gated). |
 | `esphome_validate` | Validate a configuration. |
@@ -153,6 +154,16 @@ stays behind a full browser login on the portal.
 | --- | --- |
 | `ha_supervisor_api` | Call a Supervisor endpoint via `supervisor/api` (store, add-ons, …). |
 | `ha_addon_install_vome` | Add `https://github.com/Vortitron/VomeSync` to the store, install **Vome**, and start it. |
+| `ha_config_entry_options` | Read or set an integration's options — including ESPHome's `allow_service_calls`. |
+
+`ha_config_entry_options` reaches settings that exist nowhere else in the API.
+The one people ask for is ESPHome's **"allow the device to perform Home
+Assistant actions"** (`allow_service_calls`): a device cannot call HA services
+without it, and it is several clicks deep in the UI, so it is routinely
+forgotten. Get the entry id from `ha_list_config_entries` with `domain=esphome`,
+call with `entry_id` alone to read the form, then again with `user_input`.
+Submitting sets *every* field on the form, so send the values you read back with
+only what you meant to change altered.
 
 Needs a Supervised/HAOS target (e.g. a VomeHome sandbox from `vomehome_create_instance`, or the `ha-plc-sandbox` MCP entry). In brokered mode the API key's scopes decide — no `HA_ALLOW_WRITE` / `VOMEHOME_ALLOW_CREATE` env flags required. Container-only HA has no add-on store — use HACS for the integration there.
 

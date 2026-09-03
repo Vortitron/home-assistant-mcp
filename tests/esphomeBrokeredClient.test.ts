@@ -169,6 +169,24 @@ describe("createBrokeredEsphomeDashboardClient", () => {
 		expect(String(deletes[0]![0])).toContain("/esphome/stream/job-1");
 	});
 
+	it("reads pending migrations through the broker", async () => {
+		const fetchMock = vi.fn(async () =>
+			jsonResponse({
+				migrations_pending: true,
+				required: false,
+				changes: [{ old: "homeassistant.service", new: "homeassistant.action" }]
+			})
+		);
+		vi.stubGlobal("fetch", fetchMock);
+
+		const report = (await client().getMigrations("lr.yaml")) as { migrations_pending: boolean };
+
+		expect(report.migrations_pending).toBe(true);
+		expect(String(fetchMock.mock.calls[0]![0])).toBe(
+			"https://vome.io/api/v1/instances/rly-1/esphome/migrations?configuration=lr.yaml"
+		);
+	});
+
 	it("surfaces a broker error body", async () => {
 		const fetchMock = vi.fn(async () =>
 			jsonResponse({ error: "Home Assistant is offline (no relay connection)." }, 502)

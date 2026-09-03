@@ -20,6 +20,31 @@ const STREAM_AVAILABILITY =
 	"dashboard. If a call reports no dashboard, run esphome_dashboard_info to see why " +
 	"rather than telling the user this is unsupported.";
 
+/**
+ * Configuration filenames the dashboard flagged as needing a rename.
+ *
+ * Tolerant of shape: the listing is the dashboard's own model and has changed
+ * before, so a missing or unexpected field means "nothing to report" rather
+ * than an error in an unrelated tool.
+ */
+function pendingMigrationConfigs(devices: unknown): string[] {
+	const rows =
+		devices && typeof devices === "object" && Array.isArray((devices as { configured?: unknown }).configured)
+			? (devices as { configured: unknown[] }).configured
+			: Array.isArray(devices)
+				? devices
+				: [];
+	const out: string[] = [];
+	for (const row of rows) {
+		if (!row || typeof row !== "object") continue;
+		const entry = row as { migration_available?: unknown; configuration?: unknown };
+		if (entry.migration_available === true && typeof entry.configuration === "string") {
+			out.push(entry.configuration);
+		}
+	}
+	return out;
+}
+
 export function registerEsphomeTools(server: McpServer, ctx: ToolContext): void {
 	const runStream = async (
 		command: EsphomeStreamCommand,
@@ -98,7 +123,22 @@ export function registerEsphomeTools(server: McpServer, ctx: ToolContext): void 
 		async () =>
 			runTool(ctx.logger, "esphome_list_devices", async () => {
 				const devices = await ctx.esphome.listDevices();
-				return jsonResult(devices);
+				// ESPHome shows a "Config migration available" banner in its own
+				// UI; nothing surfaces it to an agent, so deprecated spellings
+				// get carried forward until a release drops them. The flag is
+				// already in each row — this lifts it where it will be read.
+				const pending = pendingMigrationConfigs(devices);
+				return jsonResult(
+					pending.length > 0
+						? {
+								devices,
+								configs_with_pending_migrations: pending,
+								migration_hint:
+									"These configs use ESPHome spellings that have been renamed. " +
+									"Call esphome_list_migrations on one to see the exact renames."
+							}
+						: devices
+				);
 			})
 	);
 
@@ -117,6 +157,30 @@ export function registerEsphomeTools(server: McpServer, ctx: ToolContext): void 
 			runTool(ctx.logger, "esphome_get_config", async () => {
 				const yaml = await ctx.esphome.getConfig(configuration);
 				return textResult(yaml);
+			})
+	);
+
+	server.registerTool(
+		"esphome_list_migrations",
+		{
+			title: "Check a config for ESPHome renames",
+			description:
+				"Report the ESPHome spellings a device's YAML still uses that have since been " +
+				"renamed — the same 'Config migration available' notice the ESPHome dashboard shows " +
+				"in its own UI, which is otherwise invisible from here. Each entry names the old and " +
+				"new spelling and the ESPHome release that changed it.\n\n" +
+				"`required: true` means the installed ESPHome already rejects the old spelling, so the " +
+				"config will fail to compile until it is fixed; otherwise it still works but is on " +
+				"borrowed time. Apply a rename by editing the YAML with esphome_save_config.",
+			inputSchema: {
+				configuration: z.string().describe("Configuration filename, e.g. 'living-room.yaml'.")
+			},
+			annotations: { readOnlyHint: true, openWorldHint: true }
+		},
+		async ({ configuration }) =>
+			runTool(ctx.logger, "esphome_list_migrations", async () => {
+				const report = await ctx.esphome.getMigrations(configuration);
+				return jsonResult(report);
 			})
 	);
 

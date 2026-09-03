@@ -182,6 +182,7 @@ export function createResolvingEsphomeClient(options: {
 		getVersion: async () => (await client()).getVersion(),
 		getConfig: async (configuration) => (await client()).getConfig(configuration),
 		saveConfig: async (configuration, yaml) => (await client()).saveConfig(configuration, yaml),
+		getMigrations: async (configuration) => (await client()).getMigrations(configuration),
 		runCommand: async (request: EsphomeCommandRequest): Promise<EsphomeCommandResult> => {
 			const resolution = await current();
 			if (!resolution.client) {

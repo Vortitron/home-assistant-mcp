@@ -205,6 +205,8 @@ export function createBrokeredEsphomeDashboardClient(
 				{ method: "POST", body: { yaml } }
 			);
 		},
+		getMigrations: (configuration) =>
+			broker<unknown>(`/migrations?configuration=${encodeURIComponent(configuration)}`),
 		runCommand: runStreamJob
 	};
 }

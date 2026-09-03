@@ -52,6 +52,8 @@ export interface EsphomeDashboardClient {
 	getConfig(configuration: string): Promise<string>;
 	saveConfig(configuration: string, yaml: string): Promise<void>;
 	runCommand(request: EsphomeCommandRequest): Promise<EsphomeCommandResult>;
+	/** Which ESPHome rename rules this config still needs. */
+	getMigrations(configuration: string): Promise<unknown>;
 }
 
 export class EsphomeError extends Error {
@@ -230,6 +232,15 @@ export function createEsphomeDashboardClient(
 				method: "POST",
 				body: yaml
 			});
+		},
+		// The migration report is assembled by the Vome component from the
+		// dashboard's /ws API; a dashboard reached directly has no such endpoint.
+		getMigrations: async () => {
+			throw new EsphomeError(
+				"Pending-migration reporting is only available through the VomeHome relay, " +
+					"which is where the dashboard's /ws API is translated. Use a relay-connected " +
+					"Home Assistant, or open the ESPHome dashboard to see its migration banner."
+			);
 		},
 		runCommand
 	};

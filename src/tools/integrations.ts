@@ -277,6 +277,71 @@ export function registerIntegrationTools(server: McpServer, ctx: ToolContext): v
 	);
 
 	server.registerTool(
+		"ha_config_entry_options",
+		{
+			title: "Read or change an integration's options",
+			description:
+				"Open a config entry's *options* flow — the per-integration settings panel — and " +
+				"optionally submit answers to it. Call with entry_id alone to see the current form " +
+				"and its fields, then again with user_input to set them.\n\n" +
+				"This is the only way to reach switches that exist nowhere else in the API. The one " +
+				"asked for most: ESPHome's 'allow the device to perform Home Assistant actions' " +
+				"(field `allow_service_calls`), which a device needs before it can call HA services " +
+				"and which is buried several clicks deep in the UI. Also on that form: " +
+				"`subscribe_logs`. Get entry_id from ha_list_config_entries (domain=esphome).\n\n" +
+				"Submitting a form sets every field it contains, so read it first and send the values " +
+				"back with only the ones you mean to change altered — omitting a field is not the same " +
+				"as leaving it alone.",
+			inputSchema: {
+				entry_id: z
+					.string()
+					.optional()
+					.describe("Config entry to open the options flow for (from ha_list_config_entries)."),
+				flow_id: z.string().optional().describe("Existing options flow id to continue."),
+				user_input: z
+					.record(z.string(), z.unknown())
+					.optional()
+					.describe("Answers for the current step, e.g. { allow_service_calls: true }.")
+			},
+			annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true }
+		},
+		async ({ entry_id, flow_id, user_input }) =>
+			runTool(ctx.logger, "ha_config_entry_options", async () => {
+				const decision = evaluateConfigWrite(ctx.instances.currentSafety());
+				if (!decision.allowed) {
+					return errorResult(decision.reason);
+				}
+				if (flow_id) {
+					const step = await configEntriesPost<ConfigFlowStep>(
+						ctx,
+						`/config/config_entries/options/flow/${encodeURIComponent(flow_id)}`,
+						user_input ?? {}
+					);
+					return jsonResult({ step });
+				}
+				if (!entry_id) {
+					return errorResult(
+						"Provide entry_id to open an options flow, or flow_id to continue one."
+					);
+				}
+				const started = await configEntriesPost<ConfigFlowStep>(
+					ctx,
+					"/config/config_entries/options/flow",
+					{ handler: entry_id }
+				);
+				if (user_input && started.type === "form" && started.flow_id) {
+					const step = await configEntriesPost<ConfigFlowStep>(
+						ctx,
+						`/config/config_entries/options/flow/${encodeURIComponent(started.flow_id)}`,
+						user_input
+					);
+					return jsonResult({ started, step });
+				}
+				return jsonResult({ step: started });
+			})
+	);
+
+	server.registerTool(
 		"ha_integration_setup_vome",
 		{
 			title: "Add the Vome (vomesync) integration",

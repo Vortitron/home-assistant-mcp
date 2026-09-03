@@ -174,45 +174,27 @@ export function registerEsphomeTools(server: McpServer, ctx: ToolContext): void 
 			title: "Flash ESPHome firmware (OTA)",
 			description:
 				"Compile and flash firmware to a device over the air. This is how you update an ESPHome device — no cable, no manual step in the ESPHome UI. 'port' is the device address or 'OTA' (the default). Requires write access." +
-				" By default the config is validated first and the flash is abandoned if validation fails; pass skip_validate=true to bypass that." +
+				" The build runs first and a failed build never reaches the device." +
 				STREAM_AVAILABILITY,
 			inputSchema: {
 				configuration: z.string().describe("Configuration filename, e.g. 'living-room.yaml'."),
 				port: z.string().optional().describe("Device address (IP/hostname) or 'OTA'. Defaults to 'OTA'."),
-				skip_validate: z
-					.boolean()
-					.optional()
-					.describe("Skip the pre-flight validation step. Default false."),
 				timeout_seconds: z.number().int().positive().optional().describe("Override the command timeout.")
 			},
 			annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true }
 		},
-		async ({ configuration, port, skip_validate, timeout_seconds }) =>
+		async ({ configuration, port, timeout_seconds }) =>
 			runTool(ctx.logger, "esphome_upload", async () => {
 				if (!ctx.instances.currentSafety().allowWrite) {
 					return errorResult(
 						"Refused: flashing firmware requires write access for the active instance."
 					);
 				}
-				// Pre-flight. A device that takes a bad build is offline until
-				// someone reaches it with a cable, so the cheap check runs first
-				// unless the caller explicitly opts out.
-				if (!skip_validate) {
-					const check = await ctx.esphome.runCommand({ command: "validate", configuration });
-					if (check.exitCode !== 0) {
-						return jsonResult({
-							command: "upload",
-							configuration,
-							success: false,
-							stage: "validate",
-							error:
-								"Validation failed, so nothing was flashed. Fix the config and retry " +
-								"(or pass skip_validate=true to flash anyway).",
-							exit_code: check.exitCode,
-							output: check.output
-						});
-					}
-				}
+				// This used to pre-flight with `validate`, which was actively
+				// harmful: ESPHome Device Builder removed that endpoint, so the
+				// check failed on every current dashboard and took every flash
+				// with it. No safety was lost — `upload` compiles first and a
+				// failed build never reaches the device.
 				return runStream("upload", configuration, {
 					port: port ?? "OTA",
 					timeoutSeconds: timeout_seconds

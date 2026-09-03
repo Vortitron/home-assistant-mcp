@@ -610,10 +610,21 @@ few traces per item (5 by default) and none from before the last restart, so
 
 - REST endpoints (`/devices`, `/edit`) are used for listing and reading/writing
   YAML. These work over the VomeHome relay as well as directly.
-- `validate`, `compile`, `upload`, `logs` and `clean` are WebSocket command
-  channels on the dashboard. Over the relay they are brokered as **jobs**: the
-  portal starts one and this client polls it, which is what lets a multi-minute
-  compile survive the ordinary HTTP timeouts in between.
+- `validate`, `compile`, `upload`, `logs` and `clean` run over the dashboard's
+  multiplexed `/ws` API. Over the relay they are brokered as **jobs**: the portal
+  starts one and this client polls it, which is what lets a multi-minute compile
+  survive the ordinary HTTP timeouts in between.
+- **The Vome component owns the dashboard protocol.** ESPHome split its dashboard
+  into `esphome-device-builder`, which replaced the per-command WebSockets
+  (`/validate`, `/logs`, …) and the `/edit` REST endpoint with a single `/ws`
+  socket; the remaining legacy endpoints are documented upstream as deprecated.
+  The component translates `/ws` into the stable line/exit stream the relay
+  carries, so this client, the portal and the relay never learn that ESPHome
+  moved. Builds go through the dashboard's job queue, so an agent-triggered
+  build also shows up in its own "Firmware tasks" panel.
+- Requires the Vome add-on at **0.3.30 or later**. Older components speak a
+  protocol the dashboard no longer answers; the error says so and names the
+  version rather than blaming ESPHome.
 - **The relay is preferred over reaching the dashboard directly**, even when both
   would work. Going direct skips the portal's per-instance scope checks and its
   audit log — a revoked token would still be able to flash a device that happened

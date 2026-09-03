@@ -23,8 +23,7 @@ describe("loadConfig", () => {
 			HA_ALLOW_DOMAINS: "light,switch",
 			HA_TIMEOUT_MS: "5000",
 			MAX_RESULTS: "25",
-			LOG_LEVEL: "debug",
-			ESPHOME_DASHBOARD_URL: "http://esphome.local:6052/"
+			LOG_LEVEL: "debug"
 		});
 		expect(config.haUrl).toBe("http://homeassistant.local:8123");
 		expect(config.haToken).toBe("abc");
@@ -35,8 +34,8 @@ describe("loadConfig", () => {
 		expect(config.timeoutMs).toBe(5000);
 		expect(config.maxResults).toBe(25);
 		expect(config.logLevel).toBe("debug");
-		expect(config.esphome.enabled).toBe(true);
-		expect(config.esphome.dashboardUrl).toBe("http://esphome.local:6052");
+		// ESPHome rides the relay, so it is off until HA itself is brokered.
+		expect(config.esphome.enabled).toBe(false);
 	});
 
 	it("allows clearing the deny-list with an empty value", () => {

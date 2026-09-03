@@ -5,7 +5,7 @@ import { loadConfig } from "../src/config.js";
 import { createLogger } from "../src/logger.js";
 import type { HaRestClient } from "../src/ha/restClient.js";
 import type { HaWsClient } from "../src/ha/wsClient.js";
-import { createEsphomeDashboardClient } from "../src/esphome/dashboardClient.js";
+import { createUnavailableEsphomeClient } from "../src/esphome/client.js";
 import { createNodeRedClient } from "../src/nodered/client.js";
 import { createVomeHomeClient, type VomeHomeClient } from "../src/vomehome/client.js";
 import { createInstanceManager } from "../src/vomehome/instances.js";
@@ -55,7 +55,7 @@ function buildHarness(
 		logger,
 		rest: mockRest,
 		ws: (options.ws ?? {}) as unknown as HaWsClient,
-		esphome: createEsphomeDashboardClient(config, logger),
+		esphome: createUnavailableEsphomeClient(),
 		nodered: createNodeRedClient(config, logger),
 		vomehome: (options.vomehome ?? createVomeHomeClient(config, logger)) as VomeHomeClient,
 		instances
@@ -208,12 +208,15 @@ describe("ha_render_template", () => {
 	});
 });
 
-describe("esphome tools when not configured", () => {
-	it("returns a helpful error pointing at ESPHOME_DASHBOARD_URL", async () => {
+describe("esphome tools with no route to a home", () => {
+	it("names the relay and the add-on rather than failing obscurely", async () => {
+		// Every ESPHome tool fails the same way and says what to do about it,
+		// instead of surfacing whatever connection error the first call hit.
 		const server = buildHarness();
 		const result = await server.call("esphome_list_devices");
 		expect(result.isError).toBe(true);
-		expect(textOf(result)).toMatch(/ESPHOME_DASHBOARD_URL/);
+		expect(textOf(result)).toMatch(/VOMEHOME_TOKEN/);
+		expect(textOf(result)).toMatch(/Vome add-on/);
 	});
 });
 

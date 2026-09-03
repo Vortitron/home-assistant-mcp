@@ -94,8 +94,8 @@ only for now (no broker), matching ESPHome's streaming-build precedent.
 See `.env.example` / the README table. Direct mode: `HA_URL`, `HA_TOKEN`.
 Brokered mode (no HA token): `VOMEHOME_TOKEN` + `VOMEHOME_INSTANCE_ID` (and
 empty `HA_TOKEN`). Writes: `HA_ALLOW_WRITE`, `HA_DENY_DOMAINS`,
-`HA_ALLOW_DOMAINS`, `HA_ALLOW_CONFIG_WRITE`. ESPHome: `ESPHOME_DASHBOARD_URL`
-(+ optional auth). Node-RED: `NODERED_URL` (+ optional `NODERED_TOKEN` or
+`HA_ALLOW_DOMAINS`, `HA_ALLOW_CONFIG_WRITE`. ESPHome: nothing — it rides the
+relay, so brokered HA is the only prerequisite. Node-RED: `NODERED_URL` (+ optional `NODERED_TOKEN` or
 `NODERED_USERNAME`/`NODERED_PASSWORD`). VomeHome: `VOMEHOME_API_URL` (default
 `https://vome.io`), `VOMEHOME_TOKEN`, `VOMEHOME_INSTANCE_ID`,
 `VOMEHOME_INSTANCES`, `VOMEHOME_ALLOW_CREATE`.

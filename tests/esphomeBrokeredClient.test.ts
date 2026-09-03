@@ -33,23 +33,16 @@ describe("brokered ESPHome detection", () => {
 		expect(config.esphome.brokered).toBe(true);
 	});
 
-	it("uses the direct dashboard (not brokered) when ESPHOME_DASHBOARD_URL is set", () => {
-		const config = loadConfig({ ...BROKER_ENV, ESPHOME_DASHBOARD_URL: "http://esp:6052" });
-		expect(config.esphome.enabled).toBe(true);
-		expect(config.esphome.brokered).toBe(false);
-	});
-
-	it("stays enabled with a direct HA and no dashboard URL, so discovery can run", () => {
-		// The dashboard address no longer has to be configured to be usable:
-		// esphome/discovery.ts derives it from the Supervisor and probes it.
-		// Gating on ESPHOME_DASHBOARD_URL would switch the tools off before that
-		// ever happened, which is what made agents report ESPHome as unavailable.
+	it("is off for a direct Home Assistant, which has no route to the dashboard", () => {
+		// The ESPHome add-on keeps its dashboard on localhost behind an ingress
+		// that admits only the Supervisor, so only the Vome component on the home
+		// can reach it. Without the relay there is nothing to talk to.
 		const config = loadConfig({ HA_URL: "http://ha:8123", HA_TOKEN: "t" });
-		expect(config.esphome.enabled).toBe(true);
+		expect(config.esphome.enabled).toBe(false);
 		expect(config.esphome.brokered).toBe(false);
 	});
 
-	it("is disabled only when there is no route to a home at all", () => {
+	it("is off when there is no route to a home at all", () => {
 		const config = loadConfig({});
 		expect(config.esphome.enabled).toBe(false);
 		expect(config.esphome.brokered).toBe(false);

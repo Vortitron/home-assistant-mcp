@@ -13,7 +13,7 @@ import { createHaRestClient } from "./ha/restClient.js";
 import { createHaWsClient } from "./ha/wsClient.js";
 import { createBrokeredWsClient } from "./ha/brokeredClient.js";
 import { createBrokeredEsphomeDashboardClient } from "./esphome/brokeredDashboardClient.js";
-import { createResolvingEsphomeClient } from "./esphome/resolvingClient.js";
+import { createUnavailableEsphomeClient } from "./esphome/client.js";
 import { createNodeRedClient } from "./nodered/client.js";
 import { createVomeHomeClient } from "./vomehome/client.js";
 import { createInstanceManager } from "./vomehome/instances.js";
@@ -38,19 +38,13 @@ export function createToolContext(config: Config, logger: Logger): ToolContext {
 	const directRest = config.brokered ? undefined : createHaRestClient(config, logger, ws);
 	const instances = createInstanceManager(config, logger, directRest);
 	instancesRef.current = instances;
-	// ESPHome resolves its own route on first use: a configured dashboard URL,
-	// else one discovered on the network, else the relay's REST subset. The
-	// brokered client is built here only as that last fallback.
-	const brokeredEsphome = config.esphome.brokered
+	// One route to ESPHome: the VomeHome relay, where the Vome component
+	// translates the dashboard's /ws API. Without one, a client that refuses
+	// every call with the same explanation, rather than tools that fail
+	// differently depending on which one is called first.
+	const esphome = config.esphome.brokered
 		? createBrokeredEsphomeDashboardClient(config, logger, () => instances.activeId())
-		: null;
-	const esphome = createResolvingEsphomeClient({
-		config,
-		logger,
-		sendCommand: (command) => ws.sendCommand(command),
-		brokered: brokeredEsphome,
-		activeId: () => instances.activeId()
-	});
+		: createUnavailableEsphomeClient();
 	const nodered = createNodeRedClient(config, logger);
 	const vomehome = createVomeHomeClient(config, logger);
 	return {

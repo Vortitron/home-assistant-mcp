@@ -2,10 +2,10 @@ import type { Config } from "../config.js";
 import type { Logger } from "../logger.js";
 import {
 	EsphomeError,
+	type EsphomeClient,
 	type EsphomeCommandRequest,
-	type EsphomeCommandResult,
-	type EsphomeDashboardClient
-} from "./dashboardClient.js";
+	type EsphomeCommandResult
+} from "./client.js";
 
 /** Build output is polled; these bound how eagerly and for how long. */
 const POLL_MIN_MS = 500;
@@ -37,10 +37,10 @@ interface StreamPoll {
  * minutes, so holding a single request open for it would be fragile; polling a
  * job is not.
  *
- * This is the **preferred** path, not a fallback. Reaching the dashboard directly
- * would skip the portal's per-instance scope checks and its audit log entirely —
- * and on a default HAOS install it does not even work, since the add-on's web
- * port is disabled and its ingress admits only the Supervisor and localhost.
+ * This is the **only** path. Reaching the dashboard directly would skip the
+ * portal's per-instance scope checks and its audit log entirely — and on a
+ * default HAOS install it does not even work, since the add-on's web port is
+ * disabled and its ingress admits only the Supervisor and localhost.
  */
 
 interface BrokerRequestOptions {
@@ -65,7 +65,7 @@ export function createBrokeredEsphomeDashboardClient(
 	config: Config,
 	logger: Logger,
 	activeInstanceId: () => string
-): EsphomeDashboardClient {
+): EsphomeClient {
 	// Resolve the base per-request so the ESPHome client follows the active
 	// instance (vomehome_use_instance / vomehome_create_instance) exactly like
 	// the brokered HA client — otherwise a switch would leave ESPHome pinned to
@@ -207,6 +207,14 @@ export function createBrokeredEsphomeDashboardClient(
 		},
 		getMigrations: (configuration) =>
 			broker<unknown>(`/migrations?configuration=${encodeURIComponent(configuration)}`),
+		describe: async () => ({
+			mode: "brokered" as const,
+			streaming: true,
+			instance: activeInstanceId() || null,
+			note:
+				"Brokered through VomeHome, so the portal's per-instance scopes and audit log " +
+				"apply to every command."
+		}),
 		runCommand: runStreamJob
 	};
 }

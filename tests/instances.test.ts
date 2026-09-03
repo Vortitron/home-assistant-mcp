@@ -6,7 +6,7 @@ import { createLogger } from "../src/logger.js";
 import { createInstanceManager } from "../src/vomehome/instances.js";
 import type { HaRestClient } from "../src/ha/restClient.js";
 import type { HaWsClient } from "../src/ha/wsClient.js";
-import { createEsphomeDashboardClient } from "../src/esphome/dashboardClient.js";
+import { createUnavailableEsphomeClient } from "../src/esphome/client.js";
 import { createNodeRedClient } from "../src/nodered/client.js";
 import { createVomeHomeClient, type VomeHomeClient } from "../src/vomehome/client.js";
 import { registerVomeHomeTools } from "../src/tools/vomehome.js";
@@ -214,7 +214,7 @@ function brokeredHarness(vomehome: Partial<VomeHomeClient>, env: Record<string, 
 		logger,
 		rest: instances.rest,
 		ws: {} as unknown as HaWsClient,
-		esphome: createEsphomeDashboardClient(config, logger),
+		esphome: createUnavailableEsphomeClient(),
 		nodered: createNodeRedClient(config, logger),
 		vomehome: { ...createVomeHomeClient(config, logger), ...vomehome } as VomeHomeClient,
 		instances
@@ -274,7 +274,7 @@ describe("vomehome multi-instance tools", () => {
 			logger,
 			rest: instances.rest,
 			ws: {} as unknown as HaWsClient,
-			esphome: createEsphomeDashboardClient(config, logger),
+			esphome: createUnavailableEsphomeClient(),
 			nodered: createNodeRedClient(config, logger),
 			vomehome: createVomeHomeClient(config, logger),
 			instances

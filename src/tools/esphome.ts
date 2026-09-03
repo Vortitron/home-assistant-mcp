@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { EsphomeStreamCommand } from "../esphome/dashboardClient.js";
+import type { EsphomeStreamCommand } from "../esphome/client.js";
 import { evaluateConfigWrite } from "../safety.js";
 import { errorResult, jsonResult, runTool, textResult, type ToolContext } from "./helpers.js";
 
@@ -9,16 +9,15 @@ const SECONDS_TO_MS = 1000;
 /**
  * Shared tail for the streaming build commands.
  *
- * These run over the VomeHome relay when brokered, and against a direct dashboard
- * otherwise — so in normal use they simply work, and the description says so.
- * That wording is deliberate: told "not available in brokered mode", models
- * concluded the feature did not exist and reported that to users, when the
- * capability was there the whole time.
+ * These run over the VomeHome relay, so in normal use they simply work and the
+ * description says so. That wording is deliberate: told "not available in
+ * brokered mode", models concluded the feature did not exist and reported that
+ * to users, when the capability was there the whole time.
  */
 const STREAM_AVAILABILITY =
-	" Works over the VomeHome relay (no ports to open) or against a directly-reachable " +
-	"dashboard. If a call reports no dashboard, run esphome_dashboard_info to see why " +
-	"rather than telling the user this is unsupported.";
+	" Runs over the VomeHome relay — no ports to open. If a call reports that ESPHome is " +
+	"unreachable, run esphome_dashboard_info to see why rather than telling the user this " +
+	"is unsupported.";
 
 /**
  * Configuration filenames the dashboard flagged as needing a rename.
@@ -86,11 +85,11 @@ export function registerEsphomeTools(server: McpServer, ctx: ToolContext): void 
 		{
 			title: "Check ESPHome capability",
 			description:
-				"Report how ESPHome is reached and what is possible right now: whether commands go through " +
-				"the VomeHome relay or straight to a dashboard, which URL is in use, and whether the " +
-				"streaming commands (validate/compile/upload/run/logs) are available. When they are not, " +
-				"the result lists every address that was tried and why each failed. Call this before telling " +
-				"a user that flashing or log-reading is unavailable — it usually is available.",
+				"Report whether ESPHome is reachable and what is possible right now — listing and " +
+				"editing configs, and the streaming commands (validate/compile/upload/logs/clean). " +
+				"ESPHome is reached through a VomeHome relay-connected Home Assistant running the " +
+				"Vome add-on; when that is in place everything is available. Call this before telling " +
+				"a user that flashing or log-reading is unsupported — it usually is not.",
 			inputSchema: {},
 			annotations: { readOnlyHint: true, openWorldHint: true }
 		},
@@ -99,14 +98,12 @@ export function registerEsphomeTools(server: McpServer, ctx: ToolContext): void 
 				const status = await ctx.esphome.describe();
 				return jsonResult({
 					mode: status.mode,
-					dashboard_url: status.url,
 					streaming_commands_available: status.streaming,
 					can_flash: status.streaming,
 					can_read_device_logs: status.streaming,
-					can_list_and_edit_yaml: status.mode !== "none",
+					can_list_and_edit_yaml: status.mode === "brokered",
 					instance: status.instance,
-					note: status.note,
-					addresses_tried: status.attempts
+					note: status.note
 				});
 			})
 	);
@@ -116,7 +113,7 @@ export function registerEsphomeTools(server: McpServer, ctx: ToolContext): void 
 		{
 			title: "List ESPHome devices",
 			description:
-				"List devices/configurations known to the ESPHome dashboard, including their configuration filenames (needed by the other ESPHome tools). Works with a direct or auto-discovered dashboard, and in VomeHome brokered mode.",
+				"List devices/configurations known to the ESPHome dashboard, including their configuration filenames (needed by the other ESPHome tools).",
 			inputSchema: {},
 			annotations: { readOnlyHint: true, openWorldHint: true }
 		},

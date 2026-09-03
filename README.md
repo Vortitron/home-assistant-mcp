@@ -91,7 +91,7 @@ policy (see [Safety](#safety)).
 > an allowlisted subset via `POST /api/v1/instances/<id>/ha/ws/command`.
 | `ha_fire_event` | Fire a custom event on the event bus. |
 
-### ESPHome (auto-discovered; or `ESPHOME_DASHBOARD_URL`, or brokered to a relay-connected HA)
+### ESPHome (brokered to a relay-connected HA)
 
 | Tool | Description |
 | --- | --- |
@@ -106,12 +106,16 @@ policy (see [Safety](#safety)).
 | `esphome_logs` | Read a device's live logs — boot, wifi, sensors, crashes. |
 | `esphome_clean` | Delete cached build files after a stale-build compile failure (write-gated). |
 
-You normally do **not** need to set `ESPHOME_DASHBOARD_URL`. When brokered, every
-command — builds and logs included — goes through the VomeHome relay, so there is
-nothing to configure and no port to open. In direct mode the server asks the
-Supervisor which port the ESPHome add-on publishes, works out the host from
-`HA_URL` (or from the URL Home Assistant reports for itself), and probes the
-result. Set the variable to pin a specific dashboard.
+There is **nothing to configure**. Every command — builds and logs included —
+goes through the VomeHome relay, so ESPHome works wherever brokered Home
+Assistant does, with no port to open.
+
+There is also no second way in. The ESPHome add-on is host-networked with its web
+port disabled, behind an ingress that admits only the Supervisor and localhost,
+so the Vome component on the home is the only thing that can reach the dashboard
+at all. A direct-dashboard mode existed once (`ESPHOME_DASHBOARD_URL`) and was
+removed in 0.6.0: it spoke a protocol ESPHome has since deleted, and on a default
+install it could not connect anyway.
 
 ### Node-RED (`NODERED_URL`)
 
@@ -246,9 +250,6 @@ config.
 | `HA_DENY_DOMAINS` | `lock,alarm_control_panel,cover,climate,vacuum,valve,water_heater,lawn_mower,camera` | Domains that can never be written. Set empty to clear. |
 | `HA_ALLOW_DOMAINS` | _(any)_ | If set, only these domains may be written. |
 | `HA_ALLOW_CONFIG_WRITE` | off (direct) / permissive (brokered) | Local guard for editing automation config. Same semantics as `HA_ALLOW_WRITE`. |
-| `ESPHOME_DASHBOARD_URL` | _(disabled)_ | ESPHome dashboard URL to enable ESPHome tools directly. In brokered mode (relay-connected HA) the REST subset works without it. |
-| `ESPHOME_DASHBOARD_TOKEN` | — | Bearer token, if the dashboard is behind an auth proxy. |
-| `ESPHOME_DASHBOARD_USERNAME` / `..._PASSWORD` | — | HTTP basic auth alternative. |
 | `NODERED_URL` | _(disabled)_ | Node-RED editor/admin base URL, e.g. `http://homeassistant.local:1880`. Enables the `nodered_*` tools. |
 | `NODERED_TOKEN` | — | Bearer token if Node-RED `adminAuth` is enabled. |
 | `NODERED_USERNAME` / `NODERED_PASSWORD` | — | Credentials exchanged for a token via `/auth/token`, if you prefer not to mint one by hand. |
@@ -527,12 +528,12 @@ default permissive in brokered mode and are optional local restrictions on top.
 Registry tools (areas/devices), logs and history still need direct mode for now.
 
 **ESPHome over the relay.** When you broker to a **relay-connected** Home
-Assistant (your own HA linked via the Vome component's outbound tunnel), the
-ESPHome dashboard's REST subset is brokered too — `esphome_list_devices`,
-`esphome_get_config` and `esphome_save_config` work with no `ESPHOME_DASHBOARD_URL`
-(reads need `ha:read`; saving YAML needs the instance's `ha:config` scope).
-The streaming build commands (`esphome_validate` / `_compile` / `_upload`) stream
-output, so they still need a directly-reachable `ESPHOME_DASHBOARD_URL`.
+Assistant (your own HA linked via the Vome component's outbound tunnel), ESPHome
+comes with it — listing devices, reading and writing YAML, and the streaming
+commands (`esphome_validate` / `_compile` / `_upload` / `_logs` / `_clean`), which
+ride the relay as polled jobs. Reads need `ha:read`; writing YAML, building and
+flashing need the instance's `ha:config` scope. This is the only route: see
+[ESPHome](#esphome-brokered-to-a-relay-connected-ha).
 
 **Bring your own Home Assistant.** The instance you broker to does not have to be
 a VomeHome VM. In the VomeHome portal, **Account → Connect HA** lets you attach a

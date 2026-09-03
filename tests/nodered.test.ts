@@ -6,7 +6,7 @@ import { createLogger } from "../src/logger.js";
 import { createNodeRedClient, NodeRedError, type NodeRedClient } from "../src/nodered/client.js";
 import type { HaRestClient } from "../src/ha/restClient.js";
 import type { HaWsClient } from "../src/ha/wsClient.js";
-import { createEsphomeDashboardClient } from "../src/esphome/dashboardClient.js";
+import { createUnavailableEsphomeClient } from "../src/esphome/client.js";
 import { createVomeHomeClient, type VomeHomeClient } from "../src/vomehome/client.js";
 import { createInstanceManager } from "../src/vomehome/instances.js";
 import { registerNodeRedTools } from "../src/tools/nodered.js";
@@ -172,7 +172,7 @@ function buildHarness(
 		logger,
 		rest: mockRest,
 		ws: {} as unknown as HaWsClient,
-		esphome: createEsphomeDashboardClient(config, logger),
+		esphome: createUnavailableEsphomeClient(),
 		nodered: (options.nodered ?? createNodeRedClient(config, logger)) as NodeRedClient,
 		vomehome: createVomeHomeClient(config, logger) as VomeHomeClient,
 		instances: createInstanceManager(config, logger, mockRest)

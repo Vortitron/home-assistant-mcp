@@ -18,18 +18,15 @@ export interface SafetyConfig {
 }
 
 export interface EsphomeConfig {
-	dashboardUrl: string;
-	token: string;
-	username: string;
-	password: string;
-	/** True when ESPHome tools are available (direct dashboard URL or brokered). */
-	enabled: boolean;
 	/**
-	 * True when ESPHome is reached through the VomeHome relay broker rather than a
-	 * direct dashboard URL. The REST subset (list/version/read+write YAML) is
-	 * brokered; streaming build commands need a direct ESPHOME_DASHBOARD_URL.
+	 * True when ESPHome is reachable — which means, and only means, that Home
+	 * Assistant is brokered through a VomeHome relay. The Vome component on the
+	 * home is the only thing that can reach the ESPHome dashboard, so there is
+	 * no second route and nothing to configure.
 	 */
 	brokered: boolean;
+	/** Alias of `brokered`, kept because callers read it as "are the tools usable". */
+	enabled: boolean;
 }
 
 export interface NodeRedConfig {
@@ -301,7 +298,6 @@ function buildInstanceRegistry(
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv): Config {
-	const esphomeUrl = stripTrailingSlashes((env.ESPHOME_DASHBOARD_URL ?? "").trim());
 	const noderedUrl = stripTrailingSlashes((env.NODERED_URL ?? "").trim());
 	const vomehomeUrl = stripTrailingSlashes(
 		(env.VOMEHOME_API_URL ?? DEFAULT_VOMEHOME_API_URL).trim()
@@ -352,21 +348,9 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
 			denyDomains: parseDomainList(env.HA_DENY_DOMAINS, DEFAULT_DENY_DOMAINS),
 			allowDomains: parseDomainList(env.HA_ALLOW_DOMAINS, "")
 		},
-		esphome: {
-			dashboardUrl: esphomeUrl,
-			token: (env.ESPHOME_DASHBOARD_TOKEN ?? "").trim(),
-			username: (env.ESPHOME_DASHBOARD_USERNAME ?? "").trim(),
-			password: (env.ESPHOME_DASHBOARD_PASSWORD ?? "").trim(),
-			// Brokered ESPHome only when brokering HA and no direct dashboard URL is
-			// set (a direct URL wins, since it also supports streaming builds).
-			brokered: brokered && esphomeUrl.length === 0,
-			// Enabled wherever there is *some* route to a home, because the
-			// dashboard address no longer has to be configured to be found —
-			// `esphome/discovery.ts` derives it from the Supervisor and probes it.
-			// Gating on ESPHOME_DASHBOARD_URL here would switch the tools off
-			// before discovery ever got a chance to run.
-			enabled: esphomeUrl.length > 0 || brokered || (env.HA_URL ?? "").trim().length > 0
-		},
+		// One route to ESPHome: the VomeHome relay. There is nothing to configure
+		// and nothing to enable separately — if HA is brokered, ESPHome is too.
+		esphome: { brokered, enabled: brokered },
 		nodered: {
 			url: noderedUrl,
 			token: (env.NODERED_TOKEN ?? "").trim(),

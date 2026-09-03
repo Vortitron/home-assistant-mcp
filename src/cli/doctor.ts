@@ -4,7 +4,6 @@ import type { Logger } from "../logger.js";
 import { createHaRestClient } from "../ha/restClient.js";
 import { createHaWsClient } from "../ha/wsClient.js";
 import { createBrokeredHaRestClient } from "../ha/brokeredClient.js";
-import { createEsphomeDashboardClient } from "../esphome/dashboardClient.js";
 import { createBrokeredEsphomeDashboardClient } from "../esphome/brokeredDashboardClient.js";
 import { createNodeRedClient } from "../nodered/client.js";
 import { createVomeHomeClient } from "../vomehome/client.js";
@@ -45,7 +44,7 @@ export async function runDoctor(config: Config, logger: Logger): Promise<number>
 	line(`Config writes:     ${config.safety.allowConfigWrite ? "ENABLED" : "disabled"}`);
 	line(`Deny domains:      ${config.safety.denyDomains.join(", ") || "(none)"}`);
 	line(`Allow domains:     ${config.safety.allowDomains.join(", ") || "(any)"}`);
-	line(`ESPHome dashboard: ${config.esphome.enabled ? (config.esphome.brokered ? "brokered via VomeHome" : config.esphome.dashboardUrl) : "(not configured)"}`);
+	line(`ESPHome:           ${config.esphome.brokered ? "brokered via VomeHome" : "(needs a relay-connected instance)"}`);
 	line(`Node-RED:          ${config.nodered.enabled ? config.nodered.url : "(not configured)"}`);
 	line(`VomeHome portal:   ${config.vomehome.enabled ? config.vomehome.apiUrl : "(not configured)"}`);
 	line("");
@@ -106,13 +105,15 @@ export async function runDoctor(config: Config, logger: Logger): Promise<number>
 		}
 	}
 
-	if (config.esphome.enabled) {
-		const esphome = config.esphome.brokered
-			? createBrokeredEsphomeDashboardClient(config, logger, () => config.vomehome.instanceId)
-			: createEsphomeDashboardClient(config, logger);
+	if (config.esphome.brokered) {
+		const esphome = createBrokeredEsphomeDashboardClient(
+			config,
+			logger,
+			() => config.vomehome.instanceId
+		);
 		try {
 			await esphome.listDevices();
-			line(`[ok]   ESPHome dashboard reachable${config.esphome.brokered ? " (brokered)" : ""}`);
+			line("[ok]   ESPHome dashboard reachable (brokered)");
 		} catch (error) {
 			line(`[warn] ESPHome dashboard: ${describe(error)}`);
 		}

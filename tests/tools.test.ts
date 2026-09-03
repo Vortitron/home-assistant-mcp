@@ -508,3 +508,104 @@ describe("automation traces", () => {
 		expect(body.steps[0].changed_variables).toMatch(/binary_sensor\.motion/);
 	});
 });
+
+describe("helper entities", () => {
+	const WRITE = { HA_ALLOW_WRITE: "true", HA_ALLOW_CONFIG_WRITE: "true" };
+
+	it("creates a helper over the websocket, with no id", async () => {
+		// The point of these tools: adding a helper without configuration.yaml,
+		// which nothing here can reach and which would need a restart anyway.
+		const sendCommand = vi.fn(async () => ({ id: "1a2b", name: "Holiday mode" }));
+		const server = buildHarness({ env: WRITE, ws: { sendCommand } });
+
+		const body = jsonOf(
+			await server.call("ha_set_helper", {
+				kind: "input_boolean",
+				config: { name: "Holiday mode", icon: "mdi:palm-tree" }
+			})
+		);
+
+		expect(body.created).toBe(true);
+		expect(sendCommand).toHaveBeenCalledWith({
+			type: "input_boolean/create",
+			name: "Holiday mode",
+			icon: "mdi:palm-tree"
+		});
+	});
+
+	it("updates when given an id, keying it as <kind>_id", async () => {
+		const sendCommand = vi.fn(async () => ({ id: "1a2b" }));
+		const server = buildHarness({ env: WRITE, ws: { sendCommand } });
+
+		const body = jsonOf(
+			await server.call("ha_set_helper", {
+				kind: "input_number",
+				helper_id: "1a2b",
+				config: { name: "Target temp", min: 5, max: 30 }
+			})
+		);
+
+		expect(body.created).toBe(false);
+		expect(sendCommand).toHaveBeenCalledWith({
+			type: "input_number/update",
+			input_number_id: "1a2b",
+			name: "Target temp",
+			min: 5,
+			max: 30
+		});
+	});
+
+	it("refuses to create or delete without config-write", async () => {
+		const sendCommand = vi.fn();
+		const server = buildHarness({ ws: { sendCommand } });
+
+		for (const [tool, args] of [
+			["ha_set_helper", { kind: "counter", config: { name: "Feeds" } }],
+			["ha_delete_helper", { kind: "counter", helper_id: "x" }]
+		] as const) {
+			const result = await server.call(tool, args);
+			expect(result.isError).toBe(true);
+		}
+		expect(sendCommand).not.toHaveBeenCalled();
+	});
+
+	it("deletes by id", async () => {
+		const sendCommand = vi.fn(async () => ({}));
+		const server = buildHarness({ env: WRITE, ws: { sendCommand } });
+
+		const body = jsonOf(
+			await server.call("ha_delete_helper", { kind: "timer", helper_id: "t1" })
+		);
+
+		expect(body.deleted).toBe(true);
+		expect(sendCommand).toHaveBeenCalledWith({ type: "timer/delete", timer_id: "t1" });
+	});
+
+	it("lists one kind, or every kind at once", async () => {
+		const sendCommand = vi.fn(async (c: any) => [{ id: "x", type: c.type }]);
+		const server = buildHarness({ ws: { sendCommand } });
+
+		const one = jsonOf(await server.call("ha_list_helpers", { kind: "input_select" }));
+		expect(one[0].type).toBe("input_select/list");
+
+		sendCommand.mockClear();
+		const all = jsonOf(await server.call("ha_list_helpers"));
+		expect(Object.keys(all)).toContain("schedule");
+		expect(sendCommand.mock.calls.length).toBe(9);
+	});
+
+	it("reports one unavailable domain without losing the others", async () => {
+		// A component that is not loaded answers unknown_command; that must not
+		// hide the eight that did answer.
+		const sendCommand = vi.fn(async (c: any) => {
+			if (c.type.startsWith("schedule/")) throw new Error("unknown_command");
+			return [];
+		});
+		const server = buildHarness({ ws: { sendCommand } });
+
+		const all = jsonOf(await server.call("ha_list_helpers"));
+
+		expect(all.schedule.error).toMatch(/unknown_command/);
+		expect(all.input_boolean).toEqual([]);
+	});
+});

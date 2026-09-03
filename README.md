@@ -50,6 +50,7 @@ policy (see [Safety](#safety)).
 | `ha_list_devices` | Device registry (filter by area / search). |
 | `ha_get_entity_registry` | Registry metadata: platform, area, device, disabled/hidden. |
 | `ha_render_template` | Render a Jinja2 template against live state. |
+| `ha_list_helpers` | List stored helpers (input_boolean, input_number, counter, timer, …). |
 | `ha_list_automations` | Automations with entity_id, unique id, state, last-triggered. |
 | `ha_get_automation` | Full automation config (triggers/conditions/actions). |
 | `ha_check_config` | Validate the configuration (Check configuration). |
@@ -73,6 +74,8 @@ policy (see [Safety](#safety)).
 | `ha_clear_system_log` | Empty the structured error store (only needs `HA_ALLOW_WRITE`). |
 | `ha_set_log_level` | Change logging for one integration at runtime (only needs `HA_ALLOW_WRITE`). |
 | `ha_set_automation` | Create or update an automation (also needs `HA_ALLOW_CONFIG_WRITE`). |
+| `ha_set_helper` | Create or update a helper — no `configuration.yaml`, no restart. |
+| `ha_delete_helper` | Delete a stored helper. |
 | `ha_delete_automation` | Delete an automation (also needs `HA_ALLOW_CONFIG_WRITE`). |
 | `ha_trigger_automation` | Manually run an automation now. |
 | `ha_reload_automations` | Reload automations without restarting. |

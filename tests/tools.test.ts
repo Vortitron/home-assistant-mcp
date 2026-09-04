@@ -609,3 +609,35 @@ describe("helper entities", () => {
 		expect(all.input_boolean).toEqual([]);
 	});
 });
+
+describe("config files", () => {
+	it("says it needs a relay rather than failing obscurely in direct mode", async () => {
+		// Files are served by the Vome component on the home; a direct HA
+		// connection has no route to them at all.
+		const server = buildHarness({
+			env: { HA_ALLOW_WRITE: "true", HA_ALLOW_CONFIG_WRITE: "true" }
+		});
+		for (const [tool, args] of [
+			["ha_list_config_files", {}],
+			["ha_read_config_file", { path: "configuration.yaml" }],
+			["ha_write_config_file", { path: "configuration.yaml", content: "x" }]
+		] as const) {
+			const result = await server.call(tool, args);
+			expect(result.isError).toBe(true);
+			expect(textOf(result)).toMatch(/relay-connected|Vome component/);
+		}
+	});
+
+	it("refuses to write without config-write, before reaching the network", async () => {
+		const fetchMock = vi.fn();
+		vi.stubGlobal("fetch", fetchMock);
+		const server = buildHarness();
+		const result = await server.call("ha_write_config_file", {
+			path: "configuration.yaml",
+			content: "x"
+		});
+		expect(result.isError).toBe(true);
+		expect(fetchMock).not.toHaveBeenCalled();
+		vi.unstubAllGlobals();
+	});
+});

@@ -67,10 +67,12 @@ interface Session {
 	close: () => Promise<void>;
 	/** SHA-256 of the bearer token that opened this session (never the token). */
 	tokenHash: Buffer;
-	/** Hex form of {@link tokenHash}, used to key remembered state per token. */
+	/** Key for this session's remembered instance: token hash plus client name. */
 	tokenKey: string;
 	/** The instance this session is currently targeting. */
 	activeId: () => string;
+	/** The instance it started on, so an explicit switch can be told from the default. */
+	startedOn: string;
 	lastSeen: number;
 }
 
@@ -237,7 +239,8 @@ export async function startMcpHttpServer(args: ServeArgs, logger: Logger): Promi
 	 */
 	/**
 	 * Last instance each token selected with `vomehome_use_instance`, keyed by
-	 * token hash and outliving the session that chose it.
+	 * token hash and outliving the session that chose it. It is only *resumed*
+	 * when no other session is holding the same token — see contextForToken.
 	 *
 	 * Sessions are not permanent: an idle one is reaped, a transport can
 	 * reconnect, and the service can restart. Each of those builds a fresh
@@ -249,7 +252,32 @@ export async function startMcpHttpServer(args: ServeArgs, logger: Logger): Promi
 	 */
 	const lastActiveByToken = new Map<string, { instanceId: string; at: number }>();
 
-	async function contextForToken(token: string): Promise<ReturnType<typeof createToolContext>> {
+	/**
+	 * Key for the remembered instance: the token *and* which client asked.
+	 *
+	 * Keying on the token alone made the memory shared between every client
+	 * holding it, so an agent in one editor could silently retarget an agent in
+	 * another at a different house — neither of them told. Including the
+	 * client's own name from `initialize` keeps a reconnect resuming its own
+	 * choice while leaving other clients on theirs. Two windows of the *same*
+	 * client still share, which is the narrow case and arguably what you want.
+	 */
+	function memoryKeyFor(token: string, clientName: string): string {
+		return `${hashToken(token).toString("hex")}:${clientName}`;
+	}
+
+	/** The client's self-reported name from `initialize`, or a safe placeholder. */
+	function clientNameFrom(body: unknown): string {
+		const info = (body as { params?: { clientInfo?: { name?: unknown } } })?.params?.clientInfo;
+		const name = typeof info?.name === "string" ? info.name.trim() : "";
+		return name ? name.slice(0, 64) : "unknown-client";
+	}
+
+	async function contextForToken(
+		token: string,
+		memoryKey: string,
+		clientName: string
+	): Promise<ReturnType<typeof createToolContext>> {
 		// Bootstrap config: the VomeHome client needs only a token and a URL, so
 		// it can be built before any instance is known.
 		const bootstrap = loadConfig(sessionEnv(token, "", []));
@@ -265,10 +293,11 @@ export async function startMcpHttpServer(args: ServeArgs, logger: Logger): Promi
 		// silently retarget a conversation at a different house. Only honoured
 		// while the instance is still reachable by this token — a revoked grant
 		// must not be resurrected from memory.
-		const remembered = lastActiveByToken.get(hashToken(token).toString("hex"));
-		const active = remembered && ids.includes(remembered.instanceId) ? remembered.instanceId : (ids[0] as string);
+		const remembered = lastActiveByToken.get(memoryKey);
+		const active =
+			remembered && ids.includes(remembered.instanceId) ? remembered.instanceId : (ids[0] as string);
 		if (remembered && active === remembered.instanceId && ids[0] !== active) {
-			logger.debug(`Restored active instance ${active} for a reconnecting token`);
+			logger.debug(`Restored active instance ${active} for a reconnecting ${clientName}`);
 		}
 		return createToolContext(loadConfig(sessionEnv(token, active, ids)), logger);
 	}
@@ -284,7 +313,9 @@ export async function startMcpHttpServer(args: ServeArgs, logger: Logger): Promi
 	}
 
 	async function openSession(token: string, body: unknown, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-		const ctx = await contextForToken(token);
+		const clientName = clientNameFrom(body);
+		const memoryKey = memoryKeyFor(token, clientName);
+		const ctx = await contextForToken(token, memoryKey, clientName);
 		const server = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION });
 		registerAllTools(server, ctx);
 
@@ -299,8 +330,9 @@ export async function startMcpHttpServer(args: ServeArgs, logger: Logger): Promi
 						await server.close().catch(() => undefined);
 					},
 					tokenHash: hashToken(token),
-					tokenKey: hashToken(token).toString("hex"),
+					tokenKey: memoryKey,
 					activeId: () => ctx.instances.activeId(),
+					startedOn: ctx.instances.activeId(),
 					lastSeen: Date.now()
 				});
 				logger.info(`MCP session ${sessionId} opened (${sessions.size} open)`);
@@ -362,13 +394,17 @@ export async function startMcpHttpServer(args: ServeArgs, logger: Logger): Promi
 				}
 				existing.lastSeen = Date.now();
 				await existing.transport.handleRequest(req, res, req.method === "POST" ? await readBody(req) : undefined);
-				// Remember whatever instance the session is on now. Reading it
-				// back after the request catches a vomehome_use_instance without
-				// the transport needing to know that tool exists.
-				lastActiveByToken.set(existing.tokenKey, {
-					instanceId: existing.activeId(),
-					at: Date.now()
-				});
+				// Remember the instance only when this session has actually moved
+				// off the one it started on. Recording it unconditionally meant
+				// every request rewrote the memory, so two clients sharing a
+				// token overwrote each other continuously and a third inherited
+				// whichever wrote last. Reading it back after the request is
+				// still how a vomehome_use_instance is noticed, without the
+				// transport needing to know that tool exists.
+				const now = existing.activeId();
+				if (now !== existing.startedOn) {
+					lastActiveByToken.set(existing.tokenKey, { instanceId: now, at: Date.now() });
+				}
 				return;
 			}
 

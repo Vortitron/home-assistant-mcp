@@ -256,6 +256,45 @@ describe("MCP HTTP server", () => {
 		await second.close();
 	});
 
+	it("does not let one client retarget another that shares the token", async () => {
+		/**
+		 * Reported from the field: switching instance in one process silently
+		 * moved a *different* process onto the same house, and neither was told.
+		 * The memory was keyed on the token alone, so every client holding it
+		 * shared one active instance — an agent could end up acting on the
+		 * wrong home without anything appearing to have changed.
+		 */
+		const connectAs = async (name: string): Promise<Client> => {
+			const client = new Client({ name, version: "1.0.0" });
+			await client.connect(
+				new StreamableHTTPClientTransport(new URL(endpoint), {
+					requestInit: { headers: { Authorization: `Bearer ${GOOD_TOKEN}` } }
+				})
+			);
+			return client;
+		};
+		const activeOf = async (client: Client): Promise<string> => {
+			const result = await client.callTool({ name: "vomehome_list_instances", arguments: {} });
+			return JSON.parse((result.content as { text: string }[])[0]?.text ?? "{}").active_instance;
+		};
+
+		const editor = await connectAs("editor-a");
+		await editor.callTool({
+			name: "vomehome_use_instance",
+			arguments: { instance_id: "inst-two" }
+		});
+		expect(await activeOf(editor)).toBe("inst-two");
+
+		// A different client on the same token is unaffected by that choice.
+		const other = await connectAs("editor-b");
+		expect(await activeOf(other)).toBe("inst-one");
+
+		// And the one that chose still has its own choice.
+		expect(await activeOf(editor)).toBe("inst-two");
+		await editor.close();
+		await other.close();
+	});
+
 	it("does not resume an instance the token can no longer reach", async () => {
 		/** A remembered choice must never outlive the grant behind it. */
 		const client = new Client({ name: "test", version: "1.0.0" });

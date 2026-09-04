@@ -55,6 +55,39 @@ async function filesRequest<T>(
 	return (text ? JSON.parse(text) : undefined) as T;
 }
 
+/** Current contents of a file, or null when it does not exist yet. */
+async function readIfExists(ctx: ToolContext, path: string): Promise<string | null> {
+	try {
+		const result = await filesRequest<{ content?: string }>(
+			ctx,
+			`/read?path=${encodeURIComponent(path)}`,
+			{ method: "GET" }
+		);
+		return result?.content ?? "";
+	} catch {
+		// Missing, unreadable, or not text. Either way there is nothing to
+		// restore to, which the caller is told rather than left to infer.
+		return null;
+	}
+}
+
+function write(
+	ctx: ToolContext,
+	path: string,
+	content: string
+): Promise<Record<string, unknown>> {
+	return filesRequest<Record<string, unknown>>(
+		ctx,
+		`/write?path=${encodeURIComponent(path)}`,
+		{ method: "POST", body: { content } }
+	);
+}
+
+/** Home Assistant reports `result: "valid"` when the configuration checks out. */
+function isValid(check: { result?: string; errors?: string | null }): boolean {
+	return check?.result === "valid" && !check?.errors;
+}
+
 export function registerConfigFileTools(server: McpServer, ctx: ToolContext): void {
 	server.registerTool(
 		"ha_list_config_files",
@@ -113,33 +146,91 @@ export function registerConfigFileTools(server: McpServer, ctx: ToolContext): vo
 				"Write a UTF-8 text file under Home Assistant's config directory. **This replaces the " +
 				"entire file** — read it first with ha_read_config_file and send back the full content " +
 				"with your change applied, or you will delete everything else in it.\n\n" +
-				"Home Assistant does not reload configuration.yaml on its own: after editing, call " +
-				"ha_check_config to confirm it still parses, then restart Home Assistant (or reload the " +
-				"relevant domain) for the change to take effect. Checking first matters — Home Assistant " +
-				"will not start again with a broken configuration.yaml.\n\n" +
+				"By default the configuration is checked afterwards and **the file is put back if the " +
+				"check fails**, so a bad edit cannot leave Home Assistant unable to start. The result " +
+				"says whether it was verified, and whether it was rolled back.\n\n" +
+				"Pass verify=false when writing several files that are only valid together, then call " +
+				"ha_check_config yourself at the end.\n\n" +
+				"A successful write does not apply the change: restart Home Assistant, or reload the " +
+				"relevant domain, for it to take effect.\n\n" +
 				"Requires the ha:files scope. Prefer a purpose-built tool where one exists: helpers via " +
 				"ha_set_helper and automations via ha_set_automation both apply immediately and cannot " +
 				"break startup.",
 			inputSchema: {
 				path: z.string().describe("File relative to the config root, e.g. 'configuration.yaml'."),
-				content: z.string().describe("The complete new contents of the file.")
+				content: z.string().describe("The complete new contents of the file."),
+				verify: z
+					.boolean()
+					.optional()
+					.describe(
+						"Check the configuration afterwards and restore the file if it fails. Default true."
+					)
 			},
 			annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true }
 		},
-		async ({ path, content }) =>
+		async ({ path, content, verify }) =>
 			runTool(ctx.logger, "ha_write_config_file", async () => {
 				const decision = evaluateConfigWrite(ctx.instances.currentSafety());
 				if (!decision.allowed) {
 					return errorResult(`Refused: ${decision.reason}`);
 				}
-				const result = await filesRequest<Record<string, unknown>>(
-					ctx,
-					`/write?path=${encodeURIComponent(path)}`,
-					{ method: "POST", body: { content } }
-				);
+				const shouldVerify = verify !== false;
+				// Captured before the write so the file can be put back. A file that
+				// does not exist yet reads as null, and there is nothing to restore
+				// to — see below.
+				const previous = shouldVerify ? await readIfExists(ctx, path) : null;
+
+				const result = await write(ctx, path, content);
+				if (!shouldVerify) {
+					return jsonResult({
+						...result,
+						verified: false,
+						next: "Run ha_check_config when the set of files is complete."
+					});
+				}
+
+				const check = await ctx.rest.checkConfig();
+				if (isValid(check)) {
+					return jsonResult({
+						...result,
+						verified: true,
+						next: "Restart Home Assistant, or reload the relevant domain, to apply it."
+					});
+				}
+
+				if (previous === null) {
+					// Nothing to restore to. A brand-new file usually cannot break the
+					// configuration unless something !includes it, so leaving it is
+					// less surprising than deleting a file the caller just asked for.
+					return jsonResult({
+						...result,
+						verified: false,
+						rolled_back: false,
+						errors: check.errors,
+						note:
+							"The configuration does not check out, and this file was new so there was " +
+							"nothing to restore. It is left in place. If something !includes it, fix or " +
+							"remove it before restarting Home Assistant."
+					});
+				}
+
+				await write(ctx, path, previous);
+				const after = await ctx.rest.checkConfig();
 				return jsonResult({
-					...result,
-					next: "Run ha_check_config, then restart Home Assistant for it to take effect."
+					path,
+					written: false,
+					verified: false,
+					rolled_back: true,
+					errors: check.errors,
+					// Distinguishing these two matters: rolling back an edit that was
+					// *fixing* a pre-existing fault, and blaming the caller for it,
+					// would send an agent hunting for a mistake it did not make.
+					already_invalid_before_this_edit: !isValid(after),
+					note: isValid(after)
+						? "The change broke the configuration, so the file was put back as it was."
+						: "The configuration was already failing this check before this edit. The " +
+							"file was still put back. If you are fixing it in stages, write again " +
+							"with verify=false and check at the end."
 				});
 			})
 	);

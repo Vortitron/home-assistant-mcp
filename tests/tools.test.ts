@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { loadConfig } from "../src/config.js";
@@ -639,5 +639,130 @@ describe("config files", () => {
 		expect(result.isError).toBe(true);
 		expect(fetchMock).not.toHaveBeenCalled();
 		vi.unstubAllGlobals();
+	});
+});
+
+describe("ha_write_config_file verification", () => {
+	const BROKERED = {
+		HA_TOKEN: "",
+		VOMEHOME_TOKEN: "vh_test",
+		VOMEHOME_INSTANCE_ID: "rly-1",
+		HA_ALLOW_WRITE: "true",
+		HA_ALLOW_CONFIG_WRITE: "true"
+	};
+
+	/** Routes the file endpoints; records every write body in order. */
+	function stubFiles(options: { existing?: string | null } = {}) {
+		const writes: string[] = [];
+		const fetchMock = vi.fn(async (input: unknown, init: any) => {
+			const url = String(input);
+			if (url.includes("/files/read")) {
+				if (options.existing === null || options.existing === undefined) {
+					return new Response("not found", { status: 404 });
+				}
+				return new Response(JSON.stringify({ content: options.existing }), { status: 200 });
+			}
+			writes.push(JSON.parse(init.body).content);
+			return new Response(JSON.stringify({ path: "configuration.yaml", written: true }), {
+				status: 200
+			});
+		});
+		vi.stubGlobal("fetch", fetchMock);
+		return writes;
+	}
+
+	afterEach(() => vi.unstubAllGlobals());
+
+	it("keeps the write when the configuration still checks out", async () => {
+		const writes = stubFiles({ existing: "old:\n" });
+		const checkConfig = vi.fn(async () => ({ result: "valid", errors: null }));
+		const server = buildHarness({ env: BROKERED, rest: { checkConfig } });
+
+		const body = jsonOf(
+			await server.call("ha_write_config_file", {
+				path: "configuration.yaml",
+				content: "new:\n"
+			})
+		);
+
+		expect(body.verified).toBe(true);
+		expect(body.rolled_back).toBeUndefined();
+		expect(writes).toEqual(["new:\n"]);
+	});
+
+	it("puts the file back when the change breaks the configuration", async () => {
+		// The point of the whole feature: a bad edit must not be able to leave
+		// Home Assistant unable to start.
+		const writes = stubFiles({ existing: "good:\n" });
+		const checkConfig = vi
+			.fn()
+			.mockResolvedValueOnce({ result: "invalid", errors: "bad indentation at line 3" })
+			.mockResolvedValueOnce({ result: "valid", errors: null });
+		const server = buildHarness({ env: BROKERED, rest: { checkConfig } });
+
+		const body = jsonOf(
+			await server.call("ha_write_config_file", {
+				path: "configuration.yaml",
+				content: "broken\n"
+			})
+		);
+
+		expect(body.rolled_back).toBe(true);
+		expect(body.errors).toMatch(/bad indentation/);
+		expect(body.already_invalid_before_this_edit).toBe(false);
+		// Wrote the new content, then wrote the original back.
+		expect(writes).toEqual(["broken\n", "good:\n"]);
+	});
+
+	it("says so when the configuration was already failing before the edit", async () => {
+		// Otherwise an agent fixing a pre-existing fault gets blamed for it and
+		// goes hunting for a mistake it did not make.
+		stubFiles({ existing: "already-broken\n" });
+		const checkConfig = vi.fn(async () => ({ result: "invalid", errors: "missing key" }));
+		const server = buildHarness({ env: BROKERED, rest: { checkConfig } });
+
+		const body = jsonOf(
+			await server.call("ha_write_config_file", {
+				path: "configuration.yaml",
+				content: "half-a-fix\n"
+			})
+		);
+
+		expect(body.rolled_back).toBe(true);
+		expect(body.already_invalid_before_this_edit).toBe(true);
+		expect(body.note).toMatch(/verify=false/);
+	});
+
+	it("leaves a brand-new file in place, since there is nothing to restore", async () => {
+		const writes = stubFiles({ existing: null });
+		const checkConfig = vi.fn(async () => ({ result: "invalid", errors: "boom" }));
+		const server = buildHarness({ env: BROKERED, rest: { checkConfig } });
+
+		const body = jsonOf(
+			await server.call("ha_write_config_file", { path: "packages/new.yaml", content: "x\n" })
+		);
+
+		expect(body.rolled_back).toBe(false);
+		expect(body.note).toMatch(/nothing to restore/);
+		expect(writes).toEqual(["x\n"]);
+	});
+
+	it("skips the check entirely with verify=false", async () => {
+		// For a set of files that are only valid together.
+		const writes = stubFiles({ existing: "old\n" });
+		const checkConfig = vi.fn();
+		const server = buildHarness({ env: BROKERED, rest: { checkConfig } });
+
+		const body = jsonOf(
+			await server.call("ha_write_config_file", {
+				path: "packages/a.yaml",
+				content: "a\n",
+				verify: false
+			})
+		);
+
+		expect(body.verified).toBe(false);
+		expect(checkConfig).not.toHaveBeenCalled();
+		expect(writes).toEqual(["a\n"]);
 	});
 });

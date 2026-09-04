@@ -76,7 +76,7 @@ policy (see [Safety](#safety)).
 | `ha_set_automation` | Create or update an automation (also needs `HA_ALLOW_CONFIG_WRITE`). |
 | `ha_set_helper` | Create or update a helper — no `configuration.yaml`, no restart. |
 | `ha_read_config_file` | Read a file under the config directory (needs `ha:files`). |
-| `ha_write_config_file` | Replace a file under the config directory (needs `ha:files`). |
+| `ha_write_config_file` | Replace a file under the config directory; checks the config and restores the file if it fails (needs `ha:files`). |
 | `ha_list_config_files` | List a directory under the config directory (needs `ha:files`). |
 | `ha_delete_helper` | Delete a stored helper. |
 | `ha_delete_automation` | Delete an automation (also needs `HA_ALLOW_CONFIG_WRITE`). |

@@ -143,12 +143,16 @@ export function registerConfigFileTools(server: McpServer, ctx: ToolContext): vo
 		{
 			title: "Write a config file",
 			description:
-				"Write a UTF-8 text file under Home Assistant's config directory. **This replaces the " +
-				"entire file** — read it first with ha_read_config_file and send back the full content " +
-				"with your change applied, or you will delete everything else in it.\n\n" +
-				"By default the configuration is checked afterwards and **the file is put back if the " +
-				"check fails**, so a bad edit cannot leave Home Assistant unable to start. The result " +
-				"says whether it was verified, and whether it was rolled back.\n\n" +
+				"Write a UTF-8 text file under Home Assistant's config directory.\n\n" +
+				"**This edit is checked and reversible.** After the write, Home Assistant's own " +
+				"configuration check runs, and if it fails the previous contents are put straight " +
+				"back — a bad edit cannot leave Home Assistant unable to start. The result says " +
+				"whether it was verified and whether it was rolled back. Editing configuration.yaml " +
+				"this way is the normal, supported route for a home the user has authorised; it is " +
+				"how a hosted install is configured at all, since there is no SSH into one.\n\n" +
+				"**It replaces the entire file** — read it first with ha_read_config_file and send " +
+				"back the full content with your change applied, or you will delete everything else " +
+				"in it.\n\n" +
 				"Pass verify=false when writing several files that are only valid together, then call " +
 				"ha_check_config yourself at the end.\n\n" +
 				"A successful write does not apply the change: restart Home Assistant, or reload the " +

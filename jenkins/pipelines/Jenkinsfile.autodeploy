@@ -1,0 +1,151 @@
+// =============================================================================
+// home-assistant-mcp — Auto-Deploy Pipeline
+//
+// Triggers on every push to ``main`` and promotes it: staging unattended,
+// then live behind an approval click.
+//
+// WHY THIS JOB EXISTS AT ALL
+// --------------------------
+// ``HomeAssistantMCP/ha-mcp-deploy`` already does the whole job — install,
+// lint, typecheck, test, build, stage the artefact, deploy staging, ask for
+// approval, deploy live, smoke test.  What it had no way to do was start.
+// It was deliberately left without a push trigger ("deploying is a decision,
+// not a consequence of a commit"), and the practical result was that nothing
+// ever deployed: commits landed on main, ha-mcp-ci went green, and the
+// hosted MCP server behind https://vome.io/mcp stayed on whatever build
+// somebody last started by hand.
+//
+// A trigger could not simply be bolted onto ha-mcp-deploy either.  That job's
+// SCM is the VomeHome repository, because the pipeline is VomeHome
+// infrastructure (host triggers, service names) while the MCP server is open
+// source — so a ``githubPush()`` there would fire on VomeHome commits, not
+// MCP ones.  This job's SCM *is* the MCP repository, which is what makes the
+// trigger watch the right thing.  Same reason ha-mcp-ci lives here.
+//
+// WHY THE APPROVAL IS HELD HERE
+// -----------------------------
+// ha-mcp-deploy has its own approval gate, and using it would work — but the
+// gate would then sit inside a job with ``disableConcurrentBuilds``, holding
+// it for as long as it takes somebody to notice.  Holding this parent's
+// executor instead keeps the deploy job free, and matches
+// Jenkinsfile.live-autodeploy, which learned the same lesson the hard way.
+//
+// So: staging goes out as soon as CI passes, which keeps it honest about
+// what is on main; live waits for a person.  Both children run with
+// SKIP_APPROVAL=true because the decision has already been made here.
+//
+// The Jenkins job is provisioned by Configuration as Code at
+// ``jenkins/casc.yaml`` in the VomeHome repo →
+// ``HomeAssistantMCP/ha-mcp-autodeploy``.  Note that casc.yaml is bind
+// mounted as a single file, so edits to it are invisible to Jenkins until
+// the container is restarted.
+// =============================================================================
+
+pipeline {
+	agent any
+
+	options {
+		ansiColor('xterm')
+		timestamps()
+		// Comfortably longer than the approval's own timeout below: this
+		// build is alive for as long as the click takes.
+		timeout(time: 4, unit: 'HOURS')
+		buildDiscarder(logRotator(numToKeepStr: '15', daysToKeepStr: '30'))
+		disableConcurrentBuilds()
+	}
+
+	triggers {
+		// The webhook is the fast path; polling is the backstop. Between
+		// 2026-07-15 and 2026-08-12 this repo had no webhook pointing at
+		// Jenkins at all and seven commits landed on main unbuilt, which is
+		// why ha-mcp-ci carries the same pair.
+		githubPush()
+		pollSCM('H/15 * * * *')
+	}
+
+	parameters {
+		booleanParam(
+			name: 'SKIP_STAGING',
+			defaultValue: false,
+			description: 'Go straight to the live approval without deploying staging first.'
+		)
+		booleanParam(
+			name: 'SKIP_APPROVAL',
+			defaultValue: false,
+			description: 'Bypass the manual LIVE approval. Only with branch protection enforced on main — otherwise the click is the only thing between a push and production.'
+		)
+	}
+
+	environment {
+		DEPLOY_JOB_NAME = 'HomeAssistantMCP/ha-mcp-deploy'
+	}
+
+	stages {
+		stage('Resolve commit') {
+			steps {
+				script {
+					env.MCP_SHA = sh(
+						script: 'git rev-parse --short HEAD',
+						returnStdout: true,
+					).trim()
+					currentBuild.description = "main @ ${env.MCP_SHA}"
+					echo "Promoting ${env.MCP_SHA} from main"
+				}
+			}
+		}
+
+		stage('Deploy staging') {
+			when {
+				expression { !params.SKIP_STAGING }
+			}
+			steps {
+				// ha-mcp-deploy runs lint, typecheck and the test suite before
+				// it deploys anything, so a separate pre-flight CI stage would
+				// only run them twice. If staging fails, live is never asked
+				// about.
+				build job: env.DEPLOY_JOB_NAME, wait: true, propagate: true,
+					parameters: [
+						string(name: 'TARGET', value: 'staging'),
+						string(name: 'BRANCH', value: 'main'),
+						booleanParam(name: 'SKIP_TESTS', value: false),
+						booleanParam(name: 'SKIP_APPROVAL', value: true),
+					]
+			}
+		}
+
+		stage('Approval') {
+			when {
+				expression { !params.SKIP_APPROVAL }
+			}
+			steps {
+				timeout(time: 3, unit: 'HOURS') {
+					input message: "Deploy MCP ${env.MCP_SHA} to LIVE?", ok: 'Yes, deploy to production'
+				}
+			}
+		}
+
+		stage('Deploy live') {
+			steps {
+				build job: env.DEPLOY_JOB_NAME, wait: true, propagate: true,
+					parameters: [
+						string(name: 'TARGET', value: 'live'),
+						string(name: 'BRANCH', value: 'main'),
+						booleanParam(name: 'SKIP_TESTS', value: false),
+						booleanParam(name: 'SKIP_APPROVAL', value: true),
+					]
+			}
+		}
+	}
+
+	post {
+		success {
+			echo "✓ MCP ${env.MCP_SHA} promoted to live."
+		}
+		aborted {
+			echo "MCP ${env.MCP_SHA} was not promoted — the approval timed out or was cancelled. Staging is on this commit; live is not."
+		}
+		failure {
+			echo "✗ Promotion of MCP ${env.MCP_SHA} failed. Check ${env.DEPLOY_JOB_NAME} for which stage gave up."
+		}
+	}
+}

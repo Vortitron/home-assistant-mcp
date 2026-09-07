@@ -150,6 +150,9 @@ export function registerRegistryTools(server: McpServer, ctx: ToolContext): void
 				const rows = limited.items.map((entry) => ({
 					entity_id: entry.entity_id,
 					platform: entry.platform ?? null,
+					// Promised by this tool's description, and the only way to see
+					// which helper owns an entity — see ha_delete_helper.
+					unique_id: entry.unique_id ?? null,
 					area_id: entry.area_id ?? null,
 					device_id: entry.device_id ?? null,
 					name: entry.name ?? entry.original_name ?? null,

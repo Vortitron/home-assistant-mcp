@@ -90,6 +90,13 @@ export interface HaDevice {
 
 export interface HaEntityRegistryEntry {
 	entity_id: string;
+	/**
+	 * The platform's own id for the entity. Present in `as_partial_dict`, so
+	 * `config/entity_registry/list` carries it — but treat it as optional: it
+	 * is the key Home Assistant deletes helpers by, and code that relies on it
+	 * must cope with a registry that does not return it.
+	 */
+	unique_id?: string;
 	area_id?: string | null;
 	device_id?: string | null;
 	platform?: string;

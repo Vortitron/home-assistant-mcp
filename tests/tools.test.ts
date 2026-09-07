@@ -556,7 +556,7 @@ describe("helper entities", () => {
 	});
 
 	it("refuses to create or delete without config-write", async () => {
-		const sendCommand = vi.fn();
+		const sendCommand = vi.fn(async () => []);
 		const server = buildHarness({ ws: { sendCommand } });
 
 		for (const [tool, args] of [
@@ -569,16 +569,144 @@ describe("helper entities", () => {
 		expect(sendCommand).not.toHaveBeenCalled();
 	});
 
+	/**
+	 * Deleting a stored helper whose id matches a configuration.yaml helper's
+	 * key removes the YAML entity's registry slot as well, because Home
+	 * Assistant deletes by (domain, platform, item_id) and both collections
+	 * register under the same domain and platform. A reload does not recover
+	 * it — only a full restart does. Reported from the field after exactly
+	 * that happened, against a tool whose description promised it could not.
+	 */
+	function helperWs(options: {
+		stored?: StoredRow[];
+		registry?: Record<string, unknown>[];
+		onDelete?: () => void;
+	}) {
+		const sendCommand = vi.fn(async (command: any) => {
+			if (command.type.endsWith("/list")) {
+				return options.stored ?? [];
+			}
+			if (command.type.endsWith("/delete")) {
+				options.onDelete?.();
+				return {};
+			}
+			return {};
+		});
+		const listEntities = vi.fn(async () => options.registry ?? []);
+		return { sendCommand, listEntities };
+	}
+
+	type StoredRow = { id: string; name: string };
+
 	it("deletes by id", async () => {
-		const sendCommand = vi.fn(async () => ({}));
-		const server = buildHarness({ env: WRITE, ws: { sendCommand } });
+		const ws = helperWs({
+			stored: [{ id: "t1", name: "Kettle" }],
+			registry: [
+				{ entity_id: "timer.kettle", platform: "timer", unique_id: "t1", original_name: "Kettle" }
+			]
+		});
+		const server = buildHarness({ env: WRITE, ws });
 
 		const body = jsonOf(
 			await server.call("ha_delete_helper", { kind: "timer", helper_id: "t1" })
 		);
 
 		expect(body.deleted).toBe(true);
-		expect(sendCommand).toHaveBeenCalledWith({ type: "timer/delete", timer_id: "t1" });
+		expect(body.removed_entity).toBe("timer.kettle");
+		expect(body.shared_id_check).toBe("passed");
+		expect(ws.sendCommand).toHaveBeenCalledWith({ type: "timer/delete", timer_id: "t1" });
+	});
+
+	it("refuses an id that is not a stored helper, rather than guessing", async () => {
+		// The old description said configuration.yaml helpers "cannot be deleted
+		// this way". Nothing enforced it; now something does.
+		const ws = helperWs({ stored: [{ id: "other", name: "Other" }] });
+		const server = buildHarness({ env: WRITE, ws });
+
+		const result = await server.call("ha_delete_helper", {
+			kind: "input_boolean",
+			helper_id: "holiday_mode"
+		});
+
+		expect(result.isError).toBe(true);
+		expect(textOf(result)).toMatch(/configuration\.yaml/);
+		expect(ws.sendCommand).not.toHaveBeenCalledWith(
+			expect.objectContaining({ type: "input_boolean/delete" })
+		);
+	});
+
+	it("refuses when the id's entity belongs to a differently-named helper", async () => {
+		// The collision: the stored row is a phantom, and the registry slot for
+		// its id is held by the YAML helper that won it at startup.
+		let deleted = false;
+		const ws = helperWs({
+			stored: [{ id: "holiday_mode", name: "Holiday mode" }],
+			registry: [
+				{
+					entity_id: "input_boolean.holiday_mode",
+					platform: "input_boolean",
+					unique_id: "holiday_mode",
+					original_name: "Away for the week"
+				}
+			],
+			onDelete: () => {
+				deleted = true;
+			}
+		});
+		const server = buildHarness({ env: WRITE, ws });
+
+		const result = await server.call("ha_delete_helper", {
+			kind: "input_boolean",
+			helper_id: "holiday_mode"
+		});
+
+		expect(result.isError).toBe(true);
+		expect(textOf(result)).toMatch(/restart/);
+		expect(deleted).toBe(false);
+	});
+
+	it("goes ahead on the shared id when told to explicitly", async () => {
+		const ws = helperWs({
+			stored: [{ id: "holiday_mode", name: "Holiday mode" }],
+			registry: [
+				{
+					entity_id: "input_boolean.holiday_mode",
+					platform: "input_boolean",
+					unique_id: "holiday_mode",
+					original_name: "Away for the week"
+				}
+			]
+		});
+		const server = buildHarness({ env: WRITE, ws });
+
+		const body = jsonOf(
+			await server.call("ha_delete_helper", {
+				kind: "input_boolean",
+				helper_id: "holiday_mode",
+				confirm_shared_id: true
+			})
+		);
+
+		expect(body.deleted).toBe(true);
+		expect(body.shared_id_check).toBe("overridden");
+	});
+
+	it("says the check did not run rather than implying it passed", async () => {
+		// A registry that returns no unique ids cannot answer the question. The
+		// failure mode to avoid is a silent all-clear.
+		const ws = helperWs({
+			stored: [{ id: "t1", name: "Kettle" }],
+			registry: [{ entity_id: "timer.kettle", platform: "timer" }]
+		});
+		const server = buildHarness({ env: WRITE, ws });
+
+		const body = jsonOf(
+			await server.call("ha_delete_helper", { kind: "timer", helper_id: "t1" })
+		);
+
+		expect(body.deleted).toBe(true);
+		expect(body.shared_id_check).toBe("not run");
+		expect(body.note).toMatch(/restart/);
 	});
 
 	it("lists one kind, or every kind at once", async () => {

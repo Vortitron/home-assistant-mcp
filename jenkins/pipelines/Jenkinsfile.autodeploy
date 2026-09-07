@@ -41,6 +41,42 @@
 // the container is restarted.
 // =============================================================================
 
+// Tell somebody the gate is open.
+//
+// Best effort by construction: a notification that fails must never fail a
+// deploy, so every path here ends in "carry on". Set APPROVAL_NOTIFY_EMAIL in
+// jenkins/.env to switch it on -- unset, it says so once and stays quiet,
+// which is better than a pipeline that silently never tells anyone.
+//
+// The key goes in a header rather than the JSON body: it keeps the secret out
+// of the file on disk, and out of any quoting mistake in the payload.
+void notifyApprovalPending(String what) {
+	String to = env.APPROVAL_NOTIFY_EMAIL
+	if (!to?.trim()) {
+		echo 'APPROVAL_NOTIFY_EMAIL is not set, so no approval email was sent. Add it to jenkins/.env.'
+		return
+	}
+	try {
+		String body = "A deploy is waiting for you.\\n\\n${what}\\n\\nApprove or abort: ${env.BUILD_URL}input/\\n"
+		writeFile file: 'approval-mail.json', text: (
+			'{"sender":"noreply@vome.io","to":["' + to.trim() + '"],' +
+			'"subject":"Approve: ' + what + '","text_body":"' + body + '"}'
+		)
+		withCredentials([string(credentialsId: 'portal-smtp2go-api-key', variable: 'SMTP_KEY')]) {
+			sh '''
+				set +x
+				curl -s -X POST https://api.smtp2go.com/v3/email/send \
+					-H "X-Smtp2go-Api-Key: $SMTP_KEY" \
+					-H "Content-Type: application/json" \
+					--data @approval-mail.json \
+					-o /dev/null -w "approval email: http=%{http_code}\n" || true
+			'''
+		}
+	} catch (err) {
+		echo "Approval email failed (${err}). Carrying on -- the gate itself is unaffected."
+	}
+}
+
 pipeline {
 	agent any
 
@@ -49,7 +85,7 @@ pipeline {
 		timestamps()
 		// Comfortably longer than the approval's own timeout below: this
 		// build is alive for as long as the click takes.
-		timeout(time: 4, unit: 'HOURS')
+		timeout(time: 14, unit: 'HOURS')
 		buildDiscarder(logRotator(numToKeepStr: '15', daysToKeepStr: '30'))
 		disableConcurrentBuilds()
 	}
@@ -118,7 +154,14 @@ pipeline {
 				expression { !params.SKIP_APPROVAL }
 			}
 			steps {
-				timeout(time: 3, unit: 'HOURS') {
+				notifyApprovalPending("MCP ${env.MCP_SHA} is on staging and waiting to go live")
+				// Twelve hours, not three. Three meant an afternoon out was enough
+				// to lose a promotion: the input expired, the build aborted, and
+				// the commit only reached live because a later push happened to
+				// carry it. The cost is a parked executor, which is cheap; the
+				// cost of the short window was a release that quietly did not
+				// happen.
+				timeout(time: 12, unit: 'HOURS') {
 					input message: "Deploy MCP ${env.MCP_SHA} to LIVE?", ok: 'Yes, deploy to production'
 				}
 			}
@@ -126,6 +169,24 @@ pipeline {
 
 		stage('Deploy live') {
 			steps {
+				// The approval named a commit; make sure that is still the one we
+				// are about to ship. With a twelve-hour window it is entirely
+				// possible for main to move while the build waits, and
+				// ha-mcp-deploy takes a BRANCH ('*/main'), not a SHA -- so an old
+				// build approved late would quietly deploy something newer than
+				// the message said. Refuse instead: the build for the newer
+				// commit is already queued behind this one and will ask properly.
+				script {
+					if (env.MCP_SHA) {
+						sh 'git fetch --quiet origin main'
+						String head = sh(script: 'git rev-parse --short origin/main', returnStdout: true).trim()
+						if (head != env.MCP_SHA) {
+							error("main has moved from ${env.MCP_SHA} to ${head} since this build was approved. Not deploying: approve the build for ${head} instead.")
+						}
+					} else {
+						echo 'No resolved SHA (a restart from this stage skips Resolve commit), so the drift check was skipped. This will deploy the current head of main.'
+					}
+				}
 				build job: env.DEPLOY_JOB_NAME, wait: true, propagate: true,
 					parameters: [
 						string(name: 'TARGET', value: 'live'),

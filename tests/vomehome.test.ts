@@ -95,6 +95,7 @@ describe("createVomeHomeClient", () => {
 		const instance = await enabledClient().createInstance({ name: "Sandbox", timezone: "Europe/London" });
 
 		expect(instance).toMatchObject({ id: "new", status: "creating" });
+		expect(instance.grantedScopes).toBeUndefined();
 		const [url, init] = fetchMock.mock.calls[0]!;
 		expect(url).toBe("https://vome.io/api/v1/instances");
 		expect((init as RequestInit).method).toBe("POST");
@@ -102,6 +103,23 @@ describe("createVomeHomeClient", () => {
 			name: "Sandbox",
 			timezone: "Europe/London"
 		});
+	});
+
+	it("surfaces granted_scopes from the create response", async () => {
+		const fetchMock = vi.fn(async () =>
+			jsonResponse({
+				instance: {
+					id: "new",
+					name: "Sandbox",
+					status: "creating",
+					granted_scopes: ["ha:read", "ha:write", "ha:config", "ha:files"]
+				}
+			})
+		);
+		vi.stubGlobal("fetch", fetchMock);
+
+		const instance = await enabledClient().createInstance({ name: "Sandbox" });
+		expect(instance.grantedScopes).toEqual(["ha:read", "ha:write", "ha:config", "ha:files"]);
 	});
 
 	it("returns the one-click login url and expiry", async () => {

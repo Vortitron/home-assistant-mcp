@@ -155,7 +155,7 @@ stays behind a full browser login on the portal.
 | `vomehome_get_instance` | Details + live status for one instance. |
 | `vomehome_use_instance` | Switch which instance the `ha_*` tools target (multi-instance — see [Several instances from one token](#several-instances-from-one-token)). |
 | `vomehome_reboot_instance` | Reboot an instance's VM (write-gated). |
-| `vomehome_create_instance` | Create a throwaway test/sandbox instance (needs the create scope on your API key; the new instance becomes the active target). |
+| `vomehome_create_instance` | Create a throwaway test/sandbox instance (needs the create scope on your API key; the creating key is granted full HA access on the new instance, which becomes the active target). |
 | `vomehome_get_login_url` | Mint a one-click HA login URL to open in a new tab. |
 
 ### Supervisor / Vome add-on (HAOS / Supervised)
@@ -263,7 +263,7 @@ config.
 | `VOMEHOME_TOKEN` | _(disabled)_ | VomeHome personal access token; enables the `vomehome_*` tools. |
 | `VOMEHOME_INSTANCE_ID` | _(direct mode)_ | The active/default instance to broker HA calls to. With a token and **no** `HA_TOKEN`, HA tools route through VomeHome (see [Brokered mode](#brokered-mode-the-real-boundary)). What it may do is set by your token's per-instance scopes in the portal (server-enforced). |
 | `VOMEHOME_INSTANCES` | _(none)_ | Optional JSON registry to make **multiple** instances known at startup, e.g. `[{"id":"rly-house","label":"home"},{"id":"sbx"}]`. Per-instance `write`/`config` here are optional **local** restrictions (omit to defer to the server). Switch between them with `vomehome_use_instance`. See [Several instances from one token](#several-instances-from-one-token). |
-| `VOMEHOME_ALLOW_CREATE` | _(defer to key)_ | Optional **local** guard for creating an instance. The real authority is the account-wide create scope on your API key; set `false` to block creation locally regardless. Instances you create become the active target for the session. |
+| `VOMEHOME_ALLOW_CREATE` | _(defer to key)_ | Optional **local** guard for creating an instance. The real authority is the account-wide create scope on your API key; set `false` to block creation locally regardless. Instances you create are granted full HA access on that key and become the active target for the session. |
 | `HA_TIMEOUT_MS` | `15000` | HTTP/WebSocket request timeout. |
 | `MAX_RESULTS` | `500` | Max items a list tool returns before truncating. |
 | `LOG_LEVEL` | `info` | `error` \| `warn` \| `info` \| `debug` (logs go to stderr). |
@@ -404,9 +404,12 @@ at startup (plus any optional local belt-and-braces restrictions).
   calls; **`vomehome_list_instances`** shows which one is active and each
   instance's effective access.
 - **Creating instances** (`vomehome_create_instance`) needs the create scope on
-  your key — **you own what you create**: a created instance becomes the active
-  target for the session. Add its id to `VOMEHOME_INSTANCES` to keep it known
-  across restarts.
+  your key — **you own what you create**. The portal grants the creating key
+  full Home Assistant access on the new instance (`ha:read`, `ha:write`,
+  `ha:config`, `ha:files`) so `ha_*` tools work without a trip back to the
+  tokens page. Other keys, and other homes, stay as you ticked them. The
+  instance also becomes the active target for the session. Add its id to
+  `VOMEHOME_INSTANCES` to keep it known across restarts.
 
 The **API key is the single source of truth** and the server has the final say
 (it returns `403` if the key lacks a scope). The client flags above only ever
@@ -516,8 +519,11 @@ token page generates this token-only snippet for you.)
 > scopes (`ha:read` / `ha:write` / `ha:config`) can broker Home Assistant calls
 > but will get `403 … missing required scope(s): instances:read` from the
 > instance tools. If you want the agent to spin up sandboxes, mint the token with
-> `instances:write` **and** the `ha:*` scopes — no local `VOMEHOME_ALLOW_CREATE`
-> env flag is required in brokered mode (set `false` only if you want a local block).
+> `instances:write`. Creating an instance grants that key full `ha:*` access
+> (`ha:read`, `ha:write`, `ha:config`, `ha:files`) on the **new** instance
+> automatically — existing homes keep the grants you ticked. No local
+> `VOMEHOME_ALLOW_CREATE` env flag is required in brokered mode (set `false`
+> only if you want a local block).
 > A default (read-only) token already includes `instances:read` — the 403 only
 > appears when a token was scoped to HA access *without* the instances scopes.
 

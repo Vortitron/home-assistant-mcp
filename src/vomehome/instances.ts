@@ -52,7 +52,10 @@ export interface InstanceManager {
 	use(instanceId: string): ResolvedTarget;
 	/**
 	 * Register an instance created via the MCP with full (write + config) access
-	 * and make it active. Implements "if you can create it, you own it".
+	 * and make it active. Implements "if you can create it, you own it" on the
+	 * client. The portal separately grants the creating API key full HA scopes
+	 * on that instance; these flags only stop the local write-guard refusing
+	 * before the request is sent.
 	 */
 	registerCreated(id: string, label?: string): InstanceAccess;
 }

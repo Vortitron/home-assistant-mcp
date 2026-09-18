@@ -264,6 +264,20 @@ describe("vomehome multi-instance tools", () => {
 			active_instance: "sbx-new",
 			client_access: { write: true, config: true }
 		});
+		expect(payload.note).toMatch(/full Home Assistant access/);
+	});
+
+	it("reports the portal's granted_scopes on a created instance", async () => {
+		const createInstance = vi.fn(async () => ({
+			id: "sbx-new",
+			name: "Sandbox",
+			status: "creating",
+			grantedScopes: ["ha:read", "ha:write", "ha:config", "ha:files"]
+		}));
+		const server = brokeredHarness({ createInstance });
+		const payload = jsonOf(await server.call("vomehome_create_instance", { name: "Sandbox" }));
+		expect(payload.server_access).toEqual(["ha:read", "ha:write", "ha:config", "ha:files"]);
+		expect(payload.client_access).toEqual({ write: true, config: true });
 	});
 
 	it("refuses to switch instances in direct mode", async () => {

@@ -48,12 +48,17 @@ export interface CreateInstanceInput {
 	timezone?: string;
 }
 
+export interface CreatedVomeHomeInstance extends VomeHomeInstance {
+	/** Per-instance HA scopes the portal granted this API key on create. */
+	grantedScopes?: string[];
+}
+
 export interface VomeHomeClient {
 	isEnabled(): boolean;
 	listInstances(): Promise<VomeHomeInstance[]>;
 	getInstance(id: string): Promise<VomeHomeInstance>;
 	restartInstance(id: string): Promise<VomeHomeActionResult>;
-	createInstance(input: CreateInstanceInput): Promise<VomeHomeInstance>;
+	createInstance(input: CreateInstanceInput): Promise<CreatedVomeHomeInstance>;
 	getLoginUrl(id: string): Promise<VomeHomeLoginUrl>;
 }
 
@@ -72,6 +77,14 @@ export class VomeHomeError extends Error {
 
 function asString(value: unknown): string | undefined {
 	return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function asStringList(value: unknown): string[] | undefined {
+	if (!Array.isArray(value)) {
+		return undefined;
+	}
+	const out = value.filter((item): item is string => typeof item === "string" && item.length > 0);
+	return out.length > 0 ? out : undefined;
 }
 
 function asBoolean(value: unknown): boolean | undefined {
@@ -191,7 +204,7 @@ export function createVomeHomeClient(config: Config, logger: Logger): VomeHomeCl
 		};
 	}
 
-	async function createInstance(input: CreateInstanceInput): Promise<VomeHomeInstance> {
+	async function createInstance(input: CreateInstanceInput): Promise<CreatedVomeHomeInstance> {
 		const body: Record<string, unknown> = { name: input.name };
 		if (input.timezone) {
 			body.timezone = input.timezone;
@@ -200,7 +213,11 @@ export function createVomeHomeClient(config: Config, logger: Logger): VomeHomeCl
 			method: "POST",
 			body
 		});
-		return normaliseInstance(payload?.instance);
+		const instance = normaliseInstance(payload?.instance);
+		const grantedScopes = isRecord(payload?.instance)
+			? asStringList(payload.instance.granted_scopes)
+			: undefined;
+		return grantedScopes ? { ...instance, grantedScopes } : instance;
 	}
 
 	async function getLoginUrl(id: string): Promise<VomeHomeLoginUrl> {

@@ -151,7 +151,7 @@ export function registerVomeHomeTools(server: McpServer, ctx: ToolContext): void
 		{
 			title: "Create VomeHome instance",
 			description:
-				"Create a new Home Assistant instance on VomeHome — useful for spinning up a throwaway test/sandbox install. In brokered mode the API key's create scope is authoritative (no local env flags required). Optionally set VOMEHOME_ALLOW_CREATE=false to block creation locally. The new instance is granted full write + config access for this session and becomes the active target.",
+				"Create a new Home Assistant instance on VomeHome — useful for spinning up a throwaway test/sandbox install. In brokered mode the API key's create scope is authoritative (no local env flags required). Optionally set VOMEHOME_ALLOW_CREATE=false to block creation locally. The creating API key is granted full Home Assistant access on the new instance (ha:read, ha:write, ha:config, ha:files) and it becomes the active target.",
 			inputSchema: {
 				name: z.string().min(1).describe("Human-friendly name for the new instance."),
 				timezone: z
@@ -177,12 +177,19 @@ export function registerVomeHomeTools(server: McpServer, ctx: ToolContext): void
 				}
 				const instance = await ctx.vomehome.createInstance({ name, timezone });
 				const access = ctx.instances.registerCreated(instance.id, name);
+				const granted = instance.grantedScopes;
 				return jsonResult({
 					created: true,
 					instance: serialiseInstance(instance),
 					active_instance: ctx.instances.activeId(),
 					client_access: { write: access.write, config: access.config },
-					note: "You created this instance, so it now has full write + config access and is the active target — HA tools operate on it until you switch (vomehome_use_instance). To keep this access across MCP restarts, add the id to VOMEHOME_INSTANCES (or a dedicated mcp.json server entry)."
+					server_access: granted ?? null,
+					note:
+						"You created this instance, so this API key now has full Home Assistant access on it " +
+						"(ha:read, ha:write, ha:config, ha:files) and it is the active target — HA tools operate " +
+						"on it until you switch (vomehome_use_instance). Other keys on the account are unchanged. " +
+						"To keep this instance known across MCP restarts, add the id to VOMEHOME_INSTANCES " +
+						"(or a dedicated mcp.json server entry)."
 				});
 			})
 	);

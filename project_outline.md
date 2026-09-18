@@ -127,7 +127,7 @@ Instance management (`portal/instances_api.py`):
 | GET | `/api/v1/instances` | `instances:read` | `{ instances: [{ id, name, status, tier, ha_url, custom_domain, created_at, live? }] }` |
 | GET | `/api/v1/instances/{id}` | `instances:read` | `{ instance: {…} }` |
 | POST | `/api/v1/instances/{id}/restart` | `instances:write` | `{ success, message }` |
-| POST | `/api/v1/instances` | `instances:write` | `{ instance: { id, name, status } }` |
+| POST | `/api/v1/instances` | `instances:write` | `{ instance: { id, name, status, granted_scopes? } }` — creating PAT is granted full HA access on the new instance |
 | GET | `/api/v1/instances/{id}/login-url` | `instances:read` | `{ url }` |
 
 Brokered Home Assistant (`portal/ha_proxy_api.py` → `portal/ha_core_api.py`):
@@ -151,7 +151,9 @@ Supporting pieces (all portal-side):
   (`instances:read/write`, `ha:read/ha:write`); read-only is the default; only a
   SHA-256 hash is stored; `token_meta()` is the single validator and `verify_pat`
   wraps it. GitHub-session UI to create/revoke (`account_tokens.py` +
-  `templates/account_api_tokens.html`, with scope checkboxes).
+  `templates/account_api_tokens.html`, with scope checkboxes). Creating an
+  instance grants that PAT every per-instance HA scope on the new server so the
+  sandbox is usable immediately.
 - **Scope gate** (`portal/api_scopes.py`): `require_scopes(*needed)` — PATs use
   their stored scopes; other bearer tokens (Auth0/session) get full scopes.
 - **Audit** (`portal/ha_audit.py`): `ha_audit_log` table; every brokered call

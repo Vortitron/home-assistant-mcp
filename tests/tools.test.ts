@@ -748,7 +748,7 @@ describe("config files", () => {
 		for (const [tool, args] of [
 			["ha_list_config_files", {}],
 			["ha_read_config_file", { path: "configuration.yaml" }],
-			["ha_write_config_file", { path: "configuration.yaml", content: "x" }]
+			["ha_write_config_file", { instance_id: "direct", path: "configuration.yaml", content: "x" }]
 		] as const) {
 			const result = await server.call(tool, args);
 			expect(result.isError).toBe(true);
@@ -761,11 +761,79 @@ describe("config files", () => {
 		vi.stubGlobal("fetch", fetchMock);
 		const server = buildHarness();
 		const result = await server.call("ha_write_config_file", {
+			instance_id: "direct",
 			path: "configuration.yaml",
 			content: "x"
 		});
 		expect(result.isError).toBe(true);
 		expect(fetchMock).not.toHaveBeenCalled();
+		vi.unstubAllGlobals();
+	});
+});
+
+describe("ha_write_config_file names its target", () => {
+	const BROKERED = {
+		HA_TOKEN: "",
+		VOMEHOME_TOKEN: "vh_test",
+		VOMEHOME_INSTANCE_ID: "rly-1",
+		HA_ALLOW_WRITE: "true",
+		HA_ALLOW_CONFIG_WRITE: "true"
+	};
+
+	it("refuses, without writing, when the named home is not the one selected", async () => {
+		/**
+		 * The 2026-09-18 incident, as a test.
+		 *
+		 * The active instance is ambient session state and it drifts: a
+		 * transport reconnect can resume a different conversation's choice,
+		 * because the memory is keyed only as far as the client's name. An
+		 * agent had selected the demo VM, checked that it was selected, and its
+		 * writes landed on a customer's real Home Assistant — 5 KB of their
+		 * configuration.yaml replaced by 790 bytes of Vome boilerplate, two
+		 * restarts, and nothing in the write path said a word.
+		 *
+		 * Naming the target turns that silent mis-delivery into a refusal. The
+		 * network must not be touched at all.
+		 */
+		const fetchMock = vi.fn();
+		vi.stubGlobal("fetch", fetchMock);
+		const server = buildHarness({ env: BROKERED });
+
+		const result = await server.call("ha_write_config_file", {
+			instance_id: "the-demo-vm",
+			path: "configuration.yaml",
+			content: "homeassistant:\n  name: VomeHome\n"
+		});
+
+		expect(result.isError).toBe(true);
+		expect(textOf(result)).toContain("rly-1");
+		expect(textOf(result)).toContain("the-demo-vm");
+		expect(fetchMock).not.toHaveBeenCalled();
+		vi.unstubAllGlobals();
+	});
+
+	it("writes when the named home is the one selected", async () => {
+		const fetchMock = vi.fn(async (input: unknown) => {
+			const url = String(input);
+			if (url.includes("/files/read")) {
+				return new Response("not found", { status: 404 });
+			}
+			return new Response(JSON.stringify({ path: "packages/x.yaml", written: true }), {
+				status: 200
+			});
+		});
+		vi.stubGlobal("fetch", fetchMock);
+		const server = buildHarness({ env: BROKERED });
+
+		const result = await server.call("ha_write_config_file", {
+			instance_id: "rly-1",
+			path: "packages/x.yaml",
+			content: "x\n",
+			verify: false
+		});
+
+		expect(result.isError).toBeFalsy();
+		expect(fetchMock).toHaveBeenCalled();
 		vi.unstubAllGlobals();
 	});
 });
@@ -808,6 +876,7 @@ describe("ha_write_config_file verification", () => {
 
 		const body = jsonOf(
 			await server.call("ha_write_config_file", {
+				instance_id: "rly-1",
 				path: "configuration.yaml",
 				content: "new:\n"
 			})
@@ -830,6 +899,7 @@ describe("ha_write_config_file verification", () => {
 
 		const body = jsonOf(
 			await server.call("ha_write_config_file", {
+				instance_id: "rly-1",
 				path: "configuration.yaml",
 				content: "broken\n"
 			})
@@ -851,6 +921,7 @@ describe("ha_write_config_file verification", () => {
 
 		const body = jsonOf(
 			await server.call("ha_write_config_file", {
+				instance_id: "rly-1",
 				path: "configuration.yaml",
 				content: "half-a-fix\n"
 			})
@@ -867,7 +938,7 @@ describe("ha_write_config_file verification", () => {
 		const server = buildHarness({ env: BROKERED, rest: { checkConfig } });
 
 		const body = jsonOf(
-			await server.call("ha_write_config_file", { path: "packages/new.yaml", content: "x\n" })
+			await server.call("ha_write_config_file", { instance_id: "rly-1", path: "packages/new.yaml", content: "x\n" })
 		);
 
 		expect(body.rolled_back).toBe(false);
@@ -883,6 +954,7 @@ describe("ha_write_config_file verification", () => {
 
 		const body = jsonOf(
 			await server.call("ha_write_config_file", {
+				instance_id: "rly-1",
 				path: "packages/a.yaml",
 				content: "a\n",
 				verify: false
@@ -952,6 +1024,7 @@ describe("binary config files", () => {
 
 		const body = jsonOf(
 			await server.call("ha_write_config_file", {
+				instance_id: "rly-1",
 				path: "assets/pack.bin",
 				content: "AAECAw==",
 				encoding: "base64"
@@ -981,6 +1054,7 @@ describe("binary config files", () => {
 
 		const body = jsonOf(
 			await server.call("ha_write_config_file", {
+				instance_id: "rly-1",
 				path: "assets/pack.bin",
 				content: "AAECAw==",
 				encoding: "base64",

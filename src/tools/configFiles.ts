@@ -184,6 +184,13 @@ export function registerConfigFileTools(server: McpServer, ctx: ToolContext): vo
 				"ha_set_helper and automations via ha_set_automation both apply immediately and cannot " +
 				"break startup.",
 			inputSchema: {
+				instance_id: z
+					.string()
+					.describe(
+						"The instance this write is meant for (as listed by vomehome_list_instances). " +
+							"Required, and checked against the one this session is actually targeting: " +
+							"if they differ the write is refused rather than applied to the wrong home."
+					),
 				path: z.string().describe("File relative to the config root, e.g. 'configuration.yaml'."),
 				content: z.string().describe("The complete new contents of the file (base64 if encoding='base64')."),
 				encoding: z
@@ -200,8 +207,41 @@ export function registerConfigFileTools(server: McpServer, ctx: ToolContext): vo
 			},
 			annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true }
 		},
-		async ({ path, content, encoding, verify }) =>
+		async ({ instance_id, path, content, encoding, verify }) =>
 			runTool(ctx.logger, "ha_write_config_file", async () => {
+				// Say which house, and be told if it is not the one you think.
+				//
+				// The active instance is ambient session state, and ambient state
+				// drifts: a transport reconnect can resume a *different*
+				// conversation's choice (the memory is keyed only as far as the
+				// client's name), and nothing in the write path ever said so.
+				//
+				// On 2026-09-18 that put a Vome boilerplate configuration.yaml
+				// over a live customer's real Home Assistant. The agent had
+				// selected the demo VM, had checked it was selected, and its
+				// writes went to the house next door — 5 KB of their config, the
+				// packages include and every YAML-defined helper, replaced by 790
+				// bytes of ours. Two full restarts followed before anyone noticed.
+				//
+				// No amount of transport bookkeeping can reliably tell two
+				// conversations apart, so this does not try. It makes the caller
+				// name the target and refuses when belief and reality disagree —
+				// which is precisely the state that did the damage. Cheap to
+				// satisfy, and it fails loudly instead of destructively.
+				// Only where there is more than one house to confuse. A direct
+				// connection has exactly one Home Assistant and no ambient
+				// instance to drift, so the check would be friction with nothing
+				// to catch.
+				const meant = (instance_id ?? "").trim();
+				const targeting = ctx.instances.activeId();
+				if (ctx.config.brokered && meant !== targeting) {
+					return errorResult(
+						`Refused: this session is targeting "${targeting}", but the write names ` +
+							`"${meant}". Nothing was written. If "${meant}" is the home you mean, ` +
+							`select it with vomehome_use_instance first and try again — do not ` +
+							`assume the session is still where you left it.`
+					);
+				}
 				const decision = evaluateConfigWrite(ctx.instances.currentSafety());
 				if (!decision.allowed) {
 					return errorResult(`Refused: ${decision.reason}`);

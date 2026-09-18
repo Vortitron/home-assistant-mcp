@@ -894,3 +894,257 @@ describe("ha_write_config_file verification", () => {
 		expect(writes).toEqual(["a\n"]);
 	});
 });
+
+describe("binary config files", () => {
+	const BROKERED = {
+		HA_TOKEN: "",
+		VOMEHOME_TOKEN: "vh_test",
+		VOMEHOME_INSTANCE_ID: "rly-1",
+		HA_ALLOW_WRITE: "true",
+		HA_ALLOW_CONFIG_WRITE: "true"
+	};
+
+	afterEach(() => vi.unstubAllGlobals());
+
+	it("reads a file as base64 and returns it as structured JSON, not raw text", async () => {
+		const fetchMock = vi.fn(async (input: unknown) => {
+			expect(String(input)).toMatch(/encoding=base64/);
+			return new Response(
+				JSON.stringify({ path: "assets/pack.bin", content: "AAECAw==", encoding: "base64" }),
+				{ status: 200 }
+			);
+		});
+		vi.stubGlobal("fetch", fetchMock);
+		const server = buildHarness({ env: BROKERED });
+
+		const body = jsonOf(
+			await server.call("ha_read_config_file", { path: "assets/pack.bin", encoding: "base64" })
+		);
+		expect(body).toEqual({ path: "assets/pack.bin", encoding: "base64", content: "AAECAw==" });
+	});
+
+	it("defaults to utf8 and returns plain text, unaffected by the encoding param", async () => {
+		const fetchMock = vi.fn(async () =>
+			new Response(JSON.stringify({ content: "homeassistant:\n" }), { status: 200 })
+		);
+		vi.stubGlobal("fetch", fetchMock);
+		const server = buildHarness({ env: BROKERED });
+
+		const result = await server.call("ha_read_config_file", { path: "configuration.yaml" });
+		expect(textOf(result)).toBe("homeassistant:\n");
+	});
+
+	it("writes base64 content, sends the encoding to the broker, and skips check_config by default", async () => {
+		const checkConfig = vi.fn();
+		const writeBodies: Array<{ content: string; encoding?: string }> = [];
+		const fetchMock = vi.fn(async (input: unknown, init: any) => {
+			const url = String(input);
+			if (url.includes("/files/write")) {
+				writeBodies.push(JSON.parse(init.body));
+				return new Response(JSON.stringify({ path: "assets/pack.bin", written: true, bytes: 4 }), {
+					status: 200
+				});
+			}
+			throw new Error(`unexpected fetch: ${url}`);
+		});
+		vi.stubGlobal("fetch", fetchMock);
+		const server = buildHarness({ env: BROKERED, rest: { checkConfig } });
+
+		const body = jsonOf(
+			await server.call("ha_write_config_file", {
+				path: "assets/pack.bin",
+				content: "AAECAw==",
+				encoding: "base64"
+			})
+		);
+
+		expect(writeBodies).toEqual([{ content: "AAECAw==", encoding: "base64" }]);
+		// check_config only validates YAML, so it has nothing to say about a
+		// binary write — verify defaults off for base64 rather than running a
+		// pointless (and possibly misleading) check.
+		expect(checkConfig).not.toHaveBeenCalled();
+		expect(body.verified).toBe(false);
+	});
+
+	it("still verifies a base64 write when verify is explicitly requested", async () => {
+		const checkConfig = vi.fn(async () => ({ result: "valid", errors: null }));
+		const fetchMock = vi.fn(async (input: unknown, init: any) => {
+			const url = String(input);
+			if (url.includes("/files/read")) {
+				return new Response("not found", { status: 404 });
+			}
+			expect(JSON.parse(init.body)).toEqual({ content: "AAECAw==", encoding: "base64" });
+			return new Response(JSON.stringify({ path: "assets/pack.bin", written: true }), { status: 200 });
+		});
+		vi.stubGlobal("fetch", fetchMock);
+		const server = buildHarness({ env: BROKERED, rest: { checkConfig } });
+
+		const body = jsonOf(
+			await server.call("ha_write_config_file", {
+				path: "assets/pack.bin",
+				content: "AAECAw==",
+				encoding: "base64",
+				verify: true
+			})
+		);
+
+		expect(checkConfig).toHaveBeenCalled();
+		expect(body.verified).toBe(true);
+	});
+});
+
+describe("hacs", () => {
+	const WRITE = { HA_ALLOW_WRITE: "true", HA_ALLOW_CONFIG_WRITE: "true" };
+
+	afterEach(() => vi.useRealTimers());
+
+	it("gets HACS status over the websocket", async () => {
+		const sendCommand = vi.fn(async () => ({ version: "2.1.0", stage: "running" }));
+		const server = buildHarness({ ws: { sendCommand } });
+
+		const body = jsonOf(await server.call("ha_hacs_info", {}));
+		expect(body.version).toBe("2.1.0");
+		expect(sendCommand).toHaveBeenCalledWith({ type: "hacs/info" });
+	});
+
+	it("lists repositories, optionally filtered by category", async () => {
+		const sendCommand = vi.fn(async () => [{ id: "1", full_name: "me/repo", category: "integration" }]);
+		const server = buildHarness({ ws: { sendCommand } });
+
+		const body = jsonOf(await server.call("ha_hacs_list_repositories", { categories: ["integration"] }));
+		expect(body.count).toBe(1);
+		expect(sendCommand).toHaveBeenCalledWith({
+			type: "hacs/repositories/list",
+			categories: ["integration"]
+		});
+	});
+
+	it("refuses to add, download or remove without config-write, before reaching the network", async () => {
+		const sendCommand = vi.fn();
+		const server = buildHarness({ ws: { sendCommand } });
+
+		for (const [tool, args] of [
+			["ha_hacs_add_repository", { repository: "me/repo", category: "integration" }],
+			["ha_hacs_download_repository", { repository: "me/repo" }],
+			["ha_hacs_remove_repository", { repository: "me/repo" }]
+		] as const) {
+			const result = await server.call(tool, args);
+			expect(result.isError).toBe(true);
+		}
+		expect(sendCommand).not.toHaveBeenCalled();
+	});
+
+	it("confirms a repository add by re-listing, since HACS acks even a failed add", async () => {
+		vi.useFakeTimers();
+		const added: Array<Record<string, unknown>> = [];
+		const sendCommand = vi.fn(async (command: Record<string, unknown>) => {
+			if (command.type === "hacs/repositories/add") {
+				added.push(command);
+				return {};
+			}
+			// hacs/repositories/list: empty until the add has actually happened.
+			return added.length > 0
+				? [{ id: "123", full_name: "me/repo", category: "integration", installed: false }]
+				: [];
+		});
+		const server = buildHarness({ env: WRITE, ws: { sendCommand } });
+
+		const pending = server.call("ha_hacs_add_repository", {
+			repository: "me/repo",
+			category: "integration"
+		});
+		await vi.runAllTimersAsync();
+		const body = jsonOf(await pending);
+
+		expect(added).toEqual([{ type: "hacs/repositories/add", repository: "me/repo", category: "integration" }]);
+		expect(body.added).toBe(true);
+		expect(body.repository.id).toBe("123");
+	});
+
+	it("reports a repository already tracked without adding it again", async () => {
+		const sendCommand = vi.fn(async (command: Record<string, unknown>) => {
+			expect(command.type).toBe("hacs/repositories/list");
+			return [{ id: "123", full_name: "me/repo", category: "integration", installed: true }];
+		});
+		const server = buildHarness({ env: WRITE, ws: { sendCommand } });
+
+		const body = jsonOf(
+			await server.call("ha_hacs_add_repository", { repository: "me/repo", category: "integration" })
+		);
+		expect(body.added).toBe(false);
+		expect(body.already_tracked).toBe(true);
+	});
+
+	it("reports failure when HACS silently drops the add", async () => {
+		vi.useFakeTimers();
+		const sendCommand = vi.fn(async (command: Record<string, unknown>) =>
+			command.type === "hacs/repositories/list" ? [] : {}
+		);
+		const server = buildHarness({ env: WRITE, ws: { sendCommand } });
+
+		const pending = server.call("ha_hacs_add_repository", {
+			repository: "me/repo",
+			category: "integration"
+		});
+		await vi.runAllTimersAsync();
+		const result = await pending;
+
+		expect(result.isError).toBe(true);
+		expect(textOf(result)).toMatch(/did not accept/);
+	});
+
+	it("downloads (installs) a repository resolved by full_name to its id", async () => {
+		const sendCommand = vi.fn(async (command: Record<string, unknown>) => {
+			if (command.type === "hacs/repositories/list") {
+				return [{ id: "123", full_name: "me/repo", category: "integration", installed: true }];
+			}
+			expect(command).toEqual({ type: "hacs/repository/download", repository: "123" });
+			return {};
+		});
+		const server = buildHarness({ env: WRITE, ws: { sendCommand } });
+
+		const body = jsonOf(await server.call("ha_hacs_download_repository", { repository: "me/repo" }));
+		expect(body.installed).toBe(true);
+		expect(body.repository.id).toBe("123");
+	});
+
+	it("errors clearly when the repository to download isn't tracked", async () => {
+		const sendCommand = vi.fn(async () => []);
+		const server = buildHarness({ env: WRITE, ws: { sendCommand } });
+
+		const result = await server.call("ha_hacs_download_repository", { repository: "me/missing" });
+		expect(result.isError).toBe(true);
+		expect(textOf(result)).toMatch(/No HACS repository matches/);
+	});
+
+	it("uninstalls before untracking a repository that is installed", async () => {
+		const seen: string[] = [];
+		const sendCommand = vi.fn(async (command: Record<string, unknown>) => {
+			if (command.type === "hacs/repositories/list") {
+				return [{ id: "123", full_name: "me/repo", category: "integration", installed: true }];
+			}
+			seen.push(command.type as string);
+			return {};
+		});
+		const server = buildHarness({ env: WRITE, ws: { sendCommand } });
+
+		const body = jsonOf(await server.call("ha_hacs_remove_repository", { repository: "123" }));
+		expect(seen).toEqual(["hacs/repository/remove", "hacs/repositories/remove"]);
+		expect(body.removed).toBe(true);
+	});
+
+	it("only untracks a repository that was never installed", async () => {
+		const seen: string[] = [];
+		const sendCommand = vi.fn(async (command: Record<string, unknown>) => {
+			if (command.type === "hacs/repositories/list") {
+				return [{ id: "123", full_name: "me/repo", category: "integration", installed: false }];
+			}
+			seen.push(command.type as string);
+			return {};
+		});
+		const server = buildHarness({ env: WRITE, ws: { sendCommand } });
+
+		await server.call("ha_hacs_remove_repository", { repository: "123" });
+		expect(seen).toEqual(["hacs/repositories/remove"]);
+	});
+});

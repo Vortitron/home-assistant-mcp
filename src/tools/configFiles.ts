@@ -28,6 +28,8 @@ const NEEDS_RELAY =
 	"needs a VomeHome relay-connected Home Assistant. A hosted instance without the " +
 	"Vome add-on has no route to its own files.";
 
+type FileEncoding = "utf8" | "base64";
+
 async function filesRequest<T>(
 	ctx: ToolContext,
 	path: string,
@@ -56,17 +58,21 @@ async function filesRequest<T>(
 }
 
 /** Current contents of a file, or null when it does not exist yet. */
-async function readIfExists(ctx: ToolContext, path: string): Promise<string | null> {
+async function readIfExists(
+	ctx: ToolContext,
+	path: string,
+	encoding: FileEncoding
+): Promise<string | null> {
 	try {
 		const result = await filesRequest<{ content?: string }>(
 			ctx,
-			`/read?path=${encodeURIComponent(path)}`,
+			`/read?path=${encodeURIComponent(path)}&encoding=${encoding}`,
 			{ method: "GET" }
 		);
 		return result?.content ?? "";
 	} catch {
-		// Missing, unreadable, or not text. Either way there is nothing to
-		// restore to, which the caller is told rather than left to infer.
+		// Missing, unreadable, or not text at this encoding. Either way there is
+		// nothing to restore to, which the caller is told rather than left to infer.
 		return null;
 	}
 }
@@ -74,12 +80,13 @@ async function readIfExists(ctx: ToolContext, path: string): Promise<string | nu
 function write(
 	ctx: ToolContext,
 	path: string,
-	content: string
+	content: string,
+	encoding: FileEncoding
 ): Promise<Record<string, unknown>> {
 	return filesRequest<Record<string, unknown>>(
 		ctx,
 		`/write?path=${encodeURIComponent(path)}`,
-		{ method: "POST", body: { content } }
+		{ method: "POST", body: { content, encoding } }
 	);
 }
 
@@ -118,22 +125,34 @@ export function registerConfigFileTools(server: McpServer, ctx: ToolContext): vo
 		{
 			title: "Read a config file",
 			description:
-				"Read a UTF-8 text file under Home Assistant's config directory — configuration.yaml, " +
-				"a package, an included YAML file.\n\n" +
+				"Read a file under Home Assistant's config directory — configuration.yaml, a package, an " +
+				"included YAML file, or (with encoding='base64') a packaged binary asset such as an icon " +
+				"or a data file a custom integration ships.\n\n" +
 				"Read this before writing it: ha_write_config_file replaces the whole file, so the way " +
 				"to add a section is read, append, write back. Requires the ha:files scope.",
 			inputSchema: {
-				path: z.string().describe("File relative to the config root, e.g. 'configuration.yaml'.")
+				path: z.string().describe("File relative to the config root, e.g. 'configuration.yaml'."),
+				encoding: z
+					.enum(["utf8", "base64"])
+					.optional()
+					.describe(
+						"'utf8' (default) for text; 'base64' for a binary file, which otherwise fails " +
+							"with 'not UTF-8 text'."
+					)
 			},
 			annotations: { readOnlyHint: true, openWorldHint: true }
 		},
-		async ({ path }) =>
+		async ({ path, encoding }) =>
 			runTool(ctx.logger, "ha_read_config_file", async () => {
-				const result = await filesRequest<{ content?: string }>(
+				const fileEncoding: FileEncoding = encoding ?? "utf8";
+				const result = await filesRequest<{ content?: string; encoding?: string }>(
 					ctx,
-					`/read?path=${encodeURIComponent(path)}`,
+					`/read?path=${encodeURIComponent(path)}&encoding=${fileEncoding}`,
 					{ method: "GET" }
 				);
+				if (fileEncoding === "base64") {
+					return jsonResult({ path, encoding: "base64", content: result?.content ?? "" });
+				}
 				return textResult(result?.content ?? "");
 			})
 	);
@@ -143,13 +162,17 @@ export function registerConfigFileTools(server: McpServer, ctx: ToolContext): vo
 		{
 			title: "Write a config file",
 			description:
-				"Write a UTF-8 text file under Home Assistant's config directory.\n\n" +
+				"Write a file under Home Assistant's config directory. Defaults to UTF-8 text; pass " +
+				"encoding='base64' to write a binary file (an icon, a data file a custom integration " +
+				"ships) — content is then the base64 of the bytes, not the bytes themselves.\n\n" +
 				"**This edit is checked and reversible.** After the write, Home Assistant's own " +
 				"configuration check runs, and if it fails the previous contents are put straight " +
 				"back — a bad edit cannot leave Home Assistant unable to start. The result says " +
 				"whether it was verified and whether it was rolled back. Editing configuration.yaml " +
 				"this way is the normal, supported route for a home the user has authorised; it is " +
-				"how a hosted install is configured at all, since there is no SSH into one.\n\n" +
+				"how a hosted install is configured at all, since there is no SSH into one. " +
+				"(check_config only ever validates YAML, so it says nothing about a binary write; " +
+				"verify defaults to off for encoding='base64' for that reason.)\n\n" +
 				"**It replaces the entire file** — read it first with ha_read_config_file and send " +
 				"back the full content with your change applied, or you will delete everything else " +
 				"in it.\n\n" +
@@ -162,29 +185,35 @@ export function registerConfigFileTools(server: McpServer, ctx: ToolContext): vo
 				"break startup.",
 			inputSchema: {
 				path: z.string().describe("File relative to the config root, e.g. 'configuration.yaml'."),
-				content: z.string().describe("The complete new contents of the file."),
+				content: z.string().describe("The complete new contents of the file (base64 if encoding='base64')."),
+				encoding: z
+					.enum(["utf8", "base64"])
+					.optional()
+					.describe("'utf8' (default) for text; 'base64' for binary content."),
 				verify: z
 					.boolean()
 					.optional()
 					.describe(
-						"Check the configuration afterwards and restore the file if it fails. Default true."
+						"Check the configuration afterwards and restore the file if it fails. " +
+							"Default true for utf8, false for base64 (check_config can't validate binary content)."
 					)
 			},
 			annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true }
 		},
-		async ({ path, content, verify }) =>
+		async ({ path, content, encoding, verify }) =>
 			runTool(ctx.logger, "ha_write_config_file", async () => {
 				const decision = evaluateConfigWrite(ctx.instances.currentSafety());
 				if (!decision.allowed) {
 					return errorResult(`Refused: ${decision.reason}`);
 				}
-				const shouldVerify = verify !== false;
+				const fileEncoding: FileEncoding = encoding ?? "utf8";
+				const shouldVerify = verify !== undefined ? verify : fileEncoding === "utf8";
 				// Captured before the write so the file can be put back. A file that
 				// does not exist yet reads as null, and there is nothing to restore
 				// to — see below.
-				const previous = shouldVerify ? await readIfExists(ctx, path) : null;
+				const previous = shouldVerify ? await readIfExists(ctx, path, fileEncoding) : null;
 
-				const result = await write(ctx, path, content);
+				const result = await write(ctx, path, content, fileEncoding);
 				if (!shouldVerify) {
 					return jsonResult({
 						...result,
@@ -218,7 +247,7 @@ export function registerConfigFileTools(server: McpServer, ctx: ToolContext): vo
 					});
 				}
 
-				await write(ctx, path, previous);
+				await write(ctx, path, previous, fileEncoding);
 				const after = await ctx.rest.checkConfig();
 				return jsonResult({
 					path,

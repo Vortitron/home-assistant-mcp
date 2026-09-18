@@ -75,8 +75,8 @@ policy (see [Safety](#safety)).
 | `ha_set_log_level` | Change logging for one integration at runtime (only needs `HA_ALLOW_WRITE`). |
 | `ha_set_automation` | Create or update an automation (also needs `HA_ALLOW_CONFIG_WRITE`). |
 | `ha_set_helper` | Create or update a helper — no `configuration.yaml`, no restart. |
-| `ha_read_config_file` | Read a file under the config directory (needs `ha:files`). |
-| `ha_write_config_file` | Replace a file under the config directory; checks the config and restores the file if it fails (needs `ha:files`). |
+| `ha_read_config_file` | Read a file under the config directory — text by default, or `encoding: 'base64'` for a binary asset (needs `ha:files`). |
+| `ha_write_config_file` | Replace a file under the config directory — text by default, or `encoding: 'base64'` for a binary asset; checks the config and restores the file if it fails (needs `ha:files`). |
 | `ha_list_config_files` | List a directory under the config directory (needs `ha:files`). |
 | `ha_delete_helper` | Delete a stored helper. Refuses when the id looks shared with a `configuration.yaml` helper, because Home Assistant would take that entity down with it. |
 | `ha_delete_automation` | Delete an automation (also needs `HA_ALLOW_CONFIG_WRITE`). |
@@ -165,6 +165,22 @@ stays behind a full browser login on the portal.
 | `ha_supervisor_api` | Call a Supervisor endpoint via `supervisor/api` (store, add-ons, …). |
 | `ha_addon_install_vome` | Add `https://github.com/Vortitron/VomeSync` to the store, install **Vome**, and start it. |
 | `ha_config_entry_options` | Read or set an integration's options — including ESPHome's `allow_service_calls`. |
+
+### HACS (Home Assistant Community Store)
+
+| Tool | Description |
+| --- | --- |
+| `ha_hacs_info` | HACS version, stage, and whether it has pending background tasks. |
+| `ha_hacs_list_repositories` | List repositories HACS knows about (optionally filtered by category). |
+| `ha_hacs_add_repository` | Add a custom repository by `owner/repo` and category. Confirms by re-listing, since HACS acks even a failed add. Needs `HA_ALLOW_CONFIG_WRITE`. |
+| `ha_hacs_download_repository` | Install (or update) a tracked repository — the step that actually writes its files. Needs `HA_ALLOW_CONFIG_WRITE`. |
+| `ha_hacs_remove_repository` | Uninstall a repository's files and stop tracking it. Needs `HA_ALLOW_CONFIG_WRITE`. |
+
+There is no REST API or service call for managing HACS repositories — these
+go over HACS's own WebSocket commands (`hacs/*`), the same way as the
+Supervisor tools above. Adding a repository only registers it; call
+`ha_hacs_download_repository` afterwards to install it, and restart Home
+Assistant if it's a new integration or add-on domain.
 
 `ha_config_entry_options` reaches settings that exist nowhere else in the API.
 The one people ask for is ESPHome's **"allow the device to perform Home

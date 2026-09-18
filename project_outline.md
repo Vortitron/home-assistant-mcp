@@ -55,9 +55,9 @@ src/
 
 ## Tools
 
-56 tools across: system, states, services, registry, templates, automations,
-logs/diagnostics, traces, ESPHome, Node-RED, VomeHome. See `README.md` for the
-full table.
+61 tools across: system, states, services, registry, templates, automations,
+logs/diagnostics, traces, ESPHome, Node-RED, VomeHome, HACS. See `README.md`
+for the full table.
 
 Logs/diagnostics (`tools/logs.ts`) prefers Home Assistant's *structured* error
 store (`system_log/list` over WS) to the raw log tail: deduplicated records with
@@ -70,6 +70,30 @@ and the domain lists don't apply, since neither touches an entity).
 one Supervisor path family an admin token may reach (everything else there 401s —
 that is why `ha_supervisor_api` uses the `supervisor/api` WS command instead).
 Direct mode only: the broker doesn't proxy raw hassio paths.
+
+HACS (`tools/hacs.ts`, September 2026): 5 tools over HACS's own `hacs/*` WS
+commands — there is no REST API or service call for repository management.
+`hacs/repositories/add` acks success even when the add silently failed (HACS
+dispatches an error *event* instead), so `ha_hacs_add_repository` confirms by
+re-listing and matching `full_name` rather than trusting the empty result.
+Mutating tools resolve a caller-supplied id-or-`full_name` to the repository
+row first (`resolveRepository`), and are gated the same way as
+`ha_addon_install_vome`: local write+config guard, then the portal's
+`ha:config` scope has the final say. This surface existed at the transport
+level before the tools did — `ctx.ws.sendCommand` already passed any WS
+command through the broker — the gap was that nothing exposed it, and the
+portal's generic write-verb heuristic (`_WRITE_MARKERS`) didn't recognise
+HACS's vocabulary ("add", "download", "state", "beta") as mutations; see the
+`portal/ha_ws_command.py` fix in the VomeHome outline.
+
+Config files (`tools/configFiles.ts`) gained an opt-in `encoding: 'base64'`
+on read/write (September 2026), alongside the UTF-8 default, so a packaged
+binary asset (an icon, a data file a custom integration ships) can round-trip
+without corruption. `verify` (the `check_config` + rollback dance) defaults
+to *off* for base64 — `check_config` only validates YAML, so it has nothing
+useful to say about a binary write, and running it anyway would be free but
+misleading (a "verified" binary write that check_config never actually
+looked at).
 
 Traces (`tools/traces.ts`): `trace/list` + `trace/get` over WS, for automations
 and scripts. Raw traces embed the whole config and every step's variables, so

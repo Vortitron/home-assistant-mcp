@@ -55,9 +55,9 @@ src/
 
 ## Tools
 
-61 tools across: system, states, services, registry, templates, automations,
-logs/diagnostics, traces, ESPHome, Node-RED, VomeHome, HACS. See `README.md`
-for the full table.
+71 tools across: system, states, services, registry, templates, automations,
+logs/diagnostics, traces, ESPHome, Node-RED, VomeHome, HACS, users. See
+`README.md` for the full table.
 
 Logs/diagnostics (`tools/logs.ts`) prefers Home Assistant's *structured* error
 store (`system_log/list` over WS) to the raw log tail: deduplicated records with
@@ -85,6 +85,41 @@ command through the broker — the gap was that nothing exposed it, and the
 portal's generic write-verb heuristic (`_WRITE_MARKERS`) didn't recognise
 HACS's vocabulary ("add", "download", "state", "beta") as mutations; see the
 `portal/ha_ws_command.py` fix in the VomeHome outline.
+
+Users (`tools/users.ts`, September 2026): 7 tools over HA's `config/auth/*`
+(users, roles) and `config/auth_provider/homeassistant/*` (local login
+credentials) WS commands — again no REST API. Same scope-classification gap
+as HACS turned up here too: `change_password`/`admin_change_password` match
+none of the portal's `_WRITE_MARKERS`, so a read-only token could have reset
+a password; same fix shape (explicit `config/auth/` branch, see the VomeHome
+outline). The distinct risk this tool group carries, and the reason it went
+through an explicit scope decision rather than being built straight off the
+HACS precedent: a user + password created here is a **standing HA account
+independent of the calling API key** — revoking the key does not revoke the
+login, unlike every other write tool, which stops working the moment its key
+is gone. `role` (mapping to Home Assistant's `system-admin` / `system-users`
+/ `system-read-only` groups) has no default on `ha_create_user`, deliberately
+— defaulting to admin would fail in exactly the wrong direction.
+
+**Guest links** (`vomehome_create/list/revoke_guest_link`, September 2026)
+build directly on the users work above, plus a mechanism that predates all of
+it: the one-click login URL (`portal/ha_backdoor.py`). That page
+(`vome_login.html`, baked into every Vome-hosted VM) turned out to already be
+generic — it exchanges *any* refresh_token for a browser session, and had
+just never been called with anything but the owner's own token. So a guest
+link is: create a non-admin `config/auth/create` user → give it credentials
+via `config/auth_provider/homeassistant/create` → run the *same* password
+grant `ha_backdoor.password_grant_token()` already used for the owner's
+re-auth, just with the guest's credentials → wrap the resulting token in the
+same URL. No new transport, no on-device component changes. Only works for
+Vome-hosted VMs — the password grant needs the portal's direct host→VM
+network reach, which a self-hosted/relay-linked instance doesn't have (same
+reason `login-url` is unavailable there). `expires_in` is enforced by a
+portal-side sweep (`portal/guest_link_expiry.py`, mirrors `trial_expiry.py`)
+since Home Assistant's own long-lived tokens don't expire on their own.
+Revoke is `config/auth/delete` — deleting the user cascades to invalidate
+every credential and token in one call, so there's no separate "revoke the
+token" step to forget.
 
 Config files (`tools/configFiles.ts`) gained an opt-in `encoding: 'base64'`
 on read/write (September 2026), alongside the UTF-8 default, so a packaged
@@ -153,6 +188,9 @@ Instance management (`portal/instances_api.py`):
 | POST | `/api/v1/instances/{id}/restart` | `instances:write` | `{ success, message }` |
 | POST | `/api/v1/instances` | `instances:write` | `{ instance: { id, name, status, granted_scopes? } }` — creating PAT is granted full HA access on the new instance |
 | GET | `/api/v1/instances/{id}/login-url` | `instances:read` | `{ url }` |
+| POST | `/api/v1/instances/{id}/guest-links` | `ha:config` | `{ id, url, expires_at }` — non-admin (unless `admin: true`) HA user + one-click URL. Vome-hosted only. |
+| GET | `/api/v1/instances/{id}/guest-links` | `ha:config` | `{ guest_links: [{ id, admin, dashboard, created_at, expires_at, revoked_at }] }` — never the URL again |
+| DELETE | `/api/v1/instances/{id}/guest-links/{link_id}` | `ha:config` | `{ revoked: true }` — deletes the guest's HA user |
 
 Brokered Home Assistant (`portal/ha_proxy_api.py` → `portal/ha_core_api.py`):
 

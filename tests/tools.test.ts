@@ -1222,3 +1222,117 @@ describe("hacs", () => {
 		expect(seen).toEqual(["hacs/repositories/remove"]);
 	});
 });
+
+describe("users", () => {
+	const WRITE = { HA_ALLOW_WRITE: "true", HA_ALLOW_CONFIG_WRITE: "true" };
+
+	it("lists users over the websocket", async () => {
+		const sendCommand = vi.fn(async () => [
+			{ id: "u1", name: "Alice", is_owner: true, is_active: true, group_ids: ["system-admin"] }
+		]);
+		const server = buildHarness({ ws: { sendCommand } });
+
+		const body = jsonOf(await server.call("ha_list_users", {}));
+		expect(body.count).toBe(1);
+		expect(sendCommand).toHaveBeenCalledWith({ type: "config/auth/list" });
+	});
+
+	it("refuses every mutating tool without config-write, before reaching the network", async () => {
+		const sendCommand = vi.fn();
+		const server = buildHarness({ ws: { sendCommand } });
+
+		for (const [tool, args] of [
+			["ha_create_user", { name: "Bob", role: "user" }],
+			["ha_update_user", { user_id: "u1", name: "Bobby" }],
+			["ha_delete_user", { user_id: "u1" }],
+			["ha_set_user_credentials", { user_id: "u1", username: "bob", password: "x" }],
+			["ha_change_user_password", { user_id: "u1", password: "x" }],
+			["ha_remove_user_credentials", { username: "bob" }]
+		] as const) {
+			const result = await server.call(tool, args);
+			expect(result.isError).toBe(true);
+		}
+		expect(sendCommand).not.toHaveBeenCalled();
+	});
+
+	it("creates a user with a role mapped to the real HA group id", async () => {
+		const sendCommand = vi.fn(async () => ({
+			user: { id: "u2", name: "Bob", is_owner: false, is_active: true, group_ids: ["system-users"] }
+		}));
+		const server = buildHarness({ env: WRITE, ws: { sendCommand } });
+
+		const body = jsonOf(await server.call("ha_create_user", { name: "Bob", role: "user" }));
+		expect(sendCommand).toHaveBeenCalledWith({
+			type: "config/auth/create",
+			name: "Bob",
+			group_ids: ["system-users"]
+		});
+		expect(body.created).toBe(true);
+		expect(body.user.id).toBe("u2");
+		expect(body.next).toMatch(/ha_set_user_credentials/);
+	});
+
+	it("updates only the fields given, mapping role to group_ids", async () => {
+		const sendCommand = vi.fn(async () => ({
+			user: { id: "u1", name: "Alice", is_owner: false, is_active: false, group_ids: ["system-read-only"] }
+		}));
+		const server = buildHarness({ env: WRITE, ws: { sendCommand } });
+
+		await server.call("ha_update_user", { user_id: "u1", role: "read_only", is_active: false });
+		expect(sendCommand).toHaveBeenCalledWith({
+			type: "config/auth/update",
+			user_id: "u1",
+			group_ids: ["system-read-only"],
+			is_active: false
+		});
+	});
+
+	it("deletes a user", async () => {
+		const sendCommand = vi.fn(async () => ({}));
+		const server = buildHarness({ env: WRITE, ws: { sendCommand } });
+
+		const body = jsonOf(await server.call("ha_delete_user", { user_id: "u1" }));
+		expect(sendCommand).toHaveBeenCalledWith({ type: "config/auth/delete", user_id: "u1" });
+		expect(body.deleted).toBe(true);
+	});
+
+	it("sets credentials for a user with no login yet", async () => {
+		const sendCommand = vi.fn(async () => ({}));
+		const server = buildHarness({ env: WRITE, ws: { sendCommand } });
+
+		const body = jsonOf(
+			await server.call("ha_set_user_credentials", { user_id: "u1", username: "bob", password: "hunter2" })
+		);
+		expect(sendCommand).toHaveBeenCalledWith({
+			type: "config/auth_provider/homeassistant/create",
+			user_id: "u1",
+			username: "bob",
+			password: "hunter2"
+		});
+		expect(body.created).toBe(true);
+	});
+
+	it("changes an existing user's password via admin_change_password", async () => {
+		const sendCommand = vi.fn(async () => ({}));
+		const server = buildHarness({ env: WRITE, ws: { sendCommand } });
+
+		await server.call("ha_change_user_password", { user_id: "u1", password: "newpass" });
+		expect(sendCommand).toHaveBeenCalledWith({
+			type: "config/auth_provider/homeassistant/admin_change_password",
+			user_id: "u1",
+			password: "newpass"
+		});
+	});
+
+	it("removes a login without deleting the user", async () => {
+		const sendCommand = vi.fn(async () => ({}));
+		const server = buildHarness({ env: WRITE, ws: { sendCommand } });
+
+		const body = jsonOf(await server.call("ha_remove_user_credentials", { username: "bob" }));
+		expect(sendCommand).toHaveBeenCalledWith({
+			type: "config/auth_provider/homeassistant/delete",
+			username: "bob"
+		});
+		expect(body.removed).toBe(true);
+	});
+});

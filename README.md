@@ -157,6 +157,26 @@ stays behind a full browser login on the portal.
 | `vomehome_reboot_instance` | Reboot an instance's VM (write-gated). |
 | `vomehome_create_instance` | Create a throwaway test/sandbox instance (needs the create scope on your API key; the creating key is granted full HA access on the new instance, which becomes the active target). |
 | `vomehome_get_login_url` | Mint a one-click HA login URL to open in a new tab. |
+| `vomehome_create_guest_link` | Create a non-admin HA user + one-click login URL for sharing (needs `HA_ALLOW_CONFIG_WRITE`). Vome-hosted instances only. |
+| `vomehome_list_guest_links` | List guest links for an instance, revoked ones included. |
+| `vomehome_revoke_guest_link` | Revoke a guest link immediately. |
+
+**Guest links** are self-serve, revocable sharing: a non-admin (unless you
+pass `admin: true`) Home Assistant account plus a one-click login URL, minted
+and torn down on demand, without handing out the owner's own credentials.
+They only work for **Vome-hosted** instances — minting a token for someone
+other than the owner needs direct network access to the VM, which a
+self-hosted/relay-linked instance doesn't offer the portal.
+
+**Home Assistant's permission model is coarse.** A non-admin guest is locked
+out of Settings and Developer Tools, but can still call services on *any*
+entity the dashboard shows them — there is no per-entity guest scoping in
+Home Assistant itself. A guest link is safe on a dedicated demo/sandbox
+instance built to be poked at. It is not a substitute for real access control
+on somebody's actual house — don't point one at one. The link auto-expires
+(`expires_in`, default 24h, capped at 30 days — Home Assistant's own
+long-lived tokens never expire on their own, so Vome enforces this) and can
+be revoked early at any time.
 
 ### Supervisor / Vome add-on (HAOS / Supervised)
 
@@ -181,6 +201,27 @@ go over HACS's own WebSocket commands (`hacs/*`), the same way as the
 Supervisor tools above. Adding a repository only registers it; call
 `ha_hacs_download_repository` afterwards to install it, and restart Home
 Assistant if it's a new integration or add-on domain.
+
+### Users
+
+| Tool | Description |
+| --- | --- |
+| `ha_list_users` | List every user: id, name, username, role, active/owner status. |
+| `ha_create_user` | Create a user with a role (`admin` / `user` / `read_only`) but no login yet. Needs `HA_ALLOW_CONFIG_WRITE`. |
+| `ha_update_user` | Change a user's name, role, active state, or local-only restriction. Needs `HA_ALLOW_CONFIG_WRITE`. |
+| `ha_delete_user` | Permanently delete a user and its login. Needs `HA_ALLOW_CONFIG_WRITE`. |
+| `ha_set_user_credentials` | Give a user with no login yet a username/password. Needs `HA_ALLOW_CONFIG_WRITE`. |
+| `ha_change_user_password` | Reset the password for a user that already has a login. Needs `HA_ALLOW_CONFIG_WRITE`. |
+| `ha_remove_user_credentials` | Remove a login without deleting the user. Needs `HA_ALLOW_CONFIG_WRITE`. |
+
+**A user + password these tools create is a standing Home Assistant login,
+independent of any VomeHome API key.** Revoking the key that created it does
+not remove the account — unlike everything else in this server, which acts
+*through* the calling key and stops working the moment it's revoked. Treat
+granting `ha:config` on an instance as equivalent to trusting the holder with
+permanent account creation on that home. `role` has no default on
+`ha_create_user`; it must be chosen explicitly rather than silently landing
+on `admin`.
 
 `ha_config_entry_options` reaches settings that exist nowhere else in the API.
 The one people ask for is ESPHome's **"allow the device to perform Home

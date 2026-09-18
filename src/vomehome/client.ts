@@ -53,6 +53,30 @@ export interface CreatedVomeHomeInstance extends VomeHomeInstance {
 	grantedScopes?: string[];
 }
 
+export interface CreateGuestLinkInput {
+	/** Non-admin unless true. Admin grants full control — choose deliberately. */
+	admin?: boolean;
+	/** Lovelace url_path to land on after sign-in, instead of the default dashboard. */
+	dashboard?: string;
+	/** Seconds until the guest link is auto-revoked. Portal default 24h, capped at 30 days. */
+	expiresIn?: number;
+}
+
+export interface GuestLink {
+	id: string;
+	url: string;
+	expiresAt?: number;
+}
+
+export interface GuestLinkSummary {
+	id: string;
+	admin: boolean;
+	dashboard?: string;
+	createdAt?: number;
+	expiresAt?: number;
+	revokedAt?: number;
+}
+
 export interface VomeHomeClient {
 	isEnabled(): boolean;
 	listInstances(): Promise<VomeHomeInstance[]>;
@@ -60,6 +84,9 @@ export interface VomeHomeClient {
 	restartInstance(id: string): Promise<VomeHomeActionResult>;
 	createInstance(input: CreateInstanceInput): Promise<CreatedVomeHomeInstance>;
 	getLoginUrl(id: string): Promise<VomeHomeLoginUrl>;
+	createGuestLink(id: string, input: CreateGuestLinkInput): Promise<GuestLink>;
+	listGuestLinks(id: string): Promise<GuestLinkSummary[]>;
+	revokeGuestLink(id: string, linkId: string): Promise<void>;
 }
 
 /** Thrown for any non-2xx VomeHome portal response (or a timeout). */
@@ -89,6 +116,10 @@ function asStringList(value: unknown): string[] | undefined {
 
 function asBoolean(value: unknown): boolean | undefined {
 	return typeof value === "boolean" ? value : undefined;
+}
+
+function asNumber(value: unknown): number | undefined {
+	return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -234,11 +265,53 @@ export function createVomeHomeClient(config: Config, logger: Logger): VomeHomeCl
 		};
 	}
 
+	async function createGuestLink(id: string, input: CreateGuestLinkInput): Promise<GuestLink> {
+		const body: Record<string, unknown> = {};
+		if (input.admin !== undefined) body.admin = input.admin;
+		if (input.dashboard !== undefined) body.dashboard = input.dashboard;
+		if (input.expiresIn !== undefined) body.expires_in = input.expiresIn;
+		const payload = await request<{ id?: unknown; url?: unknown; expires_at?: unknown }>(
+			`${INSTANCES_PATH}/${encodeURIComponent(id)}/guest-links`,
+			{ method: "POST", body }
+		);
+		const url = asString(payload?.url);
+		const linkId = asString(payload?.id);
+		if (!url || !linkId) {
+			throw new VomeHomeError("VomeHome guest-link create response did not contain an id/url.");
+		}
+		return { id: linkId, url, expiresAt: asNumber(payload?.expires_at) };
+	}
+
+	async function listGuestLinks(id: string): Promise<GuestLinkSummary[]> {
+		const payload = await request<{ guest_links?: unknown }>(
+			`${INSTANCES_PATH}/${encodeURIComponent(id)}/guest-links`
+		);
+		const list = Array.isArray(payload?.guest_links) ? payload.guest_links : [];
+		return list.filter(isRecord).map((row) => ({
+			id: asString(row.id) ?? "",
+			admin: asBoolean(row.admin) ?? false,
+			dashboard: asString(row.dashboard),
+			createdAt: asNumber(row.created_at),
+			expiresAt: asNumber(row.expires_at),
+			revokedAt: asNumber(row.revoked_at)
+		}));
+	}
+
+	async function revokeGuestLink(id: string, linkId: string): Promise<void> {
+		await request(
+			`${INSTANCES_PATH}/${encodeURIComponent(id)}/guest-links/${encodeURIComponent(linkId)}`,
+			{ method: "DELETE" }
+		);
+	}
+
 	return {
 		isEnabled: () => config.vomehome.enabled,
 		listInstances,
 		getInstance,
 		restartInstance,
+		createGuestLink,
+		listGuestLinks,
+		revokeGuestLink,
 		createInstance,
 		getLoginUrl
 	};

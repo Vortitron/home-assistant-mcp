@@ -145,6 +145,61 @@ describe("createVomeHomeClient", () => {
 			body: "forbidden"
 		});
 	});
+
+	it("creates a guest link, sending only the fields given", async () => {
+		const fetchMock = vi.fn(async () =>
+			jsonResponse({ id: "lnk-1", url: "https://abc.home.vome.io/local/vome_login.html#rt=x", expires_at: 1_700_100_000 })
+		);
+		vi.stubGlobal("fetch", fetchMock);
+
+		const link = await enabledClient().createGuestLink("abc", { dashboard: "lovelace-guest" });
+
+		expect(link).toEqual({
+			id: "lnk-1",
+			url: "https://abc.home.vome.io/local/vome_login.html#rt=x",
+			expiresAt: 1_700_100_000
+		});
+		const [url, init] = fetchMock.mock.calls[0]!;
+		expect(url).toBe("https://vome.io/api/v1/instances/abc/guest-links");
+		expect(JSON.parse((init as RequestInit).body as string)).toEqual({ dashboard: "lovelace-guest" });
+	});
+
+	it("throws when the guest-link create response has no id/url", async () => {
+		const fetchMock = vi.fn(async () => jsonResponse({}));
+		vi.stubGlobal("fetch", fetchMock);
+
+		await expect(enabledClient().createGuestLink("abc", {})).rejects.toMatchObject({
+			name: "VomeHomeError"
+		});
+	});
+
+	it("lists guest links as metadata, tolerating a missing revoked_at", async () => {
+		const fetchMock = vi.fn(async () =>
+			jsonResponse({
+				guest_links: [
+					{ id: "lnk-1", admin: false, dashboard: "d1", created_at: 1, expires_at: 2, revoked_at: null },
+					{ id: "lnk-2", admin: true, created_at: 3, expires_at: 4, revoked_at: 5 }
+				]
+			})
+		);
+		vi.stubGlobal("fetch", fetchMock);
+
+		const links = await enabledClient().listGuestLinks("abc");
+		expect(links).toEqual([
+			{ id: "lnk-1", admin: false, dashboard: "d1", createdAt: 1, expiresAt: 2, revokedAt: undefined },
+			{ id: "lnk-2", admin: true, dashboard: undefined, createdAt: 3, expiresAt: 4, revokedAt: 5 }
+		]);
+	});
+
+	it("revokes a guest link with a DELETE to the right path", async () => {
+		const fetchMock = vi.fn(async () => new Response("", { status: 200 }));
+		vi.stubGlobal("fetch", fetchMock);
+
+		await enabledClient().revokeGuestLink("abc", "lnk-1");
+		const [url, init] = fetchMock.mock.calls[0]!;
+		expect(url).toBe("https://vome.io/api/v1/instances/abc/guest-links/lnk-1");
+		expect((init as RequestInit).method).toBe("DELETE");
+	});
 });
 
 describe("normaliseInstance", () => {
@@ -322,5 +377,111 @@ describe("vomehome_get_login_url", () => {
 		const result = await server.call("vomehome_get_login_url", { instance_id: "abc" });
 		expect(result.isError).toBeUndefined();
 		expect(JSON.parse(textOf(result)).login_url).toContain("vome_login.html");
+	});
+});
+
+describe("vomehome_create_guest_link safety", () => {
+	const WRITE = { HA_ALLOW_WRITE: "true", HA_ALLOW_CONFIG_WRITE: "true" };
+
+	it("refuses when config-write is disabled, even if plain write is on", async () => {
+		const createGuestLink = vi.fn();
+		const server = buildHarness({ env: { HA_ALLOW_WRITE: "true" }, vomehome: { createGuestLink } });
+		const result = await server.call("vomehome_create_guest_link", { instance_id: "abc" });
+		expect(result.isError).toBe(true);
+		expect(textOf(result)).toMatch(/HA_ALLOW_CONFIG_WRITE/);
+		expect(createGuestLink).not.toHaveBeenCalled();
+	});
+
+	it("creates a guest link and passes admin/dashboard/expires_in through", async () => {
+		const createGuestLink = vi.fn(async () => ({
+			id: "lnk-1",
+			url: "https://abc.home.vome.io/local/vome_login.html#rt=x",
+			expiresAt: 1_700_100_000
+		}));
+		const server = buildHarness({ env: WRITE, vomehome: { createGuestLink } });
+		const result = await server.call("vomehome_create_guest_link", {
+			instance_id: "abc",
+			admin: false,
+			dashboard: "lovelace-guest",
+			expires_in: 3600
+		});
+		expect(result.isError).toBeUndefined();
+		expect(createGuestLink).toHaveBeenCalledWith("abc", {
+			admin: false,
+			dashboard: "lovelace-guest",
+			expiresIn: 3600
+		});
+		const body = JSON.parse(textOf(result));
+		expect(body.id).toBe("lnk-1");
+		expect(body.url).toContain("vome_login.html");
+		expect(body.note).toMatch(/non-admin/);
+	});
+
+	it("notes admin access in the response when admin=true", async () => {
+		const createGuestLink = vi.fn(async () => ({ id: "lnk-1", url: "https://x/y" }));
+		const server = buildHarness({ env: WRITE, vomehome: { createGuestLink } });
+		const result = await server.call("vomehome_create_guest_link", { instance_id: "abc", admin: true });
+		expect(JSON.parse(textOf(result)).note).toMatch(/full-admin/);
+	});
+
+	it("uses per-instance write access in brokered mode, same as reboot", async () => {
+		const createGuestLink = vi.fn(async () => ({ id: "lnk-1", url: "https://x/y" }));
+		const server = buildHarness({
+			env: {
+				HA_URL: "",
+				HA_TOKEN: "",
+				VOMEHOME_INSTANCES:
+					'[{"id":"writable-1","write":true,"config":true},{"id":"readonly-1","write":false}]'
+			},
+			vomehome: { createGuestLink }
+		});
+
+		const refused = await server.call("vomehome_create_guest_link", { instance_id: "readonly-1" });
+		expect(refused.isError).toBe(true);
+		expect(createGuestLink).not.toHaveBeenCalled();
+
+		const allowed = await server.call("vomehome_create_guest_link", { instance_id: "writable-1" });
+		expect(allowed.isError).toBeUndefined();
+		expect(createGuestLink).toHaveBeenCalledWith("writable-1", {
+			admin: undefined,
+			dashboard: undefined,
+			expiresIn: undefined
+		});
+	});
+});
+
+describe("vomehome_list_guest_links", () => {
+	it("lists guest links without needing write access", async () => {
+		const listGuestLinks = vi.fn(async () => [
+			{ id: "lnk-1", admin: false, dashboard: "d1", createdAt: 1, expiresAt: 2, revokedAt: undefined }
+		]);
+		const server = buildHarness({ vomehome: { listGuestLinks } });
+		const result = await server.call("vomehome_list_guest_links", { instance_id: "abc" });
+		expect(result.isError).toBeUndefined();
+		const body = JSON.parse(textOf(result));
+		expect(body.count).toBe(1);
+		expect(body.guest_links[0].id).toBe("lnk-1");
+		expect(listGuestLinks).toHaveBeenCalledWith("abc");
+	});
+});
+
+describe("vomehome_revoke_guest_link safety", () => {
+	const WRITE = { HA_ALLOW_WRITE: "true", HA_ALLOW_CONFIG_WRITE: "true" };
+
+	it("refuses when config-write is disabled", async () => {
+		const revokeGuestLink = vi.fn();
+		const server = buildHarness({ vomehome: { revokeGuestLink } });
+		const result = await server.call("vomehome_revoke_guest_link", { instance_id: "abc", link_id: "lnk-1" });
+		expect(result.isError).toBe(true);
+		expect(revokeGuestLink).not.toHaveBeenCalled();
+	});
+
+	it("revokes when config-write is enabled", async () => {
+		const revokeGuestLink = vi.fn(async () => undefined);
+		const server = buildHarness({ env: WRITE, vomehome: { revokeGuestLink } });
+		const result = await server.call("vomehome_revoke_guest_link", { instance_id: "abc", link_id: "lnk-1" });
+		expect(result.isError).toBeUndefined();
+		expect(revokeGuestLink).toHaveBeenCalledWith("abc", "lnk-1");
+		expect(JSON.parse(textOf(result)).revoked).toBe(true);
 	});
 });

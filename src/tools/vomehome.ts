@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { VomeHomeInstance } from "../vomehome/client.js";
+import { evaluateConfigWrite } from "../safety.js";
+import type { GuestLinkSummary, VomeHomeInstance } from "../vomehome/client.js";
 import { errorResult, jsonResult, runTool, type ToolContext } from "./helpers.js";
 
 /**
@@ -27,6 +28,22 @@ function serialiseInstance(instance: VomeHomeInstance): Record<string, unknown> 
 		out.live = live;
 	}
 	return out;
+}
+
+function serialiseGuestLink(link: GuestLinkSummary): Record<string, unknown> {
+	const out: Record<string, unknown> = { id: link.id, admin: link.admin };
+	if (link.dashboard !== undefined) out.dashboard = link.dashboard;
+	if (link.createdAt !== undefined) out.created_at = link.createdAt;
+	if (link.expiresAt !== undefined) out.expires_at = link.expiresAt;
+	if (link.revokedAt !== undefined) out.revoked_at = link.revokedAt;
+	return out;
+}
+
+function refuseGuestLinkWrite(ctx: ToolContext, instanceId: string): string {
+	return ctx.instances.brokered
+		? `Refused: guest links are blocked locally for '${instanceId}' ` +
+				"(write/config false in VOMEHOME_INSTANCES). Otherwise the API key decides."
+		: "Refused: guest links need HA_ALLOW_WRITE and HA_ALLOW_CONFIG_WRITE in direct mode.";
 }
 
 export function registerVomeHomeTools(server: McpServer, ctx: ToolContext): void {
@@ -214,6 +231,114 @@ export function registerVomeHomeTools(server: McpServer, ctx: ToolContext): void
 					expires_at: login.expiresAt,
 					note: "Open this URL in a new browser tab/window to sign in. It contains a short-lived credential — do not share it."
 				});
+			})
+	);
+
+	server.registerTool(
+		"vomehome_create_guest_link",
+		{
+			title: "Create a guest link",
+			description:
+				"Create a non-admin (unless admin=true) Home Assistant user for this instance, plus a " +
+				"one-click login URL for it — self-serve, revocable sharing without handing out the " +
+				"owner's own login. Only works for Vome-hosted instances (not self-hosted/relay ones): " +
+				"minting a token for someone other than the owner needs direct network access to the VM.\n\n" +
+				"**Home Assistant's permission model is coarse.** A non-admin guest is locked out of " +
+				"Settings and Developer Tools, but can still call services on any entity the dashboard " +
+				"shows them — there is no per-entity guest scoping in Home Assistant itself. This is safe " +
+				"on a dedicated demo/sandbox instance built to be poked at. It is not a substitute for " +
+				"real access control on somebody's actual house — do not point a guest link at one.\n\n" +
+				"The link expires automatically (default 24h, max 30 days) and can be revoked early with " +
+				"vomehome_revoke_guest_link. Treat the returned URL as a secret; do not log it.",
+			inputSchema: {
+				instance_id: z.string().describe("VomeHome instance id (UUID) to create the guest user on."),
+				admin: z
+					.boolean()
+					.optional()
+					.describe("Grant full admin access instead of a restricted account. Default false — choose true deliberately."),
+				dashboard: z
+					.string()
+					.optional()
+					.describe("Lovelace url_path to land the guest on after sign-in, instead of the default dashboard."),
+				expires_in: z
+					.number()
+					.int()
+					.positive()
+					.optional()
+					.describe("Seconds until this link is auto-revoked. Default 24h (86400), capped at 30 days.")
+			},
+			annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true }
+		},
+		async ({ instance_id, admin, dashboard, expires_in }) =>
+			runTool(ctx.logger, "vomehome_create_guest_link", async () => {
+				const decision = evaluateConfigWrite(ctx.instances.safetyFor(instance_id));
+				if (!decision.allowed) {
+					return errorResult(refuseGuestLinkWrite(ctx, instance_id));
+				}
+				const link = await ctx.vomehome.createGuestLink(instance_id, {
+					admin,
+					dashboard,
+					expiresIn: expires_in
+				});
+				return jsonResult({
+					instance_id,
+					id: link.id,
+					url: link.url,
+					expires_at: link.expiresAt,
+					note:
+						"Share this URL with the guest — it signs them straight in as a " +
+						(admin ? "full-admin" : "non-admin") +
+						" user. Revoke early with vomehome_revoke_guest_link if needed."
+				});
+			})
+	);
+
+	server.registerTool(
+		"vomehome_list_guest_links",
+		{
+			title: "List guest links",
+			description:
+				"List guest links created for this instance, including already-revoked ones (with " +
+				"revoked_at set). Never returns the login URL again — only enough to identify and " +
+				"manage each link.",
+			inputSchema: {
+				instance_id: z.string().describe("VomeHome instance id (UUID).")
+			},
+			annotations: { readOnlyHint: true, openWorldHint: true }
+		},
+		async ({ instance_id }) =>
+			runTool(ctx.logger, "vomehome_list_guest_links", async () => {
+				const links = await ctx.vomehome.listGuestLinks(instance_id);
+				return jsonResult({
+					instance_id,
+					count: links.length,
+					guest_links: links.map(serialiseGuestLink)
+				});
+			})
+	);
+
+	server.registerTool(
+		"vomehome_revoke_guest_link",
+		{
+			title: "Revoke a guest link",
+			description:
+				"Revoke a guest link immediately: deletes its Home Assistant user, which invalidates " +
+				"every credential and token attached to it in one step. Safe to call on an already-" +
+				"revoked link (no-op).",
+			inputSchema: {
+				instance_id: z.string().describe("VomeHome instance id (UUID)."),
+				link_id: z.string().describe("Guest link id, from vomehome_create_guest_link or vomehome_list_guest_links.")
+			},
+			annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true }
+		},
+		async ({ instance_id, link_id }) =>
+			runTool(ctx.logger, "vomehome_revoke_guest_link", async () => {
+				const decision = evaluateConfigWrite(ctx.instances.safetyFor(instance_id));
+				if (!decision.allowed) {
+					return errorResult(refuseGuestLinkWrite(ctx, instance_id));
+				}
+				await ctx.vomehome.revokeGuestLink(instance_id, link_id);
+				return jsonResult({ instance_id, link_id, revoked: true });
 			})
 	);
 }

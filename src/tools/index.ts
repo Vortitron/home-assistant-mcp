@@ -1,5 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ToolContext } from "./helpers.js";
+import { withInstanceStamp } from "./instanceStamp.js";
 import { registerStateTools } from "./states.js";
 import { registerServiceTools } from "./services.js";
 import { registerRegistryTools } from "./registry.js";
@@ -19,8 +20,16 @@ import { registerConfigFileTools } from "./configFiles.js";
 import { registerHacsTools } from "./hacs.js";
 import { registerUserTools } from "./users.js";
 
-/** Registers every tool group on the given server. */
-export function registerAllTools(server: McpServer, ctx: ToolContext): void {
+/**
+ * Registers every tool group on the given server.
+ *
+ * The server is wrapped first so that every tool's reply carries the identity
+ * of the Home Assistant that answered it — see ``instanceStamp``. Wrapping
+ * here rather than at each call site means a tool added later cannot forget
+ * to say where it ran.
+ */
+export function registerAllTools(rawServer: McpServer, ctx: ToolContext): void {
+	const server = withInstanceStamp(rawServer, ctx);
 	registerSystemTools(server, ctx);
 	registerStateTools(server, ctx);
 	registerServiceTools(server, ctx);

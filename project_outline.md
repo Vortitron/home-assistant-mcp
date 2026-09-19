@@ -55,9 +55,22 @@ src/
 
 ## Tools
 
-71 tools across: system, states, services, registry, templates, automations,
-logs/diagnostics, traces, ESPHome, Node-RED, VomeHome, HACS, users. See
-`README.md` for the full table.
+72 tools across: system, states, services, registry, templates, automations,
+logs/diagnostics, traces, ESPHome, Node-RED, VomeHome, HACS, users,
+integrations. See `README.md` for the full table.
+
+`tools/integrations.ts` (`ha_delete_config_entry`, September 2026): the
+`DELETE /api/config/config_entries/entry/{id}` REST view exists in HA core
+but had never been proxied — everything else in this file (`ha_config_flow`,
+`ha_config_entry_options`) only *adds or configures* an entry, nothing
+removed one. The concrete need: an orphaned config entry left behind after a
+device was replaced holds the original `entity_id`, so the replacement gets
+a `_2` suffix, and there was no way to clear it outside Settings → Devices &
+services. Portal side (`portal/ha_proxy_api.py`) needed a new route too —
+`ha_list_config_entries`'s GET was proxied, DELETE was not — reusing
+`_FLOW_ID_RE` for the entry id, since a config entry id and a flow id share
+the same alphabet (already noted where the options-flow route reuses it for
+the same reason).
 
 Logs/diagnostics (`tools/logs.ts`) prefers Home Assistant's *structured* error
 store (`system_log/list` over WS) to the raw log tail: deduplicated records with

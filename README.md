@@ -178,13 +178,23 @@ on somebody's actual house — don't point one at one. The link auto-expires
 long-lived tokens never expire on their own, so Vome enforces this) and can
 be revoked early at any time.
 
+### Integrations & config entries
+
+| Tool | Description |
+| --- | --- |
+| `ha_list_config_entries` | List installed integrations (config entries). Optional domain filter. |
+| `ha_delete_config_entry` | Delete a config entry by id — the fix for an orphaned/duplicate entry left behind after a device was removed, which is otherwise why a re-added device's entities pick up a `_2` suffix. Needs `HA_ALLOW_CONFIG_WRITE`. |
+| `ha_list_discovery_flows` | List integrations Home Assistant has discovered on the network but not yet added. |
+| `ha_config_flow` | Start (`handler`) or continue (`flow_id` + `user_input`) an integration's config flow. Needs `HA_ALLOW_CONFIG_WRITE`. |
+| `ha_config_entry_options` | Read or set an integration's options — including ESPHome's `allow_service_calls`. |
+| `ha_integration_setup_vome` | Add the Vome (`vomesync`) config entry with default settings, idempotently. |
+
 ### Supervisor / Vome add-on (HAOS / Supervised)
 
 | Tool | Description |
 | --- | --- |
 | `ha_supervisor_api` | Call a Supervisor endpoint via `supervisor/api` (store, add-ons, …). |
 | `ha_addon_install_vome` | Add `https://github.com/Vortitron/VomeSync` to the store, install **Vome**, and start it. |
-| `ha_config_entry_options` | Read or set an integration's options — including ESPHome's `allow_service_calls`. |
 
 ### HACS (Home Assistant Community Store)
 

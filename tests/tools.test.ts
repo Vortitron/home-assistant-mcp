@@ -738,6 +738,32 @@ describe("helper entities", () => {
 	});
 });
 
+describe("ha_delete_config_entry", () => {
+	it("refuses without config-write, before reaching the network", async () => {
+		const request = vi.fn();
+		const server = buildHarness({ rest: { request } });
+		const result = await server.call("ha_delete_config_entry", { entry_id: "01JQ2ZK8" });
+		expect(result.isError).toBe(true);
+		expect(request).not.toHaveBeenCalled();
+	});
+
+	it("deletes the entry by id and reports whether a restart is needed", async () => {
+		const request = vi.fn(async () => ({ require_restart: true }));
+		const server = buildHarness({
+			env: { HA_ALLOW_WRITE: "true", HA_ALLOW_CONFIG_WRITE: "true" },
+			rest: { request }
+		});
+		const result = await server.call("ha_delete_config_entry", { entry_id: "01JQ2ZK8" });
+		expect(result.isError).toBeUndefined();
+		expect(request).toHaveBeenCalledWith("/api/config/config_entries/entry/01JQ2ZK8", {
+			method: "DELETE"
+		});
+		const body = jsonOf(result);
+		expect(body.deleted).toBe(true);
+		expect(body.require_restart).toBe(true);
+	});
+});
+
 describe("config files", () => {
 	it("says it needs a relay rather than failing obscurely in direct mode", async () => {
 		// Files are served by the Vome component on the home; a direct HA

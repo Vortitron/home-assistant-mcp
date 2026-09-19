@@ -62,6 +62,27 @@ async function configEntriesPost<T>(
 	return (text ? JSON.parse(text) : undefined) as T;
 }
 
+async function configEntriesDelete<T>(ctx: ToolContext, haApiPath: string): Promise<T> {
+	if (!ctx.config.brokered) {
+		return ctx.rest.request<T>(`/api${haApiPath}`, { method: "DELETE" });
+	}
+	const instanceId = ctx.instances.activeId();
+	const url =
+		`${ctx.config.vomehome.apiUrl}/api/v1/instances/${encodeURIComponent(instanceId)}/ha${haApiPath}`;
+	const response = await fetch(url, {
+		method: "DELETE",
+		headers: {
+			Authorization: `Bearer ${ctx.config.vomehome.token}`,
+			"Content-Type": "application/json"
+		}
+	});
+	const text = await response.text();
+	if (!response.ok) {
+		throw new Error(`DELETE ${haApiPath} failed (${response.status}): ${text.slice(0, 400)}`);
+	}
+	return (text ? JSON.parse(text) : undefined) as T;
+}
+
 function isCreateEntry(step: ConfigFlowStep): boolean {
 	return step.type === "create_entry";
 }
@@ -153,6 +174,42 @@ export function registerIntegrationTools(server: McpServer, ctx: ToolContext): v
 				);
 				const rows = Array.isArray(entries) ? entries : [];
 				return jsonResult({ count: rows.length, entries: rows });
+			})
+	);
+
+	server.registerTool(
+		"ha_delete_config_entry",
+		{
+			title: "Delete a config entry (integration)",
+			description:
+				"Permanently delete one config entry (integration instance) by id. This is the fix for " +
+				"orphaned or duplicate entries — the kind left behind when a device's original config " +
+				"entry never got cleaned up, so a re-added device's entities pick up a '_2' (or higher) " +
+				"suffix because the old entry is still holding the original entity_id. Get entry_id from " +
+				"ha_list_config_entries; match on name/domain/state to find the stale one before deleting.\n\n" +
+				"There was previously no way to do this outside the Settings → Devices & services UI. " +
+				"Requires ha:config. The response's require_restart says whether Home Assistant needs a " +
+				"restart to fully drop the entry.",
+			inputSchema: {
+				entry_id: z.string().describe("Config entry id, from ha_list_config_entries.")
+			},
+			annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true }
+		},
+		async ({ entry_id }) =>
+			runTool(ctx.logger, "ha_delete_config_entry", async () => {
+				const decision = evaluateConfigWrite(ctx.instances.currentSafety());
+				if (!decision.allowed) {
+					return errorResult(`Refused: ${decision.reason}`);
+				}
+				const result = await configEntriesDelete<{ require_restart?: boolean }>(
+					ctx,
+					`/config/config_entries/entry/${encodeURIComponent(entry_id)}`
+				);
+				return jsonResult({
+					deleted: true,
+					entry_id,
+					require_restart: result?.require_restart ?? null
+				});
 			})
 	);
 

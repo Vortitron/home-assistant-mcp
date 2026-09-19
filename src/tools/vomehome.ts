@@ -131,6 +131,86 @@ export function registerVomeHomeTools(server: McpServer, ctx: ToolContext): void
 	);
 
 	server.registerTool(
+		"vomehome_get_onboarding",
+		{
+			title: "Get Home Assistant setup-wizard state",
+			description:
+				"Which Home Assistant setup-wizard steps are still outstanding on a VomeHome instance. " +
+				"A newly provisioned home has its owner account created but the location, analytics and " +
+				"integration steps left for a person to choose, so it shows the wizard instead of a " +
+				"dashboard until they are done. Requires VOMEHOME_TOKEN.",
+			inputSchema: {
+				instance_id: z.string().describe("VomeHome instance id (UUID).")
+			},
+			annotations: { readOnlyHint: true, openWorldHint: true }
+		},
+		async ({ instance_id }) =>
+			runTool(ctx.logger, "vomehome_get_onboarding", async () => {
+				const state = await ctx.vomehome.getOnboarding(instance_id);
+				return jsonResult({
+					instance_id,
+					onboarded: state.onboarded,
+					outstanding: state.steps.filter((s) => !s.done).map((s) => s.step),
+					steps: state.steps
+				});
+			})
+	);
+
+	server.registerTool(
+		"vomehome_complete_onboarding",
+		{
+			title: "Finish the Home Assistant setup wizard",
+			description:
+				"Finish the outstanding setup-wizard steps on a VomeHome instance, so it opens on a " +
+				"dashboard rather than the wizard. Intended for a home being set up for other people " +
+				"to look at — a demo should not greet a stranger with a setup form. " +
+				"Provisioning deliberately never does this: location and analytics are the owner's " +
+				"choice, so only run it for a home whose setup you are responsible for. " +
+				"Pass core_config to set the location and units first; omit it and Home Assistant " +
+				"keeps what it detected, which is a safer default than a confidently wrong location. " +
+				"Needs ha:config.",
+			inputSchema: {
+				instance_id: z.string().describe("VomeHome instance id (UUID)."),
+				core_config: z
+					.object({
+						latitude: z.number().optional(),
+						longitude: z.number().optional(),
+						elevation: z.number().optional(),
+						time_zone: z.string().optional(),
+						unit_system: z.string().optional(),
+						currency: z.string().optional(),
+						country: z.string().optional(),
+						language: z.string().optional()
+					})
+					.optional()
+					.describe("Optional location/unit settings applied before the step is marked done.")
+			},
+			annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true }
+		},
+		async ({ instance_id, core_config }) =>
+			runTool(ctx.logger, "vomehome_complete_onboarding", async () => {
+				const decision = evaluateConfigWrite(ctx.instances.safetyFor(instance_id));
+				if (!decision.allowed) {
+					return errorResult(
+						`Refused: finishing the setup wizard changes this home's configuration. ${decision.reason}`
+					);
+				}
+				const result = await ctx.vomehome.completeOnboarding(
+					instance_id,
+					core_config as Record<string, unknown> | undefined
+				);
+				return jsonResult({
+					instance_id,
+					completed: result.completed,
+					already_done: result.alreadyDone,
+					core_config_applied: result.coreConfigApplied,
+					onboarded: result.steps.every((s) => s.done),
+					steps: result.steps
+				});
+			})
+	);
+
+	server.registerTool(
 		"vomehome_reboot_instance",
 		{
 			title: "Reboot VomeHome instance",

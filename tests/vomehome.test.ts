@@ -485,3 +485,78 @@ describe("vomehome_revoke_guest_link safety", () => {
 		expect(JSON.parse(textOf(result)).revoked).toBe(true);
 	});
 });
+
+describe("vomehome onboarding tools", () => {
+	const WRITE = { HA_ALLOW_WRITE: "true", HA_ALLOW_CONFIG_WRITE: "true" };
+
+	it("reports which wizard steps are outstanding", async () => {
+		const getOnboarding = vi.fn(async () => ({
+			onboarded: false,
+			steps: [
+				{ step: "user", done: true },
+				{ step: "core_config", done: false },
+				{ step: "analytics", done: false }
+			]
+		}));
+		const server = buildHarness({ vomehome: { getOnboarding } });
+		const result = await server.call("vomehome_get_onboarding", { instance_id: "abc" });
+		const body = JSON.parse(textOf(result));
+		expect(body.onboarded).toBe(false);
+		expect(body.outstanding).toEqual(["core_config", "analytics"]);
+	});
+
+	it("refuses to finish the wizard without config-write", async () => {
+		/* Finishing the wizard writes this home's location and analytics
+		   choice. Those are the owner's to make, which is exactly why
+		   provisioning never makes them. */
+		const completeOnboarding = vi.fn();
+		const server = buildHarness({
+			env: { HA_ALLOW_WRITE: "true" },
+			vomehome: { completeOnboarding }
+		});
+		const result = await server.call("vomehome_complete_onboarding", { instance_id: "abc" });
+		expect(result.isError).toBe(true);
+		expect(textOf(result)).toMatch(/HA_ALLOW_CONFIG_WRITE/);
+		expect(completeOnboarding).not.toHaveBeenCalled();
+	});
+
+	it("passes core_config through and reports what it did", async () => {
+		const completeOnboarding = vi.fn(async () => ({
+			completed: ["core_config", "analytics", "integration"],
+			alreadyDone: [],
+			coreConfigApplied: true,
+			steps: [
+				{ step: "user", done: true },
+				{ step: "core_config", done: true },
+				{ step: "analytics", done: true },
+				{ step: "integration", done: true }
+			]
+		}));
+		const server = buildHarness({ env: WRITE, vomehome: { completeOnboarding } });
+		const result = await server.call("vomehome_complete_onboarding", {
+			instance_id: "abc",
+			core_config: { time_zone: "Europe/Stockholm", country: "SE" }
+		});
+		expect(result.isError).toBeUndefined();
+		expect(completeOnboarding).toHaveBeenCalledWith("abc", {
+			time_zone: "Europe/Stockholm",
+			country: "SE"
+		});
+		const body = JSON.parse(textOf(result));
+		expect(body.onboarded).toBe(true);
+		expect(body.core_config_applied).toBe(true);
+	});
+
+	it("omitting core_config leaves the detected location alone", async () => {
+		/* A confidently wrong location is worse than an approximate one. */
+		const completeOnboarding = vi.fn(async () => ({
+			completed: ["core_config"],
+			alreadyDone: [],
+			coreConfigApplied: false,
+			steps: [{ step: "core_config", done: true }]
+		}));
+		const server = buildHarness({ env: WRITE, vomehome: { completeOnboarding } });
+		await server.call("vomehome_complete_onboarding", { instance_id: "abc" });
+		expect(completeOnboarding).toHaveBeenCalledWith("abc", undefined);
+	});
+});

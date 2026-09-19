@@ -87,6 +87,22 @@ export interface VomeHomeClient {
 	createGuestLink(id: string, input: CreateGuestLinkInput): Promise<GuestLink>;
 	listGuestLinks(id: string): Promise<GuestLinkSummary[]>;
 	revokeGuestLink(id: string, linkId: string): Promise<void>;
+	getOnboarding(id: string): Promise<OnboardingState>;
+	completeOnboarding(id: string, coreConfig?: Record<string, unknown>): Promise<OnboardingResult>;
+}
+
+/** Which Home Assistant setup-wizard steps are still outstanding. */
+export interface OnboardingState {
+	onboarded: boolean;
+	steps: { step: string; done: boolean }[];
+}
+
+/** What finishing the wizard actually did. */
+export interface OnboardingResult {
+	completed: string[];
+	alreadyDone: string[];
+	coreConfigApplied: boolean;
+	steps: { step: string; done: boolean }[];
 }
 
 /** Thrown for any non-2xx VomeHome portal response (or a timeout). */
@@ -282,6 +298,49 @@ export function createVomeHomeClient(config: Config, logger: Logger): VomeHomeCl
 		return { id: linkId, url, expiresAt: asNumber(payload?.expires_at) };
 	}
 
+	async function getOnboarding(id: string): Promise<OnboardingState> {
+		const payload = await request<{ onboarded?: unknown; steps?: unknown }>(
+			`${INSTANCES_PATH}/${encodeURIComponent(id)}/onboarding`
+		);
+		const steps = Array.isArray(payload?.steps) ? payload.steps : [];
+		return {
+			onboarded: payload?.onboarded === true,
+			steps: steps.filter(isRecord).map((row) => ({
+				step: String(row.step ?? ""),
+				done: row.done === true
+			}))
+		};
+	}
+
+	async function completeOnboarding(
+		id: string,
+		coreConfig?: Record<string, unknown>
+	): Promise<OnboardingResult> {
+		const body: Record<string, unknown> = {};
+		if (coreConfig !== undefined) body.core_config = coreConfig;
+		const payload = await request<{
+			completed?: unknown;
+			already_done?: unknown;
+			core_config_applied?: unknown;
+			steps?: unknown;
+		}>(`${INSTANCES_PATH}/${encodeURIComponent(id)}/onboarding/complete`, {
+			method: "POST",
+			body
+		});
+		const steps = Array.isArray(payload?.steps) ? payload.steps : [];
+		return {
+			completed: Array.isArray(payload?.completed) ? payload.completed.map(String) : [],
+			alreadyDone: Array.isArray(payload?.already_done)
+				? payload.already_done.map(String)
+				: [],
+			coreConfigApplied: payload?.core_config_applied === true,
+			steps: steps.filter(isRecord).map((row) => ({
+				step: String(row.step ?? ""),
+				done: row.done === true
+			}))
+		};
+	}
+
 	async function listGuestLinks(id: string): Promise<GuestLinkSummary[]> {
 		const payload = await request<{ guest_links?: unknown }>(
 			`${INSTANCES_PATH}/${encodeURIComponent(id)}/guest-links`
@@ -310,6 +369,8 @@ export function createVomeHomeClient(config: Config, logger: Logger): VomeHomeCl
 		getInstance,
 		restartInstance,
 		createGuestLink,
+		getOnboarding,
+		completeOnboarding,
 		listGuestLinks,
 		revokeGuestLink,
 		createInstance,

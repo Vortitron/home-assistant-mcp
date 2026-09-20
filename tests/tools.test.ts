@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { loadConfig } from "../src/config.js";
@@ -1360,5 +1360,138 @@ describe("users", () => {
 			username: "bob"
 		});
 		expect(body.removed).toBe(true);
+	});
+});
+
+describe("ha_addon_install_vome", () => {
+	const WRITE = { HA_ALLOW_WRITE: "true", HA_ALLOW_CONFIG_WRITE: "true" };
+	const STORE = { addons: [{ slug: "b1bff62e_vome", name: "Vome", repository: "b1bff62e" }] };
+
+	/** Route one supervisor/api command to a caller-supplied answer. */
+	function supervisor(
+		routes: Record<string, (data?: unknown) => unknown>
+	): { sendCommand: ReturnType<typeof vi.fn> } {
+		const sendCommand = vi.fn(async (command: any) => {
+			const key = `${command.method} ${command.endpoint}`;
+			const route = routes[key];
+			if (!route) throw new Error(`unrouted supervisor call: ${key}`);
+			return route(command.data);
+		});
+		return { sendCommand };
+	}
+
+	/** The tool sleeps between steps; drive those timers rather than waiting. */
+	async function run(server: FakeServer, args: Record<string, unknown> = {}) {
+		const pending = server.call("ha_addon_install_vome", args);
+		await vi.runAllTimersAsync();
+		return pending;
+	}
+
+	beforeEach(() => vi.useFakeTimers());
+	afterEach(() => vi.useRealTimers());
+
+	it("treats a repository already in the store as added, not as a failure", async () => {
+		// Supervisor's wording here is "already in the store". The guard only
+		// matched "already exists", so a second run aborted before installing.
+		const { sendCommand } = supervisor({
+			"post /store/repositories": () => {
+				throw new Error("Can't add repository: already in the store");
+			},
+			"get /store/addons": () => STORE,
+			"post /store/addons/b1bff62e_vome/install": () => ({}),
+			"post /addons/b1bff62e_vome/start": () => ({})
+		});
+		const server = buildHarness({ env: WRITE, ws: { sendCommand } });
+
+		const body = jsonOf(await run(server));
+		expect(body.ok).toBe(true);
+		expect(body.slug).toBe("b1bff62e_vome");
+		const repoStep = body.steps.find((s: any) => s.step === "add_repository");
+		expect(repoStep.ok).toBe(true);
+		expect(repoStep.note).toBe("already added");
+	});
+
+	it("confirms a 502 during the container build instead of reporting failure", async () => {
+		// The build outlives the broker's request timeout. The install itself
+		// succeeds, so the only truthful answer comes from polling info.
+		const { sendCommand } = supervisor({
+			"post /store/repositories": () => ({}),
+			"get /store/addons": () => STORE,
+			"post /store/addons/b1bff62e_vome/install": () => {
+				throw new Error("VomeHome broker responded 502: Bad Gateway");
+			},
+			"get /addons/b1bff62e_vome/info": () => ({ version: "0.3.41", state: "stopped" }),
+			"post /addons/b1bff62e_vome/start": () => ({})
+		});
+		const server = buildHarness({ env: WRITE, ws: { sendCommand } });
+
+		const body = jsonOf(await run(server));
+		expect(body.ok).toBe(true);
+		const install = body.steps.find((s: any) => s.step === "install");
+		expect(install.ok).toBe(true);
+		expect(install.note).toMatch(/did not fail/);
+	});
+
+	it("still fails when a 502 is followed by the add-on genuinely not being there", async () => {
+		const { sendCommand } = supervisor({
+			"post /store/repositories": () => ({}),
+			"get /store/addons": () => STORE,
+			"post /store/addons/b1bff62e_vome/install": () => {
+				throw new Error("VomeHome broker responded 502: Bad Gateway");
+			},
+			"get /addons/b1bff62e_vome/info": () => {
+				throw new Error("Addon is not installed");
+			}
+		});
+		const server = buildHarness({ env: WRITE, ws: { sendCommand } });
+
+		const body = jsonOf(await run(server));
+		expect(body.ok).toBe(false);
+		expect(body.hint).toMatch(/still not installed/);
+	});
+
+	it("puts the internet_host protection back after borrowing it", async () => {
+		// Leaving the condition ignored is what makes Home Assistant report
+		// "Unsupported system — Protections disabled" from then on.
+		let installs = 0;
+		const { sendCommand } = supervisor({
+			"post /store/repositories": () => ({}),
+			"get /store/addons": () => STORE,
+			"post /store/addons/b1bff62e_vome/install": () => {
+				installs += 1;
+				if (installs === 1) throw new Error("Supervisor blocked: no host internet");
+				return {};
+			},
+			"post /jobs/options": () => ({}),
+			"post /addons/b1bff62e_vome/start": () => ({})
+		});
+		const server = buildHarness({ env: WRITE, ws: { sendCommand } });
+
+		const body = jsonOf(await run(server));
+		expect(body.ok).toBe(true);
+		expect(body.steps.find((s: any) => s.step === "restore_internet_host").ok).toBe(true);
+
+		const jobCalls = sendCommand.mock.calls
+			.map(([command]: any[]) => command)
+			.filter((command: any) => command.endpoint === "/jobs/options");
+		expect(jobCalls).toHaveLength(2);
+		expect(jobCalls[0].data).toEqual({ ignore_conditions: ["internet_host"] });
+		expect(jobCalls[1].data).toEqual({ ignore_conditions: [] });
+	});
+
+	it("restores the protection even when the retried install fails", async () => {
+		const { sendCommand } = supervisor({
+			"post /store/repositories": () => ({}),
+			"get /store/addons": () => STORE,
+			"post /store/addons/b1bff62e_vome/install": () => {
+				throw new Error("Supervisor blocked: no host internet");
+			},
+			"post /jobs/options": () => ({})
+		});
+		const server = buildHarness({ env: WRITE, ws: { sendCommand } });
+
+		const body = jsonOf(await run(server));
+		expect(body.ok).toBe(false);
+		expect(body.steps.find((s: any) => s.step === "restore_internet_host").ok).toBe(true);
 	});
 });

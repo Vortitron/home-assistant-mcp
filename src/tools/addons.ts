@@ -43,6 +43,59 @@ function unwrap(result: unknown): unknown {
 	return result;
 }
 
+// Supervisor answers a repo re-add with "already in the store", not
+// "already exists" — the two guards used to only catch the latter, so a
+// repo that was already present made the whole tool abort as if it had
+// failed instead of moving on to the install step.
+const REPO_ALREADY_PRESENT = /already exists|already in the store|already added/i;
+
+// Supervisor installs by pulling/building a container image, which can run
+// well past the broker's own request timeout. That surfaces here as a bare
+// 502, but the install job keeps running server-side and often succeeds —
+// the only way to tell is to poll /addons/<slug>/info afterwards.
+const GATEWAY_TIMEOUT = /\b502\b|bad gateway|gateway.*time ?out|\btimed? ?out\b/i;
+
+async function pollAddonInstalled(
+	ctx: ToolContext,
+	slug: string,
+	{ attempts = 6, delayMs = 5000 }: { attempts?: number; delayMs?: number } = {}
+): Promise<unknown | null> {
+	for (let i = 0; i < attempts; i++) {
+		await new Promise((resolve) => setTimeout(resolve, delayMs));
+		try {
+			return unwrap(await supervisorApi(ctx, `/addons/${slug}/info`, "get"));
+		} catch {
+			// Not installed yet (or still building) — keep waiting.
+		}
+	}
+	return null;
+}
+
+type InstallOutcome =
+	| { ok: true; result: unknown; note?: string }
+	| { ok: false; error: string };
+
+async function attemptInstall(ctx: ToolContext, slug: string): Promise<InstallOutcome> {
+	try {
+		const result = await supervisorApi(ctx, `/store/addons/${slug}/install`, "post");
+		return { ok: true, result: unwrap(result) };
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		if (!GATEWAY_TIMEOUT.test(message)) {
+			return { ok: false, error: message };
+		}
+		const info = await pollAddonInstalled(ctx, slug);
+		if (!info) {
+			return { ok: false, error: message };
+		}
+		return {
+			ok: true,
+			result: info,
+			note: `The install request returned "${message.slice(0, 120)}", but the add-on is installed — the build outlasted the request, it did not fail.`
+		};
+	}
+}
+
 function findVomeSlug(addons: unknown): string | null {
 	if (!Array.isArray(addons)) return null;
 	for (const item of addons) {
@@ -138,7 +191,7 @@ export function registerAddonTools(server: McpServer, ctx: ToolContext): void {
 					steps.push({ step: "add_repository", ok: true, result: unwrap(addRepo) });
 				} catch (error) {
 					const message = error instanceof Error ? error.message : String(error);
-					if (/already exists/i.test(message)) {
+					if (REPO_ALREADY_PRESENT.test(message)) {
 						steps.push({ step: "add_repository", ok: true, note: "already added" });
 					} else {
 						steps.push({ step: "add_repository", ok: false, error: message });
@@ -178,49 +231,78 @@ export function registerAddonTools(server: McpServer, ctx: ToolContext): void {
 					);
 				}
 
-				try {
-					const installed = await supervisorApi(ctx, `/store/addons/${slug}/install`, "post");
-					steps.push({ step: "install", ok: true, slug, result: unwrap(installed) });
-				} catch (error) {
-					const message = error instanceof Error ? error.message : String(error);
-					if (/already installed/i.test(message)) {
-						steps.push({ step: "install", ok: true, slug, note: "already installed" });
-					} else if (/no host internet|internet_host/i.test(message)) {
-						// Supervisor job gate: host_internet false even when git clone worked.
-						try {
-							await supervisorApi(ctx, "/jobs/options", "post", {
-								ignore_conditions: ["internet_host"]
-							});
-							steps.push({
-								step: "ignore_internet_host",
-								ok: true,
-								note: "Supervisor reported no host internet; temporarily ignoring internet_host"
-							});
-							const installed = await supervisorApi(
-								ctx,
-								`/store/addons/${slug}/install`,
-								"post"
-							);
-							steps.push({ step: "install", ok: true, slug, result: unwrap(installed) });
-						} catch (retryError) {
-							const retryMessage =
-								retryError instanceof Error ? retryError.message : String(retryError);
-							steps.push({ step: "install", ok: false, slug, error: retryMessage });
-							return jsonResult({
-								ok: false,
-								slug,
-								steps,
-								error: retryMessage,
-								hint:
-									"Supervisor blocked install (no host internet). On the HA host run: " +
-									"ha jobs options --ignore-conditions internet_host  then retry install, " +
-									"or fix DNS/connectivity so Supervisor's host_internet check passes."
-							});
-						}
-					} else {
-						steps.push({ step: "install", ok: false, slug, error: message });
-						return jsonResult({ ok: false, slug, steps, error: message });
+				const first = await attemptInstall(ctx, slug);
+				if (first.ok) {
+					steps.push({ step: "install", ok: true, slug, result: first.result, note: first.note });
+				} else if (/already installed/i.test(first.error)) {
+					steps.push({ step: "install", ok: true, slug, note: "already installed" });
+				} else if (/no host internet|internet_host/i.test(first.error)) {
+					// Supervisor job gate: host_internet false even when git clone worked.
+					try {
+						await supervisorApi(ctx, "/jobs/options", "post", {
+							ignore_conditions: ["internet_host"]
+						});
+						steps.push({
+							step: "ignore_internet_host",
+							ok: true,
+							note: "Supervisor reported no host internet; temporarily ignoring internet_host"
+						});
+					} catch (optionsError) {
+						const optionsMessage =
+							optionsError instanceof Error ? optionsError.message : String(optionsError);
+						steps.push({ step: "ignore_internet_host", ok: false, error: optionsMessage });
+						return jsonResult({ ok: false, slug, steps, error: optionsMessage });
 					}
+
+					const retry = await attemptInstall(ctx, slug);
+
+					// Put the protection back either way. Leaving a job condition
+					// ignored is what makes Home Assistant show "Unsupported system
+					// — Protections disabled" from then on, long after the install
+					// it was needed for has finished.
+					try {
+						await supervisorApi(ctx, "/jobs/options", "post", { ignore_conditions: [] });
+						steps.push({ step: "restore_internet_host", ok: true });
+					} catch (restoreError) {
+						const restoreMessage =
+							restoreError instanceof Error ? restoreError.message : String(restoreError);
+						steps.push({
+							step: "restore_internet_host",
+							ok: false,
+							error: restoreMessage,
+							note:
+								"Protections are still disabled — Home Assistant will report this system " +
+								"as unsupported. Clear it with: ha jobs options --ignore-conditions ''"
+						});
+					}
+
+					if (retry.ok) {
+						steps.push({ step: "install", ok: true, slug, result: retry.result, note: retry.note });
+					} else {
+						steps.push({ step: "install", ok: false, slug, error: retry.error });
+						return jsonResult({
+							ok: false,
+							slug,
+							steps,
+							error: retry.error,
+							hint:
+								"Supervisor blocked install (no host internet). On the HA host run: " +
+								"ha jobs options --ignore-conditions internet_host  then retry install, " +
+								"or fix DNS/connectivity so Supervisor's host_internet check passes."
+						});
+					}
+				} else {
+					steps.push({ step: "install", ok: false, slug, error: first.error });
+					return jsonResult({
+						ok: false,
+						slug,
+						steps,
+						error: first.error,
+						hint: GATEWAY_TIMEOUT.test(first.error)
+							? `The install request timed out and ${slug} was still not installed after polling. ` +
+								`Supervisor may yet be building it — check ha_supervisor_api GET /addons/${slug}/info.`
+							: undefined
+					});
 				}
 
 				if (!skip_start) {

@@ -319,6 +319,30 @@ export function registerAddonTools(server: McpServer, ctx: ToolContext): void {
 					}
 				}
 
+				// Declaring ingress and a panel_title is not enough to appear in
+				// the sidebar: "Show in sidebar" is a per-install Supervisor
+				// setting that defaults off. Without this the add-on installs,
+				// starts, and stays invisible -- and nothing else in the UI
+				// links to it, so you only find it if you knew it was there.
+				// Provisioning already does this (scripts/lib/ha_post_install.sh);
+				// installing over MCP skipped it and got a hidden panel.
+				try {
+					await supervisorApi(ctx, `/addons/${slug}/options`, "post", {
+						ingress_panel: true
+					});
+					steps.push({ step: "show_in_sidebar", ok: true, slug });
+				} catch (error) {
+					const message = error instanceof Error ? error.message : String(error);
+					steps.push({
+						step: "show_in_sidebar",
+						ok: false,
+						slug,
+						error: message,
+						note: "The add-on is installed but will not show in the sidebar until " +
+							`"Show in sidebar" is turned on for ${slug}.`
+					});
+				}
+
 				return jsonResult({
 					ok: true,
 					slug,

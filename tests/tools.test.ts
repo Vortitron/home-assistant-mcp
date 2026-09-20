@@ -1399,7 +1399,8 @@ describe("ha_addon_install_vome", () => {
 			},
 			"get /store/addons": () => STORE,
 			"post /store/addons/b1bff62e_vome/install": () => ({}),
-			"post /addons/b1bff62e_vome/start": () => ({})
+			"post /addons/b1bff62e_vome/start": () => ({}),
+			"post /addons/b1bff62e_vome/options": () => ({})
 		});
 		const server = buildHarness({ env: WRITE, ws: { sendCommand } });
 
@@ -1421,7 +1422,8 @@ describe("ha_addon_install_vome", () => {
 				throw new Error("VomeHome broker responded 502: Bad Gateway");
 			},
 			"get /addons/b1bff62e_vome/info": () => ({ version: "0.3.41", state: "stopped" }),
-			"post /addons/b1bff62e_vome/start": () => ({})
+			"post /addons/b1bff62e_vome/start": () => ({}),
+			"post /addons/b1bff62e_vome/options": () => ({})
 		});
 		const server = buildHarness({ env: WRITE, ws: { sendCommand } });
 
@@ -1463,7 +1465,8 @@ describe("ha_addon_install_vome", () => {
 				return {};
 			},
 			"post /jobs/options": () => ({}),
-			"post /addons/b1bff62e_vome/start": () => ({})
+			"post /addons/b1bff62e_vome/start": () => ({}),
+			"post /addons/b1bff62e_vome/options": () => ({})
 		});
 		const server = buildHarness({ env: WRITE, ws: { sendCommand } });
 
@@ -1477,6 +1480,47 @@ describe("ha_addon_install_vome", () => {
 		expect(jobCalls).toHaveLength(2);
 		expect(jobCalls[0].data).toEqual({ ignore_conditions: ["internet_host"] });
 		expect(jobCalls[1].data).toEqual({ ignore_conditions: [] });
+	});
+
+	it("turns on Show in sidebar, or the panel installs invisible", async () => {
+		// ingress + panel_title is not enough: "Show in sidebar" is a
+		// per-install Supervisor setting that defaults off, and nothing else
+		// in the UI links to the panel.
+		const { sendCommand } = supervisor({
+			"post /store/repositories": () => ({}),
+			"get /store/addons": () => STORE,
+			"post /store/addons/b1bff62e_vome/install": () => ({}),
+			"post /addons/b1bff62e_vome/start": () => ({}),
+			"post /addons/b1bff62e_vome/options": () => ({})
+		});
+		const server = buildHarness({ env: WRITE, ws: { sendCommand } });
+
+		const body = jsonOf(await run(server));
+		expect(body.steps.find((s: any) => s.step === "show_in_sidebar").ok).toBe(true);
+
+		const optionCall = sendCommand.mock.calls
+			.map(([c]: any[]) => c)
+			.find((c: any) => c.endpoint === "/addons/b1bff62e_vome/options");
+		expect(optionCall.data).toEqual({ ingress_panel: true });
+	});
+
+	it("still reports the install when only the sidebar toggle fails", async () => {
+		const { sendCommand } = supervisor({
+			"post /store/repositories": () => ({}),
+			"get /store/addons": () => STORE,
+			"post /store/addons/b1bff62e_vome/install": () => ({}),
+			"post /addons/b1bff62e_vome/start": () => ({}),
+			"post /addons/b1bff62e_vome/options": () => {
+				throw new Error("Supervisor said no");
+			}
+		});
+		const server = buildHarness({ env: WRITE, ws: { sendCommand } });
+
+		const body = jsonOf(await run(server));
+		expect(body.ok).toBe(true);
+		const step = body.steps.find((s: any) => s.step === "show_in_sidebar");
+		expect(step.ok).toBe(false);
+		expect(step.note).toMatch(/Show in sidebar/);
 	});
 
 	it("restores the protection even when the retried install fails", async () => {

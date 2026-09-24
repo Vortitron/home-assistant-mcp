@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { HaApiError } from "../ha/restClient.js";
 import type { HaTraceDetail, HaTraceSummary } from "../ha/types.js";
 import { resolveAutomationId } from "./automations.js";
 import { errorResult, jsonResult, runTool, truncate, type ToolContext } from "./helpers.js";
@@ -19,6 +20,8 @@ type TraceDomain = (typeof TRACE_DOMAINS)[number];
 
 const DEFAULT_TRACE_LIMIT = 20;
 const MAX_VALUE_CHARS = 300;
+/** HA's `DEFAULT_STORED_TRACES`: runs kept per automation or script. */
+const HA_STORED_TRACES = 5;
 
 /** Compact a step result/variable blob so one fat payload can't swamp the reply. */
 function compact(value: unknown, maxChars = MAX_VALUE_CHARS): unknown {
@@ -109,21 +112,28 @@ function findFailure(steps: TraceStep[]): Record<string, unknown> | null {
 	return null;
 }
 
-/** Pull the trigger description out of the trigger step's changed variables. */
+/**
+ * Pull the trigger out of the trigger step's changed variables. Whichever
+ * trigger fired is the step recorded — `trigger/1` for an automation's second
+ * trigger — so look for any `trigger/*` path, not just the first.
+ */
 function describeTrigger(trace: HaTraceDetail): unknown {
-	const triggerSteps = trace.trace?.["trigger/0"];
+	const path = Object.keys(trace.trace ?? {}).find((key) => /^trigger(\/|$)/.test(key));
+	const triggerSteps = path ? trace.trace?.[path] : undefined;
 	const first = Array.isArray(triggerSteps) ? (triggerSteps[0] as Record<string, unknown>) : undefined;
 	const changed = first?.changed_variables as Record<string, unknown> | undefined;
 	const trigger = changed?.trigger ?? (trace.variables as Record<string, unknown> | undefined)?.trigger;
+	// HA's own one-line description of what fired, e.g. "state of binary_sensor.motion".
+	const described = typeof trace.trigger === "string" ? trace.trigger : null;
 	if (trigger && typeof trigger === "object") {
 		const row = trigger as Record<string, unknown>;
 		return {
-			description: row.description ?? null,
+			description: row.description ?? described,
 			platform: row.platform ?? null,
 			entity_id: row.entity_id ?? null
 		};
 	}
-	return null;
+	return described ? { description: described, platform: null, entity_id: null } : null;
 }
 
 function summariseTrace(trace: HaTraceDetail, includeVariables: boolean): Record<string, unknown> {
@@ -161,6 +171,43 @@ function summariseListRow(row: HaTraceSummary): Record<string, unknown> {
 
 function startedAt(row: HaTraceSummary): string {
 	return typeof row.timestamp?.start === "string" ? row.timestamp.start : "";
+}
+
+function newestFirst(rows: HaTraceSummary[] | undefined): HaTraceSummary[] {
+	return (Array.isArray(rows) ? rows : []).slice().sort((a, b) => startedAt(b).localeCompare(startedAt(a)));
+}
+
+/** HA answers `not_found` for a run it no longer holds: 404 via the broker, the raw code direct. */
+function isTraceNotFound(error: unknown): boolean {
+	if (error instanceof HaApiError && error.status === 404) {
+		return true;
+	}
+	return error instanceof Error && /not_found/.test(error.message);
+}
+
+/**
+ * The message for a run HA no longer holds. Almost always retention: HA keeps
+ * the last few runs of each item, so an automation that fires every few
+ * seconds pushes a run out between listing it and fetching it.
+ */
+function evictedRunMessage(
+	domain: TraceDomain,
+	runId: string,
+	itemId: string | undefined,
+	stored: HaTraceSummary[]
+): string {
+	const forItem = itemId ? stored.filter((row) => row.item_id === itemId) : stored;
+	const still = forItem
+		.slice(0, HA_STORED_TRACES)
+		.map((row) => `${row.run_id} (${row.timestamp?.start ?? "?"})`)
+		.join(", ");
+	return (
+		`Run ${runId} is no longer stored by Home Assistant. It keeps only the last ${HA_STORED_TRACES} runs of each ` +
+		`${domain} (unless its config sets trace: stored_traces:), so one that fires often can push a run out ` +
+		`between ha_list_traces and ha_get_trace. ` +
+		(still ? `Runs stored now${itemId ? ` for '${itemId}'` : ""}: ${still}. ` : "") +
+		`Call ha_get_trace without run_id for the newest run.`
+	);
 }
 
 export function registerTraceTools(server: McpServer, ctx: ToolContext): void {
@@ -226,11 +273,14 @@ export function registerTraceTools(server: McpServer, ctx: ToolContext): void {
 		{
 			title: "Get automation/script trace",
 			description:
-				"Step-by-step detail for one run: what triggered it, every condition and action in order with its result, and 'failed_at' naming the first step that errored or evaluated false. This is the tool for 'why didn't my automation run' — logs usually stay silent about a condition returning false. Omit run_id to get the most recent run. Summarised by default; set full=true for the raw trace including the config (large).",
+				"Step-by-step detail for one run: what triggered it, every condition and action in order with its result, and 'failed_at' naming the first step that errored or evaluated false. This is the tool for 'why didn't my automation run' — logs usually stay silent about a condition returning false. Give 'item' and omit run_id for its most recent run, or give a run_id from ha_list_traces (item is then optional — the run's own item is looked up). Summarised by default; set full=true for the raw trace including the config (large).",
 			inputSchema: {
 				item: z
 					.string()
-					.describe("entity_id or unique id (automation.x / the unique id; script.y / y)."),
+					.optional()
+					.describe(
+						"entity_id or unique id (automation.x / the unique id; script.y / y). Required unless run_id is given."
+					),
 				domain: z.enum(TRACE_DOMAINS).optional().describe("Item kind (default 'automation')."),
 				run_id: z.string().optional().describe("Specific run to fetch (default: the latest)."),
 				include_variables: z
@@ -247,22 +297,30 @@ export function registerTraceTools(server: McpServer, ctx: ToolContext): void {
 		async ({ item, domain, run_id, include_variables, full }) =>
 			runTool(ctx.logger, "ha_get_trace", async () => {
 				const traceDomain = domain ?? "automation";
-				const itemId = await resolveItemId(ctx, traceDomain, item);
-				if (!itemId) {
-					return errorResult(
-						`Could not resolve '${item}' to a unique id. YAML automations without an 'id:' are not traced — check ha_list_automations.`
-					);
+				if (!item && !run_id) {
+					return errorResult("Give 'item' (for its latest run), a 'run_id' from ha_list_traces, or both.");
+				}
+				const listDomain = async () =>
+					newestFirst(await ctx.ws.sendCommand<HaTraceSummary[]>({ type: "trace/list", domain: traceDomain }));
+
+				let itemId: string | undefined;
+				if (item) {
+					itemId = await resolveItemId(ctx, traceDomain, item);
+					if (!itemId) {
+						return errorResult(
+							`Could not resolve '${item}' to a unique id. YAML automations without an 'id:' are not traced — check ha_list_automations.`
+						);
+					}
 				}
 				let runId = run_id;
 				if (!runId) {
-					const list = await ctx.ws.sendCommand<HaTraceSummary[]>({
-						type: "trace/list",
-						domain: traceDomain,
-						item_id: itemId
-					});
-					const latest = (Array.isArray(list) ? list : [])
-						.slice()
-						.sort((a, b) => startedAt(b).localeCompare(startedAt(a)))[0];
+					const latest = newestFirst(
+						await ctx.ws.sendCommand<HaTraceSummary[]>({
+							type: "trace/list",
+							domain: traceDomain,
+							item_id: itemId
+						})
+					)[0];
 					if (!latest?.run_id) {
 						return errorResult(
 							`No stored traces for ${traceDomain} '${itemId}'. Traces only cover runs since the last restart — trigger it and try again.`
@@ -270,16 +328,45 @@ export function registerTraceTools(server: McpServer, ctx: ToolContext): void {
 					}
 					runId = latest.run_id;
 				}
-				const trace = await ctx.ws.sendCommand<HaTraceDetail>({
-					type: "trace/get",
-					domain: traceDomain,
-					item_id: itemId,
-					run_id: runId
-				});
-				if (full) {
-					return jsonResult(trace);
+				let note: string | undefined;
+				if (!itemId) {
+					// A run_id alone: its own item is on its row in the list.
+					const stored = await listDomain();
+					const owner = stored.find((row) => row.run_id === runId)?.item_id;
+					if (!owner) {
+						return errorResult(evictedRunMessage(traceDomain, runId, undefined, stored));
+					}
+					itemId = owner;
 				}
-				return jsonResult(summariseTrace(trace ?? {}, include_variables ?? false));
+				const fetchRun = (forItem: string) =>
+					ctx.ws.sendCommand<HaTraceDetail>({
+						type: "trace/get",
+						domain: traceDomain,
+						item_id: forItem,
+						run_id: runId
+					});
+				let trace: HaTraceDetail;
+				try {
+					trace = await fetchRun(itemId);
+				} catch (error) {
+					if (!isTraceNotFound(error)) {
+						throw error;
+					}
+					// Either the run belongs to another item, or HA has let it go.
+					const stored = await listDomain();
+					const owner = stored.find((row) => row.run_id === runId)?.item_id;
+					if (!owner || owner === itemId) {
+						return errorResult(evictedRunMessage(traceDomain, runId, itemId, stored));
+					}
+					note = `Run ${runId} belongs to ${traceDomain} '${owner}', not '${itemId}'; showing it from there.`;
+					itemId = owner;
+					trace = await fetchRun(owner);
+				}
+				if (full) {
+					return jsonResult(note ? { note, ...trace } : trace);
+				}
+				const summary = summariseTrace(trace ?? {}, include_variables ?? false);
+				return jsonResult(note ? { note, ...summary } : summary);
 			})
 	);
 }

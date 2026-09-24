@@ -3,7 +3,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { loadConfig } from "../src/config.js";
 import { createLogger } from "../src/logger.js";
-import type { HaRestClient } from "../src/ha/restClient.js";
+import { HaApiError, type HaRestClient } from "../src/ha/restClient.js";
 import type { HaWsClient } from "../src/ha/wsClient.js";
 import { createUnavailableEsphomeClient } from "../src/esphome/client.js";
 import { createNodeRedClient } from "../src/nodered/client.js";
@@ -506,6 +506,92 @@ describe("automation traces", () => {
 			await server.call("ha_get_trace", { item: "automation.morning", include_variables: true })
 		);
 		expect(body.steps[0].changed_variables).toMatch(/binary_sensor\.motion/);
+	});
+
+	it("reports whichever trigger fired, not only the first", async () => {
+		// An automation's second trigger is recorded as trigger/1; reading only
+		// trigger/0 reported every such run as having no trigger at all.
+		const fromSecond = {
+			...traceDetail,
+			trigger: "state of person.alex",
+			trace: {
+				"trigger/1": [{ path: "trigger/1", timestamp: "2026-08-02T06:00:00.000Z" }],
+				"action/0": [{ path: "action/0", timestamp: "2026-08-02T06:00:00.010Z", result: {} }]
+			}
+		};
+		const server = buildHarness({
+			rest: { getStates: async () => automationStates as any },
+			ws: { sendCommand: async () => fromSecond as any }
+		});
+		const body = jsonOf(await server.call("ha_get_trace", { item: "1699999999999", run_id: "latest" }));
+		expect(body.trigger).toMatchObject({ description: "state of person.alex" });
+	});
+
+	describe("a run_id that trace/get cannot find", () => {
+		const otherRun = { ...traceList[0], run_id: "elsewhere", item_id: "1700000000000" };
+		const notFound = () => new Error('WebSocket command failed: {"code":"not_found","message":"The trace could not be found"}');
+
+		function lookupHarness(calls: Array<Record<string, unknown>>, stored: unknown[], found: string) {
+			return buildHarness({
+				rest: { getStates: async () => automationStates as any },
+				ws: {
+					sendCommand: async (command: any) => {
+						calls.push(command);
+						if (command.type === "trace/list") return stored as any;
+						if (command.item_id === found) return { ...traceDetail, run_id: command.run_id, item_id: found } as any;
+						throw notFound();
+					}
+				}
+			});
+		}
+
+		it("finds the run's own item when only a run_id is given", async () => {
+			const calls: Array<Record<string, unknown>> = [];
+			const server = lookupHarness(calls, [...traceList, otherRun], "1700000000000");
+			const body = jsonOf(await server.call("ha_get_trace", { run_id: "elsewhere" }));
+			expect(calls[0]).toEqual({ type: "trace/list", domain: "automation" });
+			expect(calls[1]).toMatchObject({ type: "trace/get", item_id: "1700000000000", run_id: "elsewhere" });
+			expect(body.item_id).toBe("1700000000000");
+		});
+
+		it("fetches from the right item when the run belongs to another one", async () => {
+			const calls: Array<Record<string, unknown>> = [];
+			const server = lookupHarness(calls, [...traceList, otherRun], "1700000000000");
+			const body = jsonOf(await server.call("ha_get_trace", { item: "automation.morning", run_id: "elsewhere" }));
+			expect(body.note).toMatch(/belongs to automation '1700000000000'/);
+			expect(body.item_id).toBe("1700000000000");
+		});
+
+		it("says the run has aged out, and what is stored now, instead of a bare 404", async () => {
+			const calls: Array<Record<string, unknown>> = [];
+			const server = lookupHarness(calls, traceList, "nobody");
+			const result = await server.call("ha_get_trace", { item: "automation.morning", run_id: "gone" });
+			expect(result.isError).toBe(true);
+			const text = textOf(result);
+			expect(text).toMatch(/no longer stored/);
+			expect(text).toMatch(/stored_traces/);
+			expect(text).toMatch(/latest .*older/);
+		});
+
+		it("treats the broker's 404 the same as the raw not_found", async () => {
+			const server = buildHarness({
+				rest: { getStates: async () => automationStates as any },
+				ws: {
+					sendCommand: async (command: any) => {
+						if (command.type === "trace/list") return traceList as any;
+						throw new HaApiError("VomeHome broker POST /ws/command responded 404", 404, "{}");
+					}
+				}
+			});
+			const result = await server.call("ha_get_trace", { item: "automation.morning", run_id: "gone" });
+			expect(textOf(result)).toMatch(/no longer stored/);
+		});
+
+		it("needs an item or a run_id", async () => {
+			const server = lookupHarness([], traceList, "nobody");
+			const result = await server.call("ha_get_trace", {});
+			expect(result.isError).toBe(true);
+		});
 	});
 });
 

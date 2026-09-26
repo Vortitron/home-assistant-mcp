@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { HaApiError } from "../ha/restClient.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { HaSystemLogEntry } from "../ha/types.js";
 import { evaluateDiagnosticWrite } from "../safety.js";
@@ -21,8 +22,17 @@ type Level = (typeof LEVELS)[number];
 const LEVEL_RANK = new Map<string, number>(LEVELS.map((level, index) => [level, index]));
 
 /** Supervisor log sources reachable over HA's allow-listed `/api/hassio` log paths. */
-const SUPERVISOR_TARGETS = ["core", "supervisor", "host", "addon", "audio", "dns", "multicast"] as const;
-type SupervisorTarget = (typeof SUPERVISOR_TARGETS)[number];
+const SUPERVISOR_TARGETS = [
+	"core",
+	"supervisor",
+	"host",
+	"addon",
+	"audio",
+	"dns",
+	"multicast",
+	"observer",
+	"cli"
+] as const;
 
 function tail(text: string, lines: number): string {
 	const all = text.split("\n");
@@ -146,13 +156,6 @@ function matchesFilters(entry: HaSystemLogEntry, filters: SystemLogFilters): boo
 export function toLoggerName(integration: string): string {
 	const trimmed = integration.trim();
 	return trimmed.includes(".") ? trimmed : `homeassistant.components.${trimmed}`;
-}
-
-function supervisorLogPath(target: SupervisorTarget, addonSlug?: string): string {
-	if (target === "addon") {
-		return `/api/hassio/addons/${encodeURIComponent(addonSlug as string)}/logs`;
-	}
-	return `/api/hassio/${target}/logs`;
 }
 
 export function registerLogTools(server: McpServer, ctx: ToolContext): void {
@@ -334,7 +337,7 @@ export function registerLogTools(server: McpServer, ctx: ToolContext): void {
 		{
 			title: "Get Supervisor / add-on log",
 			description:
-				"Tail the logs of an add-on, Home Assistant Core, the Supervisor itself, or the host — for problems that never reach HA's own error log (an add-on crash-looping, a failed install, host-level trouble). Requires a Supervised / HAOS install. Direct mode only for now: the VomeHome broker does not proxy raw Supervisor paths.",
+				"Tail the logs of an add-on, Home Assistant Core, the Supervisor itself, or the host — for problems that never reach HA's own error log (an add-on crash-looping, a failed install, host-level trouble). Requires a Supervised / HAOS install. Works through the VomeHome broker too (read scope).",
 			inputSchema: {
 				target: z
 					.enum(SUPERVISOR_TARGETS)
@@ -359,14 +362,19 @@ export function registerLogTools(server: McpServer, ctx: ToolContext): void {
 				if (source === "addon" && !addon_slug) {
 					return errorResult("target='addon' needs addon_slug. List add-ons with ha_supervisor_api /addons.");
 				}
-				if (ctx.instances.brokered) {
-					return errorResult(
-						"Supervisor logs are not available in VomeHome brokered mode — the broker proxies the HA API, " +
-							"not raw /api/hassio paths. Run with a direct HA_URL + HA_TOKEN to read them."
-					);
+				let log: string;
+				try {
+					log = await ctx.rest.getSupervisorLog(source, addon_slug);
+				} catch (error) {
+					if (error instanceof HaApiError && error.status === 404) {
+						return errorResult(
+							source === "addon"
+								? `No add-on '${addon_slug}' here, or no Supervisor (Core/Container installs have none). List add-ons with ha_supervisor_api /addons.`
+								: "No Supervisor on this Home Assistant — Core/Container installs have none, so there is no Supervisor log to read."
+						);
+					}
+					throw error;
 				}
-				const path = supervisorLogPath(source, addon_slug);
-				const log = await ctx.rest.request<string>(path, { expect: "text" });
 				const text = tail(log, tail_lines ?? DEFAULT_TAIL_LINES);
 				return textResult(text || `(${source} log is empty)`);
 			})

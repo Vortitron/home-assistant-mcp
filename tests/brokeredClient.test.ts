@@ -187,6 +187,21 @@ describe("createBrokeredHaRestClient", () => {
 		expect(url).toBe("https://vome.io/api/v1/instances/srv-1/ha/error_log");
 	});
 
+	it("GETs Supervisor and add-on logs through the broker as text", async () => {
+		// Before this the tool refused outright in brokered mode, leaving no way
+		// to read an add-on's own log (a Matter server replay shows only there).
+		const fetchMock = vi.fn(async () => new Response("matter line", { status: 200 }));
+		vi.stubGlobal("fetch", fetchMock);
+
+		expect(await client().getSupervisorLog("addon", "core_matter_server")).toBe("matter line");
+		await client().getSupervisorLog("host");
+
+		expect(fetchMock.mock.calls[0]![0]).toBe(
+			"https://vome.io/api/v1/instances/srv-1/ha/supervisor/logs/addon/core_matter_server"
+		);
+		expect(fetchMock.mock.calls[1]![0]).toBe("https://vome.io/api/v1/instances/srv-1/ha/supervisor/logs/host");
+	});
+
 	it("GETs history with entity filter query params", async () => {
 		const fetchMock = vi.fn(async () => jsonResponse([[]]));
 		vi.stubGlobal("fetch", fetchMock);

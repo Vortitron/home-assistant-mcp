@@ -74,6 +74,17 @@ describe("createHaRestClient", () => {
 		});
 	});
 
+	it("reads Supervisor logs over HA's allow-listed hassio paths", async () => {
+		const fetchMock = vi.fn(async () => new Response("log line", { status: 200 }));
+		vi.stubGlobal("fetch", fetchMock);
+
+		expect(await client().getSupervisorLog("addon", "core_mosquitto")).toBe("log line");
+		await client().getSupervisorLog("core");
+
+		expect(String(fetchMock.mock.calls[0]![0])).toBe("http://ha.local:8123/api/hassio/addons/core_mosquitto/logs");
+		expect(String(fetchMock.mock.calls[1]![0])).toBe("http://ha.local:8123/api/hassio/core/logs");
+	});
+
 	it("builds history query params", async () => {
 		const fetchMock = vi.fn(async () => jsonResponse([[]]));
 		vi.stubGlobal("fetch", fetchMock);

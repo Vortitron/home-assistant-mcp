@@ -347,33 +347,41 @@ describe("ha_set_log_level", () => {
 });
 
 describe("ha_get_supervisor_log", () => {
-	it("reads the add-on log over the allow-listed hassio path and tails it", async () => {
-		const request = vi.fn(async () => ["a", "b", "c", "d"].join("\n"));
-		const server = buildHarness({ rest: { request } });
+	it("reads the add-on log and tails it", async () => {
+		const getSupervisorLog = vi.fn(async () => ["a", "b", "c", "d"].join("\n"));
+		const server = buildHarness({ rest: { getSupervisorLog } });
 		const result = await server.call("ha_get_supervisor_log", {
 			target: "addon",
-			addon_slug: "core_mosquitto",
+			addon_slug: "core_matter_server",
 			tail_lines: 2
 		});
-		expect(request).toHaveBeenCalledWith("/api/hassio/addons/core_mosquitto/logs", {
-			expect: "text"
-		});
+		expect(getSupervisorLog).toHaveBeenCalledWith("addon", "core_matter_server");
 		expect(textOf(result)).toBe("c\nd");
 	});
 
 	it("defaults to the core log", async () => {
-		const request = vi.fn(async () => "core line");
-		const server = buildHarness({ rest: { request } });
+		const getSupervisorLog = vi.fn(async () => "core line");
+		const server = buildHarness({ rest: { getSupervisorLog } });
 		await server.call("ha_get_supervisor_log");
-		expect(request).toHaveBeenCalledWith("/api/hassio/core/logs", { expect: "text" });
+		expect(getSupervisorLog).toHaveBeenCalledWith("core", undefined);
 	});
 
 	it("requires addon_slug for target=addon", async () => {
-		const request = vi.fn();
-		const server = buildHarness({ rest: { request } });
+		const getSupervisorLog = vi.fn();
+		const server = buildHarness({ rest: { getSupervisorLog } });
 		const result = await server.call("ha_get_supervisor_log", { target: "addon" });
 		expect(result.isError).toBe(true);
-		expect(request).not.toHaveBeenCalled();
+		expect(getSupervisorLog).not.toHaveBeenCalled();
+	});
+
+	it("explains a 404 rather than passing it on bare", async () => {
+		const getSupervisorLog = vi.fn(async () => {
+			throw new HaApiError("responded 404", 404, "");
+		});
+		const server = buildHarness({ rest: { getSupervisorLog } });
+		const result = await server.call("ha_get_supervisor_log", { target: "addon", addon_slug: "nope" });
+		expect(result.isError).toBe(true);
+		expect(textOf(result)).toMatch(/No add-on 'nope'/);
 	});
 });
 

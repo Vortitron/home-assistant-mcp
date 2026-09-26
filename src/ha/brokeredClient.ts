@@ -27,7 +27,8 @@ import type {
  * bypassed. This client therefore exposes the subset of the HA surface the
  * broker proxies — states, services, config, templates, automation config
  * (read with `ha:read`, write with `ha:config`), Lovelace dashboards,
- * registries (WebSocket), logs/history, events and check_config; everything
+ * registries (WebSocket), logs/history (Supervisor and add-on logs too), events
+ * and check_config; everything
  * else throws a clear "not available in brokered mode" error rather than
  * failing obscurely.
  */
@@ -156,6 +157,13 @@ export function createBrokeredHaRestClient(
 		renderTemplate,
 		checkConfig: () => broker<HaCheckConfigResult>("/check_config", { method: "POST" }),
 		getErrorLog: () => broker<string>("/error_log", { expect: "text" }),
+		getSupervisorLog: (target, addonSlug) =>
+			broker<string>(
+				target === "addon"
+					? `/supervisor/logs/addon/${encodeURIComponent(addonSlug ?? "")}`
+					: `/supervisor/logs/${encodeURIComponent(target)}`,
+				{ expect: "text" }
+			),
 		getLogbook: (params: LogbookParams) => {
 			const base = params.startTime
 				? `/logbook/${encodeURIComponent(params.startTime)}`

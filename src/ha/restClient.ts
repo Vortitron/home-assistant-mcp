@@ -65,6 +65,8 @@ export interface HaRestClient {
 	renderTemplate(template: string, variables?: Record<string, unknown>): Promise<string>;
 	checkConfig(): Promise<HaCheckConfigResult>;
 	getErrorLog(): Promise<string>;
+	/** A Supervisor-managed log (`core`, `host`, …, or `addon` with its slug) as text. */
+	getSupervisorLog(target: string, addonSlug?: string): Promise<string>;
 	getLogbook(params: LogbookParams): Promise<HaLogbookEntry[]>;
 	getHistory(params: HistoryParams): Promise<HaState[][]>;
 	fireEvent(eventType: string, data?: Record<string, unknown>): Promise<{ message: string }>;
@@ -213,6 +215,13 @@ export function createHaRestClient(
 		checkConfig: () =>
 			request<HaCheckConfigResult>("/api/config/core/check_config", { method: "POST" }),
 		getErrorLog: () => request<string>("/api/error_log", { expect: "text" }),
+		getSupervisorLog: (target, addonSlug) =>
+			request<string>(
+				target === "addon"
+					? `/api/hassio/addons/${encodeURIComponent(addonSlug ?? "")}/logs`
+					: `/api/hassio/${encodeURIComponent(target)}/logs`,
+				{ expect: "text" }
+			),
 		getLogbook,
 		getHistory,
 		fireEvent: (eventType, data) =>

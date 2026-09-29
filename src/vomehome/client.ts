@@ -89,6 +89,12 @@ export interface VomeHomeClient {
 	revokeGuestLink(id: string, linkId: string): Promise<void>;
 	getOnboarding(id: string): Promise<OnboardingState>;
 	completeOnboarding(id: string, coreConfig?: Record<string, unknown>): Promise<OnboardingResult>;
+	/**
+	 * CHAP: the portal's CHAP page actions (``/api/v1/instances/<id>/chap[/<path>]``).
+	 * A refused action (409) comes back as its JSON (``{ok: false, error}``),
+	 * not as an exception: the reason is what the agent needs to tell the user.
+	 */
+	chap(id: string, path?: string, method?: string, body?: unknown): Promise<Record<string, unknown>>;
 }
 
 /** Which Home Assistant setup-wizard steps are still outstanding. */
@@ -363,8 +369,35 @@ export function createVomeHomeClient(config: Config, logger: Logger): VomeHomeCl
 		);
 	}
 
+	async function chap(
+		id: string,
+		path = "",
+		method = "GET",
+		body?: unknown
+	): Promise<Record<string, unknown>> {
+		const url = `${INSTANCES_PATH}/${encodeURIComponent(id)}/chap${path ? `/${path}` : ""}`;
+		try {
+			const payload = await request<unknown>(url, {
+				method,
+				body: method === "GET" ? undefined : (body ?? {})
+			});
+			return isRecord(payload) ? payload : {};
+		} catch (error) {
+			if (error instanceof VomeHomeError && (error.status === 409 || error.status === 400)) {
+				try {
+					const parsed: unknown = JSON.parse(error.body);
+					if (isRecord(parsed)) return { ok: false, ...parsed };
+				} catch {
+					// not JSON: fall through to the thrown error
+				}
+			}
+			throw error;
+		}
+	}
+
 	return {
 		isEnabled: () => config.vomehome.enabled,
+		chap,
 		listInstances,
 		getInstance,
 		restartInstance,

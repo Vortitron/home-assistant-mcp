@@ -10,7 +10,25 @@ describe("loadConfig", () => {
 		expect(config.logLevel).toBe("info");
 		expect(config.safety.allowWrite).toBe(false);
 		expect(config.safety.denyDomains).toContain("lock");
+		expect(config.safety.denyDomains).toContain("camera");
+		expect(config.safety.denyDomains).not.toContain("climate");
 		expect(config.esphome.enabled).toBe(false);
+	});
+
+	it("leaves sensitive domains to the API key in brokered mode", () => {
+		// The portal enforces each key's Sensitive devices setting; a local
+		// default list would refuse what the owner explicitly allowed.
+		const config = loadConfig({
+			VOMEHOME_TOKEN: "vh_x",
+			VOMEHOME_INSTANCE_ID: "srv-1"
+		});
+		expect(config.brokered).toBe(true);
+		expect(config.safety.denyDomains).toEqual([]);
+		// An explicit local restriction is still honoured.
+		expect(
+			loadConfig({ VOMEHOME_TOKEN: "vh_x", VOMEHOME_INSTANCE_ID: "srv-1", HA_DENY_DOMAINS: "lock" }).safety
+				.denyDomains
+		).toEqual(["lock"]);
 	});
 
 	it("parses and normalises values", () => {

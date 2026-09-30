@@ -320,7 +320,7 @@ config.
 | `HA_URL` | — (required) | Base URL, e.g. `http://homeassistant.local:8123`. |
 | `HA_TOKEN` | — (required) | Long-lived access token (Profile → Security). |
 | `HA_ALLOW_WRITE` | off (direct) / permissive (brokered) | Local write guard. In brokered mode the API key's per-instance scope decides (server-enforced); setting `false` only adds a local restriction. In direct mode this is the master switch and defaults off. |
-| `HA_DENY_DOMAINS` | `lock,alarm_control_panel,cover,climate,vacuum,valve,water_heater,lawn_mower,camera` | Domains that can never be written. Set empty to clear. |
+| `HA_DENY_DOMAINS` | `lock,alarm_control_panel,cover,valve,camera` (direct) / empty (brokered) | Domains that can never be written. In brokered mode the API key's *Sensitive devices* setting decides, server-side; set this only to add a local restriction. |
 | `HA_ALLOW_DOMAINS` | _(any)_ | If set, only these domains may be written. |
 | `HA_ALLOW_CONFIG_WRITE` | off (direct) / permissive (brokered) | Local guard for editing automation config. Same semantics as `HA_ALLOW_WRITE`. |
 | `NODERED_URL` | _(disabled)_ | Node-RED editor/admin base URL, e.g. `http://homeassistant.local:1880`. Enables the `nodered_*` tools. |
@@ -503,7 +503,9 @@ Designed to be safe to point at a real home:
    In **brokered mode** permissions instead live on your VomeHome API key and are
    enforced server-side per instance (see [Brokered mode](#brokered-mode-the-real-boundary)).
 2. **Domain deny-list.** Even with writes on, sensitive domains (locks, alarms,
-   covers, climate, …) are blocked unless you remove them from `HA_DENY_DOMAINS`.
+   covers, valves, cameras) are blocked. In direct mode remove them from
+   `HA_DENY_DOMAINS`; in brokered mode tick them for the key under
+   *Sensitive devices* on the VomeHome API tokens page.
 3. **Optional allow-list.** Set `HA_ALLOW_DOMAINS` to permit *only* specific
    domains.
 4. **Cross-domain guard.** `ha_call_service` checks the domain of every target

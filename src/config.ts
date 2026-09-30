@@ -137,8 +137,13 @@ export interface ConfigProblem {
 	message: string;
 }
 
-const DEFAULT_DENY_DOMAINS =
-	"lock,alarm_control_panel,cover,climate,vacuum,valve,water_heater,lawn_mower,camera";
+/**
+ * Direct mode only: with a raw HA token the MCP is the only guard. The same
+ * five the VomeHome broker treats as sensitive — what can let someone in,
+ * flood a house or watch it. In brokered mode the default is empty: each API
+ * key's owner decides there, and a second list here would overrule them.
+ */
+const DEFAULT_DENY_DOMAINS = "lock,alarm_control_panel,cover,valve,camera";
 const DEFAULT_TIMEOUT_MS = 15000;
 const DEFAULT_MAX_RESULTS = 500;
 const DEFAULT_LOG_LEVEL: LogLevel = "info";
@@ -345,7 +350,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
 		safety: {
 			allowWrite,
 			allowConfigWrite,
-			denyDomains: parseDomainList(env.HA_DENY_DOMAINS, DEFAULT_DENY_DOMAINS),
+			denyDomains: parseDomainList(env.HA_DENY_DOMAINS, brokered ? "" : DEFAULT_DENY_DOMAINS),
 			allowDomains: parseDomainList(env.HA_ALLOW_DOMAINS, "")
 		},
 		// One route to ESPHome: the VomeHome relay. There is nothing to configure

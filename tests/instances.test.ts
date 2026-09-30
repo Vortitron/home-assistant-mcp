@@ -95,7 +95,8 @@ describe("loadConfig VOMEHOME_INSTANCES", () => {
 
 describe("createInstanceManager (brokered)", () => {
 	it("resolves per-instance access and active safety", () => {
-		const config = loadConfig(BROKER_ENV);
+		// A local restriction, set on purpose: brokered mode has none by default.
+		const config = loadConfig({ ...BROKER_ENV, HA_DENY_DOMAINS: "lock" });
 		const mgr = createInstanceManager(config, logger);
 		expect(mgr.brokered).toBe(true);
 		expect(mgr.activeId()).toBe("rly-house");
@@ -107,7 +108,7 @@ describe("createInstanceManager (brokered)", () => {
 		// and is not added to the declared registry by a mere lookup.
 		expect(mgr.access("ghost")).toMatchObject({ write: true, config: false });
 		expect(mgr.has("ghost")).toBe(false);
-		// Global deny-list is preserved across instances.
+		// A local deny-list applies to every instance alike.
 		expect(mgr.safetyFor("sbx-plc").denyDomains).toContain("lock");
 	});
 

@@ -8,6 +8,7 @@ import { registerTemplateTools } from "./templates.js";
 import { registerAutomationTools } from "./automations.js";
 import { registerDashboardTools } from "./dashboards.js";
 import { registerLogTools } from "./logs.js";
+import { registerCameraTools } from "./cameras.js";
 import { registerTraceTools } from "./traces.js";
 import { registerSystemTools } from "./system.js";
 import { registerEsphomeTools } from "./esphome.js";
@@ -39,6 +40,7 @@ export function registerAllTools(rawServer: McpServer, ctx: ToolContext): void {
 	registerAutomationTools(server, ctx);
 	registerDashboardTools(server, ctx);
 	registerLogTools(server, ctx);
+	registerCameraTools(server, ctx);
 	registerTraceTools(server, ctx);
 	registerEsphomeTools(server, ctx);
 	registerNodeRedTools(server, ctx);

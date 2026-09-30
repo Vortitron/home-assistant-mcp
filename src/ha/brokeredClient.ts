@@ -1,7 +1,7 @@
 import type { Config } from "../config.js";
 import type { Logger } from "../logger.js";
-import { HaApiError } from "./restClient.js";
-import type { HaRestClient, HistoryParams, LogbookParams } from "./restClient.js";
+import { HaApiError, binaryResult } from "./restClient.js";
+import type { HaImage, HaRestClient, HistoryParams, LogbookParams } from "./restClient.js";
 import type { HaWsClient } from "./wsClient.js";
 import type {
 	HaApiStatus,
@@ -36,7 +36,7 @@ import type {
 interface BrokerRequestOptions {
 	method?: string;
 	body?: unknown;
-	expect?: "json" | "text";
+	expect?: "json" | "text" | "binary";
 }
 
 function unsupportedError(feature: string): HaApiError {
@@ -96,6 +96,10 @@ export function createBrokeredHaRestClient(
 				body: options.body === undefined ? undefined : JSON.stringify(options.body),
 				signal: controller.signal
 			});
+			if (options.expect === "binary" && response.ok) {
+				const bytes = Buffer.from(await response.arrayBuffer());
+				return binaryResult(bytes, response.headers.get("content-type")) as unknown as T;
+			}
 			const text = await response.text();
 			if (!response.ok) {
 				throw new HaApiError(brokerErrorMessage(method, path, response.status, text), response.status, text);
@@ -157,6 +161,11 @@ export function createBrokeredHaRestClient(
 		renderTemplate,
 		checkConfig: () => broker<HaCheckConfigResult>("/check_config", { method: "POST" }),
 		getErrorLog: () => broker<string>("/error_log", { expect: "text" }),
+		getCameraImage: (entityId, width) =>
+			broker<HaImage>(
+				`/camera_proxy/${encodeURIComponent(entityId)}${buildQuery({ width: width === undefined ? undefined : String(width) })}`,
+				{ expect: "binary" }
+			),
 		getSupervisorLog: (target, addonSlug) =>
 			broker<string>(
 				target === "addon"

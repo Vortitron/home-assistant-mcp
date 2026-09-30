@@ -85,6 +85,19 @@ describe("createHaRestClient", () => {
 		expect(String(fetchMock.mock.calls[1]![0])).toBe("http://ha.local:8123/api/hassio/core/logs");
 	});
 
+	it("fetches a camera still straight from HA as bytes", async () => {
+		const jpeg = Buffer.from([0xff, 0xd8, 0x00, 0xff, 0xd9]);
+		const fetchMock = vi.fn(
+			async () => new Response(jpeg, { status: 200, headers: { "Content-Type": "image/jpeg" } })
+		);
+		vi.stubGlobal("fetch", fetchMock);
+
+		const image = await client().getCameraImage("camera.door", 1024);
+
+		expect(String(fetchMock.mock.calls[0]![0])).toBe("http://ha.local:8123/api/camera_proxy/camera.door?width=1024");
+		expect(Buffer.from(image.data, "base64").equals(jpeg)).toBe(true);
+	});
+
 	it("builds history query params", async () => {
 		const fetchMock = vi.fn(async () => jsonResponse([[]]));
 		vi.stubGlobal("fetch", fetchMock);

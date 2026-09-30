@@ -27,10 +27,17 @@ export class HaApiError extends Error {
 	}
 }
 
+/** A binary body, base64-encoded, and what kind of file it is. */
+export interface HaImage {
+	data: string;
+	mimeType: string;
+}
+
 export interface HaRequestOptions {
 	method?: string;
 	body?: unknown;
-	expect?: "json" | "text";
+	/** "binary" resolves to an {@link HaImage} rather than parsed text. */
+	expect?: "json" | "text" | "binary";
 	query?: Record<string, string | number | boolean | undefined>;
 }
 
@@ -67,6 +74,8 @@ export interface HaRestClient {
 	getErrorLog(): Promise<string>;
 	/** A Supervisor-managed log (`core`, `host`, …, or `addon` with its slug) as text. */
 	getSupervisorLog(target: string, addonSlug?: string): Promise<string>;
+	/** A camera's current still, scaled by HA to ``width`` pixels wide. */
+	getCameraImage(entityId: string, width?: number): Promise<HaImage>;
 	getLogbook(params: LogbookParams): Promise<HaLogbookEntry[]>;
 	getHistory(params: HistoryParams): Promise<HaState[][]>;
 	fireEvent(eventType: string, data?: Record<string, unknown>): Promise<{ message: string }>;
@@ -98,6 +107,12 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/** Wrap raw bytes as an {@link HaImage}; a camera with no type is a JPEG. */
+export function binaryResult(bytes: Buffer, contentType: string | null): HaImage {
+	const mimeType = (contentType ?? "").split(";")[0]!.trim();
+	return { data: bytes.toString("base64"), mimeType: mimeType.startsWith("image/") ? mimeType : "image/jpeg" };
+}
+
 export function createHaRestClient(
 	config: Config,
 	logger: Logger,
@@ -119,6 +134,17 @@ export function createHaRestClient(
 				body: options.body === undefined ? undefined : JSON.stringify(options.body),
 				signal: controller.signal
 			});
+			if (options.expect === "binary") {
+				const bytes = Buffer.from(await response.arrayBuffer());
+				if (!response.ok) {
+					throw new HaApiError(
+						`Home Assistant ${method} ${path} responded ${response.status} ${response.statusText}`,
+						response.status,
+						bytes.toString("utf8").slice(0, 2000)
+					);
+				}
+				return binaryResult(bytes, response.headers.get("content-type")) as unknown as T;
+			}
 			const text = await response.text();
 			if (!response.ok) {
 				throw new HaApiError(
@@ -215,6 +241,11 @@ export function createHaRestClient(
 		checkConfig: () =>
 			request<HaCheckConfigResult>("/api/config/core/check_config", { method: "POST" }),
 		getErrorLog: () => request<string>("/api/error_log", { expect: "text" }),
+		getCameraImage: (entityId, width) =>
+			request<HaImage>(`/api/camera_proxy/${encodeURIComponent(entityId)}`, {
+				expect: "binary",
+				query: { width }
+			}),
 		getSupervisorLog: (target, addonSlug) =>
 			request<string>(
 				target === "addon"

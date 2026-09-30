@@ -1633,3 +1633,43 @@ describe("ha_addon_install_vome", () => {
 		expect(body.steps.find((s: any) => s.step === "restore_internet_host").ok).toBe(true);
 	});
 });
+
+describe("ha_camera_image", () => {
+	const still = { data: Buffer.from("fake jpeg").toString("base64"), mimeType: "image/jpeg" };
+
+	it("returns the still as image content the model can see, with what it is", async () => {
+		const getCameraImage = vi.fn(async () => still);
+		const getState = vi.fn(async () => ({
+			entity_id: "camera.front_door",
+			state: "idle",
+			last_updated: "2026-09-30T14:00:00+00:00",
+			attributes: { friendly_name: "Front door" }
+		}));
+		const server = buildHarness({ rest: { getCameraImage, getState } as any });
+		const result = await server.call("ha_camera_image", { entity_id: "camera.front_door" });
+		expect(getCameraImage).toHaveBeenCalledWith("camera.front_door", 1024);
+		expect(result.content[0]).toEqual({ type: "image", data: still.data, mimeType: "image/jpeg" });
+		expect((result.content[1] as any).text).toMatch(/Front door .*14:00/);
+	});
+
+	it("refuses anything that is not a camera", async () => {
+		const getCameraImage = vi.fn();
+		const server = buildHarness({ rest: { getCameraImage } as any });
+		const result = await server.call("ha_camera_image", { entity_id: "light.hall" });
+		expect(result.isError).toBe(true);
+		expect(getCameraImage).not.toHaveBeenCalled();
+	});
+
+	it("still shows the picture when the caption cannot be read", async () => {
+		const server = buildHarness({
+			rest: {
+				getCameraImage: async () => still,
+				getState: async () => {
+					throw new Error("state unavailable");
+				}
+			} as any
+		});
+		const result = await server.call("ha_camera_image", { entity_id: "camera.door", width: 320 });
+		expect(result.content[0]).toMatchObject({ type: "image" });
+	});
+});

@@ -56,7 +56,8 @@ policy (see [Safety](#safety)).
 | `ha_check_config` | Validate the configuration (Check configuration). |
 | `ha_get_system_log` | **Deduplicated, structured errors** — level, logger, source, count, first/last seen. Start here. |
 | `ha_get_error_log` | Tail of the raw Home Assistant error log. |
-| `ha_get_supervisor_log` | Add-on / Core / Supervisor / host logs (direct mode, HAOS or Supervised). |
+| `ha_get_supervisor_log` | Add-on / Core / Supervisor / host logs (HAOS or Supervised). |
+| `ha_camera_image` | A camera's current still, as an image the agent can see. Via VomeHome the key needs Cameras ticked. |
 | `ha_get_logbook` | Human-readable logbook entries. |
 | `ha_list_traces` | Recent automation/script runs and how each one stopped. |
 | `ha_get_trace` | Step-by-step detail for one run, with `failed_at` naming the blocking step. |

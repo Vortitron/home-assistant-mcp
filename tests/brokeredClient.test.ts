@@ -202,6 +202,30 @@ describe("createBrokeredHaRestClient", () => {
 		expect(fetchMock.mock.calls[1]![0]).toBe("https://vome.io/api/v1/instances/srv-1/ha/supervisor/logs/host");
 	});
 
+	it("fetches a camera still as bytes, not text", async () => {
+		const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x9c, 0xff, 0xd9]);
+		const fetchMock = vi.fn(
+			async () => new Response(jpeg, { status: 200, headers: { "Content-Type": "image/jpeg" } })
+		);
+		vi.stubGlobal("fetch", fetchMock);
+
+		const image = await client().getCameraImage("camera.front_door", 640);
+
+		expect(fetchMock.mock.calls[0]![0]).toBe(
+			"https://vome.io/api/v1/instances/srv-1/ha/camera_proxy/camera.front_door?width=640"
+		);
+		expect(image.mimeType).toBe("image/jpeg");
+		expect(Buffer.from(image.data, "base64").equals(jpeg)).toBe(true);
+	});
+
+	it("reports the broker's refusal for an unticked camera as an error", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => jsonResponse({ error: "Camera images need the Cameras tick on this key." }, 403))
+		);
+		await expect(client().getCameraImage("camera.front_door")).rejects.toThrow(/Cameras tick/);
+	});
+
 	it("GETs history with entity filter query params", async () => {
 		const fetchMock = vi.fn(async () => jsonResponse([[]]));
 		vi.stubGlobal("fetch", fetchMock);

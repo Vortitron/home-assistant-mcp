@@ -200,6 +200,7 @@ export function createInstanceManager(
 		checkConfig: () => currentRest().checkConfig(),
 		getErrorLog: () => currentRest().getErrorLog(),
 		getSupervisorLog: (target, addonSlug) => currentRest().getSupervisorLog(target, addonSlug),
+		getCameraImage: (entityId, width) => currentRest().getCameraImage(entityId, width),
 		getLogbook: (params) => currentRest().getLogbook(params),
 		getHistory: (params) => currentRest().getHistory(params),
 		fireEvent: (eventType, data) => currentRest().fireEvent(eventType, data),

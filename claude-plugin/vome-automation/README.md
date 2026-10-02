@@ -3,6 +3,37 @@
 A side pane in Claude Code that shows the Home Assistant automation Claude is
 working on, kept up to date as Claude reads it, edits it and runs it.
 
+## Quickstart
+
+**1. Add the Vome app to Home Assistant**, then get a key from it. No sign-up needed.
+
+[![Add the Vome app to your Home Assistant.](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2FVortitron%2FVomeSync)
+
+The button opens your own Home Assistant and adds the app's repository. Pick
+**Vome** and **Install**, open it, and on the **Agent** tab create a key. A home
+hosted on Vome gets its key at vome.io instead, under **Account → API tokens**.
+
+**2. Paste these into Claude Code**, in a terminal (version 2.1.275 or newer):
+
+```
+/plugin install vome-connect --marketplace Vortitron/home-assistant-mcp
+```
+
+It asks for the key from step 1. Then:
+
+```
+/plugin install vome-automation --marketplace Vortitron/home-assistant-mcp
+/reload-plugins
+```
+
+**3. Ask Claude about an automation**, for example *"Why didn't my hallway
+lights turn off?"*. The pane opens beside the conversation.
+
+In auto mode, the pane asks you to allow its three read-only tools the first
+time; it shows the exact lines and where they go.
+
+## What it shows
+
 - **The automation as Home Assistant's editor nests it.** Triggers, conditions
   and actions, with `choose`, `if`/`then`/`else`, `repeat` and `parallel`
   blocks indented the way the editor shows them.

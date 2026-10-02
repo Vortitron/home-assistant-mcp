@@ -6,6 +6,33 @@ or run: it adds Vome's hosted MCP endpoint (`https://vome.io/mcp`), which runs
 and change your home: entities and their state, automations and their runs,
 logs, dashboards and the rest of the MCP's tools, within what the key allows.
 
+## Quickstart
+
+**1. Add the Vome app to Home Assistant**, then get a key from it. No sign-up needed.
+
+[![Add the Vome app to your Home Assistant.](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2FVortitron%2FVomeSync)
+
+The button opens your own Home Assistant and adds the app's repository. Pick
+**Vome** and **Install**, open it, and on the **Agent** tab create a key. A home
+hosted on Vome gets its key at vome.io instead, under **Account → API tokens**.
+
+**2. Paste this into Claude Code**, in a terminal (version 2.1.275 or newer):
+
+```
+/plugin install vome-connect --marketplace Vortitron/home-assistant-mcp
+```
+
+It asks for the key from step 1. Then run `/reload-plugins` and check with
+`/mcp`.
+
+**3. Ask Claude about your home**, for example *"Which lights are on?"*. To see
+the automation Claude is working on in a side pane, add
+[`vome-automation`](../vome-automation/README.md) too:
+
+```
+/plugin install vome-automation --marketplace Vortitron/home-assistant-mcp
+```
+
 ## Get a key
 
 - **Home Assistant on your own hardware:** install the Vome app in Home

@@ -406,12 +406,12 @@ side pane in the terminal. It shows the automation Claude is working on, what
 a save changed and which steps the latest run took:
 
 ```
-/plugin marketplace add Vortitron/home-assistant-mcp
-/plugin install vome-automation@vome
+/plugin install vome-automation --marketplace Vortitron/home-assistant-mcp
 ```
 
-In auto mode it needs three read-only tools allowed; its README has the exact
-lines.
+That needs Claude Code 2.1.275 or newer; its README has the two-command form
+for older versions, how to turn on updates, and the read-only tools to allow in
+auto mode.
 
 ### Multiple Home Assistants
 

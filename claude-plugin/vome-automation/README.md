@@ -41,14 +41,28 @@ change is Claude's own tool call, which you see and approve as usual.
 
 ## Install
 
-In Claude Code:
+In Claude Code (2.1.275 or newer), one command adds the marketplace and
+installs the pane:
+
+```
+/plugin install vome-automation --marketplace Vortitron/home-assistant-mcp
+```
+
+On an older Claude Code, use two:
 
 ```
 /plugin marketplace add Vortitron/home-assistant-mcp
 /plugin install vome-automation@vome
 ```
 
-Then restart Claude Code.
+Then run `/reload-plugins`, or restart Claude Code.
+
+### Get updates
+
+Claude Code doesn't update plugins from a marketplace like this one unless you
+ask it to. Turn it on once: run `/plugin`, open **Marketplaces**, select
+**vome** and choose **Enable auto-update**. Or update by hand with
+`claude plugin update vome-automation@vome`.
 
 ## Allow the pane's reads (auto mode)
 

@@ -1,6 +1,9 @@
 {
   "name": "vome",
-  "owner": { "name": "Vortitron", "url": "https://vome.io" },
+  "owner": {
+    "name": "Vortitron",
+    "url": "https://vome.io"
+  },
   "metadata": {
     "description": "Claude Code plugins for Home Assistant through @vortitron/home-assistant-mcp, from Vome."
   },
@@ -9,7 +12,6 @@
       "name": "vome-automation",
       "source": "./claude-plugin/vome-automation",
       "description": "A side pane for the Home Assistant automation Claude is working on, with what a save changed and which steps the latest run took.",
-      "version": "0.1.1",
       "category": "productivity"
     }
   ]

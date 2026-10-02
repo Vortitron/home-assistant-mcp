@@ -253,7 +253,7 @@ test('reading a config draws a map of the device, and a save lights what it chan
   expect((await ui.find({ text: 'Loft humidity' })) !== undefined).toBe(true)
   expect((await ui.find({ text: /light\.toggle/ })) !== undefined).toBe(true)
   // The I2C bus and the LED both on GPIO8: the map says so.
-  expect((await ui.find({ text: /i2c sda, Status  \(shared\)/ })) !== undefined).toBe(true)
+  expect((await ui.find({ text: /i2c sda, Status  \(shared, strapping pin\)/ })) !== undefined).toBe(true)
   // Keys and passwords in the YAML are never drawn.
   expect((await ui.find({ text: /hunter2|c2VjcmV0/ })) === undefined).toBe(true)
 

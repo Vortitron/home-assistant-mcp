@@ -237,11 +237,14 @@ export function mapDevice(yaml: string): DeviceMap {
   const packages = child(root, 'packages')
   if (packages) add('Other', 0, '⧉', 'packages', packages.children.map(p => p.key ?? p.value).filter(Boolean).join(', ') || (packages.value ?? ''))
 
-  // Which pin does what: the wiring at a glance.
+  // Which pin does what: the wiring at a glance, with the pins the chip boots from called out.
+  const strapping = strappingPins(platformNode?.key ?? '', `${variant} ${val(platformNode, 'board') ?? ''}`)
   const byPin = new Map<string, string[]>()
   for (const p of pins) byPin.set(p.pin, [...(byPin.get(p.pin) ?? []), p.owner])
   for (const [pin, owners] of [...byPin].sort((a, b) => pinNumber(a[0]) - pinNumber(b[0]))) {
-    add('Pins', 0, owners.length > 1 ? '!' : '○', pin, owners.join(', ') + (owners.length > 1 ? '  (shared)' : ''))
+    const isStrapping = /^GPIO\d+$/.test(pin) && strapping.includes(pinNumber(pin))
+    const notes = [owners.length > 1 ? 'shared' : null, isStrapping ? 'strapping pin' : null].filter(Boolean)
+    add('Pins', 0, owners.length > 1 ? '!' : isStrapping ? '◇' : '○', pin, owners.join(', ') + (notes.length ? `  (${notes.join(', ')})` : ''))
   }
 
   return { name: sub(name), chip, rows }
@@ -269,6 +272,18 @@ function pinOf(node: YNode): string | null {
 
 function pinsIn(item: YNode): { pin: string }[] {
   return item.children.filter(c => c.key && PIN_KEY.test(c.key)).map(c => pinOf(c)).filter((p): p is string => !!p).map(pin => ({ pin }))
+}
+
+/** Pins the chip reads at boot, which ESPHome warns about: fine with care, a trap with a pull resistor. */
+function strappingPins(platform: string, variant: string): number[] {
+  const v = variant.toLowerCase().replace(/[-_]/g, '')
+  if (platform === 'esp8266') return [0, 2, 15]
+  if (platform !== 'esp32') return []
+  if (/c3/.test(v)) return [2, 8, 9]
+  if (/c6|h2/.test(v)) return [8, 9, 15]
+  if (/s3/.test(v)) return [0, 3, 45, 46]
+  if (/s2/.test(v)) return [0, 45, 46]
+  return [0, 2, 5, 12, 15]
 }
 
 function pinNumber(pin: string): number {

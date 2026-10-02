@@ -77,6 +77,10 @@ Add them to `~/.claude/settings.json` (every project) or the project's
 }
 ```
 
+If you skip this, the pane says which read was refused and shows these exact
+lines for your server, with a button to copy them and a link to your
+`settings.json`.
+
 Replace `vome` with your server's name, for example
 `mcp__home-assistant__ha_get_trace` for a server named `home-assistant`. The
 last line is only for homes on Vome: it lets the pane show an "Open in Home

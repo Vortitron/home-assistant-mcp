@@ -47,12 +47,20 @@ const flash = { plugin: 'vome-automation', key: 'flash' } as const
 const fxOn = { plugin: 'vome-automation', key: 'fxOn' } as const
 const fx = { plugin: 'vome-automation', key: 'fx' } as const
 const building = { plugin: 'vome-automation', key: 'building' } as const
+const blocked = { plugin: 'vome-automation', key: 'blocked' } as const
+
+/** The pane's background reads; in auto mode each needs an allow rule (README: "Allow the pane's reads"). */
+const READ_TOOLS = ['ha_get_automation', 'ha_get_trace', 'ha_list_traces', 'vomehome_get_instance']
+const README_URL = 'https://github.com/Vortitron/home-assistant-mcp/tree/main/claude-plugin/vome-automation#allow-the-panes-reads-auto-mode'
 
 // Module variables reset on a reload, which is all these need.
 let isBusy = false
 let lastPoll = 0
 let hasToldNarrow = false
 let lastLogged = ''
+let isBlocked = false
+/** Where this person's Claude Code settings live, for the link when auto mode refuses a read. */
+let settingsFile = '~/.claude/settings.json'
 // The animation's own bookkeeping: what plays, where it is mounted, the fade.
 let fxAt = 0
 let fxScene: Interstitial | null = null
@@ -73,6 +81,8 @@ export const register: Register = on => {
       description: 'Show a Home Assistant automation (via Vome) in a side pane',
       argumentHint: '[automation id or entity_id]',
     })
+    const configDir = (await $.env.get('CLAUDE_CONFIG_DIR')) ?? `${(await $.env.get('HOME')) ?? '~'}/.claude`
+    settingsFile = `${configDir.replace(/\/+$/, '')}/settings.json`
     $.clock.every(TICK_MS, () => void tick($))
     isFxOn = (await $.store.get('fxOn')) !== false
     await $.state.set(fxOn, isFxOn)
@@ -197,7 +207,7 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Text, Button, Link } = $.ui.resolve(e)
+    const { Box, Text, Button, Link, Code, Markdown } = $.ui.resolve(e)
     const current = (await $.state.get(view)).value ?? null
     const latest = (await $.state.get(run)).value ?? null
     const watching = (await $.state.get(watch)).value ?? null
@@ -207,6 +217,27 @@ export const register: Register = on => {
     const isFxEnabled = (await $.state.get(fxOn)).value ?? true
     const playing = (await $.state.get(fx)).value ?? null
     const isBuilding = (await $.state.get(building)).value ?? false
+    const refusal = (await $.state.get(blocked)).value ?? null
+
+    // Below everything, so the tree does not move: what to add when auto mode refuses a read.
+    const rules = refusal ? READ_TOOLS.map(tool => `"mcp__${refusal.server}__${tool}"`).join(',\n') : ''
+    const help = refusal ? (
+      <Box flexDirection="column" marginTop={1}>
+        <Text color="warning">
+          Auto mode refused the pane's read of {refusal.tool}. Allow its read-only tools by adding these to
+          permissions.allow:
+        </Text>
+        <Code source={rules} />
+        <Markdown
+          text={`In [${settingsFile}](file://${settingsFile}) (every project), or with \`/permissions\` → Allow. Then press **r**. [Why it needs them](${README_URL})`}
+        />
+        <Box flexDirection="row" gap={2}>
+          <Button key="copy-rules" hotkey="c" onPress={press => $.ui.copy({ text: rules, surface: press.surface })}>
+            Copy the lines
+          </Button>
+        </Box>
+      </Box>
+    ) : null
 
     // While an interstitial plays it takes the header's first four lines; the swim (the intro, or
     // while an automation is worked on) takes all six. Same heights, so nothing below moves.
@@ -233,6 +264,7 @@ export const register: Register = on => {
           {swimStrip ?? sceneStrip}
           <Text dimColor>No automation yet. It appears here when one is read or saved through Vome, or with /automation &lt;id&gt;.</Text>
           {message ? <Text color="warning">{message}</Text> : null}
+          {help}
         </Box>
       )
     }
@@ -336,6 +368,7 @@ export const register: Register = on => {
           {url ? <Link href={`${url}/config/automation/edit/${encodeURIComponent(current.id)}`}>Open in Home Assistant</Link> : null}
         </Box>
         <Text dimColor>● ran  ✗ false or error  ○ not reached  + added  ~ changed  − removed</Text>
+        {help}
       </Box>
     )
   })
@@ -574,6 +607,8 @@ async function tick($: EngineInterface) {
 
     await lookUpHaUrl($)
   } catch (error) {
+    // Already shown, with what to do about it, by callVome.
+    if (error instanceof RefusedRead) return
     const text = `Vome: ${String(error)}`
     // Once per distinct failure in full to the transcript; the pane keeps a short form.
     if (text !== lastLogged) {
@@ -655,10 +690,30 @@ async function lookUpHaUrl($: EngineInterface) {
   await $.state.set(haUrls, { ...all, [instance]: url.startsWith('https://') ? url.replace(/\/+$/, '') : '' })
 }
 
+/** A background read auto mode refused; the pane already shows what to allow. */
+class RefusedRead extends Error {}
+
 async function callVome($: EngineInterface, server: string, tool: string, args: Record<string, unknown>): Promise<Reply> {
-  const result = await $.mcp.call(server, tool, args).catch((error: unknown) => {
+  let result
+  try {
+    result = await $.mcp.call(server, tool, args)
+  } catch (error) {
+    // Auto mode refuses a background read nobody asked for unless it is allowed by name. Say so
+    // where it shows, with the exact lines for this server, rather than as a raw HooksError. Its
+    // wording differs between builds, so only "auto mode" is relied on; server and tool are ours.
+    if (/auto mode/i.test(String(error))) {
+      isBlocked = true
+      await $.state.set(blocked, { server, tool })
+      await $.state.set(note, `Auto mode refused the pane's read of ${tool}: allow it below.`)
+      throw new RefusedRead(tool)
+    }
     throw new Error(`${tool}: ${String(error)}`)
-  })
+  }
+  if (isBlocked) {
+    isBlocked = false
+    await $.state.set(blocked, null)
+    await $.state.set(note, null)
+  }
   const text = result.content.map(block => block.text ?? '').join('\n')
   return { body: result.isError ? null : parseReply(text), stamp: parseStamp(text), isError: result.isError, text }
 }

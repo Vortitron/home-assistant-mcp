@@ -77,6 +77,8 @@ declare module 'claude-code' {
       fx: Fx | null
       /** True from the model reading an automation until it saves or its turn ends: the swimmers play. */
       building: boolean
+      /** Auto mode refused one of the pane's background reads: which, and on which server. */
+      blocked: { server: string; tool: string } | null
       /** Whether the bulb strip plays; kept across sessions in $.store as well. */
       fxOn: boolean
     }

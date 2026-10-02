@@ -45,6 +45,8 @@ for (const placed of [true, false]) {
       // On the terminal the swimmers hold the title's line while Claude works on it.
       if (surface !== 'terminal') expect((await ui.find({ text: /lights follow/ })) !== undefined).toBe(true)
       expect((await ui.find({ text: /light\.turn_on/ })) !== undefined).toBe(true)
+      // Reading it starts watching for its runs; nobody has to find the key.
+      if (surface !== 'terminal') expect((await ui.find({ text: /Watching for a new run until/ })) !== undefined).toBe(true)
     }
   })
 }

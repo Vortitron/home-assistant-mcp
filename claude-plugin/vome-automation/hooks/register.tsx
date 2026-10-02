@@ -21,8 +21,11 @@ const DEFAULT_SERVER = 'vome'
 /** The tools of ours the pane follows, whatever the server is called. */
 const FOLLOWED = new Set(['ha_get_automation', 'ha_set_automation', 'ha_get_trace', 'ha_trigger_automation', 'ha_call_service'])
 
-/** How long a save keeps the pane watching for the run it causes. */
-const WATCH_AFTER_SAVE_MS = 15 * 60_000
+/**
+ * How long the pane watches for runs after an automation is read, refreshed or saved. Watching
+ * was opt-in (w), and nobody found the key, so runs never appeared; now it is the default.
+ */
+const WATCH_AFTER_SAVE_MS = 30 * 60_000
 /** How long a manual trigger keeps it watching. */
 const WATCH_AFTER_TRIGGER_MS = 2 * 60_000
 const POLL_RUNS_MS = 15_000
@@ -572,6 +575,17 @@ async function show(
       }
   await $.state.set(view, next)
   await $.state.set(note, null)
+
+  // Watch for its runs by default: a fresh watch for a new automation, a longer one for the same.
+  const watching = (await $.state.get(watch)).value ?? null
+  const isSameWatch = watching !== null && watching.id === id && watching.instance === stamp.instance
+  await $.state.set(watch, {
+    id,
+    instance: stamp.instance,
+    since: isSameWatch ? watching.since : new Date().toISOString(),
+    until: Date.now() + WATCH_AFTER_SAVE_MS,
+  })
+  lastPoll = 0
 }
 
 /** The config a save replaces: the last one seen, else read live before the save lands. */

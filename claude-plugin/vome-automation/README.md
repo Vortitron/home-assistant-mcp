@@ -11,8 +11,8 @@ working on, kept up to date as Claude reads it, edits it and runs it.
   seconds.
 - **What the latest run did.** Each step is marked ● ran, ✗ evaluated false
   (or errored) or ○ not reached, so "why didn't it fire?" is answered at a
-  glance. After a save the pane watches for the next run and tells you when
-  it happens.
+  glance. Whenever Claude reads, refreshes or saves an automation, the pane
+  watches for its runs for the next 30 minutes and tells you when one happens.
 - **A car-stereo dot-matrix display.** When something happens, it is acted
   out for a few seconds: a bulb glides in and lights when a run turns a light
   on, a fan spins up, a blind opens, a lock snaps shut. A condition that
@@ -52,8 +52,8 @@ Then restart Claude Code.
 
 ## Allow the pane's reads (auto mode)
 
-The pane reads the latest run of the automation in the background, and after a
-save it checks every 15 seconds for the next one. In **auto mode**, Claude
+The pane reads the latest run of the automation in the background, and checks
+every 15 seconds for new ones while it watches. In **auto mode**, Claude
 Code's safety check refuses background calls like these, because no request
 of yours is behind them. The pane then shows a line such as
 `$.mcp.call(vome, ha_get_trace) refused: The server-side auto mode classifier gave no verdict`,
@@ -102,7 +102,7 @@ with `/automation`.
 | `/automation` | open the pane |
 | `/automation <id>` | show an automation by its id or `automation.` entity id |
 | **r** | refresh the automation and its latest run |
-| **w** | watch for new runs (15 minutes), or stop watching |
+| **w** | stop watching for runs, or start again (30 minutes) |
 | **b** | the dot-matrix display off or on (remembered) |
 
 The keys work while the pane has focus: click it, or press **ctrl+x** then **tab**.

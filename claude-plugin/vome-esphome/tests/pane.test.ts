@@ -262,3 +262,28 @@ test('reading a config draws a map of the device, and a save lights what it chan
   expect(moved !== undefined).toBe(true)
   expect((await ui.find({ text: /^~/ })) !== undefined).toBe(true)
 })
+
+test('a call Claude Code moves to the background is not a failure: the pane follows the job to its end', async ($, on) => {
+  const clock = mock.clock(on)
+  base(on)
+  on('tool.call', { tool: tool('mcp__vome-staging__esphome_compile') }, () => ({
+    isError: true,
+    result: null,
+    text: 'MCP tool "vome-staging/esphome_compile" is still running after 120s. It was moved to the background as task kha529d9x and keeps running',
+  }))
+  let isDone = false
+  on('mcp.call', (_$, e) => {
+    if (e.tool === 'esphome_get_config') return { value: { content: [{ type: 'text', text: 'Not found' }], isError: true } }
+    const job = { job_id: 'j', command: 'compile', configuration: 't.yaml', started: new Date().toISOString(), done: isDone, exit_code: isDone ? 0 : null, lines: ['[400/920] Building C object\n'] }
+    return { value: { content: [{ type: 'text', text: JSON.stringify({ seq: isDone ? 2 : 1, jobs: [job] }) + STAMP }], isError: false } }
+  })
+  await $.session.start({ source: 'startup', cwd: '/tmp' } as never)
+  await $.tool.call({ tool: tool('mcp__vome-staging__esphome_compile'), configuration: 't.yaml' } as never)
+  await clock.advance(1_600)
+  const ui = await mount($)
+  expect((await ui.find({ text: /Failed/ })) === undefined).toBe(true)
+  expect((await ui.find({ text: /Compiling 43%/ })) !== undefined).toBe(true)
+  isDone = true
+  await clock.advance(1_600)
+  expect((await ui.find({ text: /✓ Compiled in/ })) !== undefined).toBe(true)
+})

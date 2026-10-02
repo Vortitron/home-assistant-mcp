@@ -135,11 +135,18 @@ export const register: Register = on => {
     const lines = current.isLive && current.lines.length > 0 ? current.lines : toLines([output]).slice(-KEEP_LINES)
     const isOk =
       ran.deny === undefined && !ran.isError && body !== null && (body.success === true || (command === 'logs' && body.stopped === 'timeout'))
-    // Claude Code gave up waiting (an older MCP sends no progress, and a long build is silent), but the
-    // build carries on at home: keep following it, and let the job itself say how it ended.
-    const isAbandoned = !isOk && !isUnsupported && /no response or progress|aborted|cancel|timed? ?out/i.test(ran.text ?? ran.deny ?? '')
+    // Claude Code moved the call to the background (after 120 s) or gave up waiting on it (a silent
+    // 300 s), but the build carries on at home: keep following it, and let the job say how it ended.
+    const said = ran.text ?? ran.deny ?? ''
+    const isBackground = !isOk && /moved to the background|still running after/i.test(said)
+    const isAbandoned = !isOk && (isBackground || (!isUnsupported && /no response or progress|aborted|cancel|timed? ?out/i.test(said)))
     if (isAbandoned) {
-      await $.state.set(build, { ...current, error: 'Claude stopped waiting; the build carries on at home and shows here.' })
+      await $.state.set(build, {
+        ...current,
+        error: isBackground ? 'Running in the background; it shows here as it goes.' : 'Claude stopped waiting; the build carries on at home and shows here.',
+      })
+      // A read refused earlier may be allowed by now: try again.
+      isUnsupported = false
       return ran
     }
     await $.state.set(build, {
@@ -164,7 +171,7 @@ export const register: Register = on => {
     const width = Math.max(20, e.props.bodyColumns)
     const rows = Math.max(6, (e.viewport?.rows ?? 30) - 14)
 
-    const deviceRows = known ? (
+    const deviceRows = known && known.length > 0 ? (
       <Box flexDirection="column" marginTop={1}>
         <Text bold>Devices</Text>
         {known.map(d => {
@@ -194,7 +201,7 @@ export const register: Register = on => {
         </Text>
         <Code source={allowLines(refusal.server)} />
         <Button key="copy-rule" hotkey="c" onPress={press => $.ui.copy({ text: allowLines(refusal.server), surface: press.surface })}>
-          Copy the line
+          Copy the lines
         </Button>
       </Box>
     ) : null

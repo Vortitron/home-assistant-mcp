@@ -1,4 +1,7 @@
 import * as http from "node:http";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -79,6 +82,7 @@ function serveArgs(apiUrl: string): ServeArgs {
 		path: "/mcp",
 		apiUrl,
 		sessionTtlMs: 60_000,
+		stateDir: null,
 		logLevel: "error",
 		help: false
 	};
@@ -148,6 +152,20 @@ describe("MCP HTTP server", () => {
 		await server.close();
 		await portal.close();
 	});
+
+	const connectTo = async (url: string): Promise<Client> => {
+		const client = new Client({ name: "test", version: "1.0.0" });
+		await client.connect(
+			new StreamableHTTPClientTransport(new URL(url), {
+				requestInit: { headers: { Authorization: `Bearer ${GOOD_TOKEN}` } }
+			})
+		);
+		return client;
+	};
+	const activeOf = async (client: Client): Promise<string> => {
+		const result = await client.callTool({ name: "vomehome_list_instances", arguments: {} });
+		return JSON.parse((result.content as { text: string }[])[0]?.text ?? "{}").active_instance;
+	};
 
 	it("serves a health check without a token", async () => {
 		const response = await fetch(`http://127.0.0.1:${server.port}/healthz`);
@@ -293,6 +311,58 @@ describe("MCP HTTP server", () => {
 		expect(await activeOf(editor)).toBe("inst-two");
 		await editor.close();
 		await other.close();
+	});
+
+	it("keeps the chosen instance across a restart of the server", async () => {
+		/**
+		 * Reported from use: the hosted server restarts on every deploy, and the
+		 * remembered choice lived only in memory, so the next session for every
+		 * client was back on the first house on the account.
+		 */
+		const stateDir = mkdtempSync(join(tmpdir(), "mcp-state-"));
+		try {
+			await server.close();
+			server = await startMcpHttpServer({ ...serveArgs(portal.url), stateDir }, silentLogger);
+			const first = await connectTo(`http://127.0.0.1:${server.port}/mcp`);
+			await first.callTool({ name: "vomehome_use_instance", arguments: { instance_id: "inst-two" } });
+			expect(await activeOf(first)).toBe("inst-two");
+			await first.close();
+
+			await server.close();
+			server = await startMcpHttpServer({ ...serveArgs(portal.url), stateDir }, silentLogger);
+			const after = await connectTo(`http://127.0.0.1:${server.port}/mcp`);
+			expect(await activeOf(after)).toBe("inst-two");
+			await after.close();
+
+			// What is written down is a token hash and a client name, never the token.
+			const saved = readFileSync(join(stateDir, "active-instances.json"), "utf8");
+			expect(saved).toContain("inst-two");
+			expect(saved).not.toContain(GOOD_TOKEN);
+		} finally {
+			rmSync(stateDir, { recursive: true, force: true });
+		}
+	});
+
+	it("starts on the instance a client's config pins in the URL", async () => {
+		/** Each project can say which house it is for: `?instance=` on the endpoint. */
+		const pinned = await connectTo(`${endpoint}?instance=inst-two`);
+		expect(await activeOf(pinned)).toBe("inst-two");
+		// The pin is where it starts, not a lock: switching still works.
+		await pinned.callTool({ name: "vomehome_use_instance", arguments: { instance_id: "inst-one" } });
+		expect(await activeOf(pinned)).toBe("inst-one");
+		await pinned.close();
+
+		// And on reconnect the pin wins over that remembered switch: the config says where it starts.
+		const again = await connectTo(`${endpoint}?instance=inst-two`);
+		expect(await activeOf(again)).toBe("inst-two");
+		await again.close();
+	});
+
+	it("ignores a pin the token cannot reach", async () => {
+		/** A pin is held to the grant like memory is: a revoked instance is never reached through it. */
+		const client = await connectTo(`${endpoint}?instance=inst-elsewhere`);
+		expect(await activeOf(client)).toBe("inst-one");
+		await client.close();
 	});
 
 	it("does not resume an instance the token can no longer reach", async () => {

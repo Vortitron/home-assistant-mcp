@@ -30,6 +30,7 @@ import { createToolContext } from "../context.js";
 import { createVomeHomeClient, VomeHomeError } from "../vomehome/client.js";
 import { registerAllTools } from "../tools/index.js";
 import { SERVER_NAME, SERVER_VERSION } from "../version.js";
+import { createInstanceMemory, stateDirectoryFromEnv } from "./instanceMemory.js";
 
 /** A problem with the caller's token, reported as 401/403 rather than 500. */
 class TokenError extends Error {
@@ -57,6 +58,11 @@ export interface ServeArgs {
 	/** VomeHome portal base URL every session brokers through. */
 	apiUrl: string;
 	sessionTtlMs: number;
+	/**
+	 * Where each client's last chosen instance is kept across restarts; null keeps
+	 * it in memory only. Defaults to systemd's `$STATE_DIRECTORY`.
+	 */
+	stateDir: string | null;
 	logLevel: LogLevel;
 	help: boolean;
 }
@@ -83,6 +89,7 @@ function parseArgs(argv: string[], config: Config): ServeArgs {
 		path: process.env.MCP_HTTP_PATH ?? DEFAULT_PATH,
 		apiUrl: config.vomehome.apiUrl,
 		sessionTtlMs: DEFAULT_SESSION_TTL_MS,
+		stateDir: stateDirectoryFromEnv(),
 		logLevel: config.logLevel,
 		help: false
 	};
@@ -98,6 +105,8 @@ function parseArgs(argv: string[], config: Config): ServeArgs {
 			args.apiUrl = (argv[++i] ?? args.apiUrl).replace(/\/+$/, "");
 		} else if (arg === "--session-ttl") {
 			args.sessionTtlMs = Number(argv[++i]) * 1000;
+		} else if (arg === "--state-dir") {
+			args.stateDir = argv[++i] ?? args.stateDir;
 		} else if (arg === "--help" || arg === "-h") {
 			args.help = true;
 		}
@@ -112,11 +121,16 @@ function line(text = ""): void {
 function printUsage(): void {
 	line("Usage: home-assistant-mcp serve [--port 3400] [--host 127.0.0.1] [--path /mcp]");
 	line("                                [--api-url https://vome.io] [--session-ttl 1800]");
+	line("                                [--state-dir /var/lib/vomehome-mcp]");
 	line("");
 	line("Serves MCP over Streamable HTTP so clients need no local Node install.");
 	line("Each session authenticates with a VomeHome API token:");
 	line("");
 	line('  Authorization: Bearer <vomehome-token>');
+	line("");
+	line("A client can pin the instance its sessions start on with ?instance=<id> on");
+	line("the endpoint URL; otherwise each starts on the one it last chose, which");
+	line("--state-dir (or systemd's $STATE_DIRECTORY) keeps across restarts.");
 	line("");
 	line("Intended to sit behind a TLS-terminating reverse proxy, which is why it");
 	line("binds to loopback by default. GET /healthz reports liveness.");
@@ -250,7 +264,7 @@ export async function startMcpHttpServer(args: ServeArgs, logger: Logger): Promi
 	 * about the wrong house. The stdio server never had this failure mode
 	 * because it was one long-lived process per client.
 	 */
-	const lastActiveByToken = new Map<string, { instanceId: string; at: number }>();
+	const lastActiveByToken = createInstanceMemory(args.stateDir, logger);
 
 	/**
 	 * Key for the remembered instance: the token *and* which client asked.
@@ -276,7 +290,8 @@ export async function startMcpHttpServer(args: ServeArgs, logger: Logger): Promi
 	async function contextForToken(
 		token: string,
 		memoryKey: string,
-		clientName: string
+		clientName: string,
+		pinned: string | null
 	): Promise<ReturnType<typeof createToolContext>> {
 		// Bootstrap config: the VomeHome client needs only a token and a URL, so
 		// it can be built before any instance is known.
@@ -293,9 +308,19 @@ export async function startMcpHttpServer(args: ServeArgs, logger: Logger): Promi
 		// silently retarget a conversation at a different house. Only honoured
 		// while the instance is still reachable by this token — a revoked grant
 		// must not be resurrected from memory.
+		// A pin in the client's own config (`?instance=` on the endpoint URL) comes first: it is
+		// the person saying which house this setup is for, so each project can have its own.
+		// It is held to the same rule as memory: only an instance this token can still reach.
 		const remembered = lastActiveByToken.get(memoryKey);
+		if (pinned && !ids.includes(pinned)) {
+			logger.warn(`${clientName} pins instance ${pinned}, which this token cannot reach; ignoring the pin`);
+		}
 		const active =
-			remembered && ids.includes(remembered.instanceId) ? remembered.instanceId : (ids[0] as string);
+			pinned && ids.includes(pinned)
+				? pinned
+				: remembered && ids.includes(remembered.instanceId)
+					? remembered.instanceId
+					: (ids[0] as string);
 		if (remembered && active === remembered.instanceId && ids[0] !== active) {
 			logger.debug(`Restored active instance ${active} for a reconnecting ${clientName}`);
 		}
@@ -315,7 +340,8 @@ export async function startMcpHttpServer(args: ServeArgs, logger: Logger): Promi
 	async function openSession(token: string, body: unknown, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
 		const clientName = clientNameFrom(body);
 		const memoryKey = memoryKeyFor(token, clientName);
-		const ctx = await contextForToken(token, memoryKey, clientName);
+		const pinned = new URL(req.url ?? "/", "http://localhost").searchParams.get("instance")?.trim() || null;
+		const ctx = await contextForToken(token, memoryKey, clientName, pinned);
 		const server = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION });
 		registerAllTools(server, ctx);
 
@@ -403,7 +429,7 @@ export async function startMcpHttpServer(args: ServeArgs, logger: Logger): Promi
 				// transport needing to know that tool exists.
 				const now = existing.activeId();
 				if (now !== existing.startedOn) {
-					lastActiveByToken.set(existing.tokenKey, { instanceId: now, at: Date.now() });
+					lastActiveByToken.set(existing.tokenKey, now);
 				}
 				return;
 			}

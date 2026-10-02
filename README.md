@@ -499,6 +499,19 @@ The **API key is the single source of truth** and the server has the final say
 (it returns `403` if the key lacks a scope). The client flags above only ever
 restrict further on this machine; they never widen what the token can do.
 
+**On Vome's hosted endpoint** (`https://vome.io/mcp`, nothing installed), the
+same idea is one URL. A session starts on the instance that client last switched
+to, and that choice is remembered across server restarts. To have a project
+always start on a particular home, pin it in the URL:
+
+```json
+{ "mcpServers": { "vome": { "type": "http", "url": "https://vome.io/mcp?instance=rly-house",
+	"headers": { "Authorization": "Bearer vh_your-account-token" } } } }
+```
+
+The pin is where sessions start, not a lock: `vomehome_use_instance` still
+switches. It only counts while your token can reach that instance.
+
 ### Verify
 
 ```bash

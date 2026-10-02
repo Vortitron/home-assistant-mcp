@@ -31,7 +31,9 @@ before (or after) installing the pane; until it is connected, the pane says so
 and shows these two ways in:
 
 - **Through Vome (one key, nothing to run):** get a key from the Vome app's
-  **Agent** tab in Home Assistant (no sign-up needed) or, for a home hosted on
+  **Agent** tab in Home Assistant (no sign-up needed;
+  [add the app to your Home Assistant](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2FVortitron%2FVomeSync))
+  or, for a home hosted on
   Vome, from vome.io under **Account → API tokens**. Then install
   [`vome-connect`](../vome-connect/README.md), which asks for the key:
 

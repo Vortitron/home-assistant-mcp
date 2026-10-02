@@ -1,0 +1,32 @@
+{
+  "name": "vome-connect",
+  "version": "0.1.0",
+  "description": "Connects Claude Code to your Home Assistant through Vome's hosted MCP endpoint, with one key from the Vome app in Home Assistant (no sign-up) or from vome.io. Nothing to install or run locally.",
+  "author": { "name": "Vortitron", "url": "https://vome.io" },
+  "homepage": "https://github.com/Vortitron/home-assistant-mcp/tree/main/claude-plugin/vome-connect",
+  "repository": "https://github.com/Vortitron/home-assistant-mcp",
+  "license": "MIT",
+  "keywords": ["home-assistant", "vome", "mcp"],
+  "userConfig": {
+    "vome_key": {
+      "type": "string",
+      "title": "Vome key",
+      "description": "Starts vh_. In Home Assistant: the Vome app, Agent tab (no sign-up). Or vome.io: Account, API tokens.",
+      "sensitive": true,
+      "required": true
+    },
+    "home": {
+      "type": "string",
+      "title": "Start on this home (optional)",
+      "description": "An instance id from vomehome_list_instances, so sessions always start on that home. Leave empty to resume whichever you used last.",
+      "default": ""
+    }
+  },
+  "mcpServers": {
+    "vome": {
+      "type": "http",
+      "url": "https://vome.io/mcp?instance=${user_config.home}",
+      "headers": { "Authorization": "Bearer ${user_config.vome_key}" }
+    }
+  }
+}

@@ -58,6 +58,8 @@ const servers = { plugin: 'vome-automation', key: 'servers' } as const
 /** Where someone with no Home Assistant connected yet goes next. */
 const VOME_TOKENS_URL = 'https://vome.io/account/api-tokens'
 const OWN_HA_URL = 'https://github.com/Vortitron/home-assistant-mcp#install'
+const CONNECT_COMMAND = '/plugin install vome-connect --marketplace Vortitron/home-assistant-mcp'
+const CONNECT_README_URL = 'https://github.com/Vortitron/home-assistant-mcp/tree/main/claude-plugin/vome-connect'
 
 /** The pane's background reads; in auto mode each needs an allow rule (README: "Allow the pane's reads"). */
 const READ_TOOLS = ['ha_get_automation', 'ha_get_trace', 'ha_list_traces', 'vomehome_get_instance']
@@ -334,24 +336,34 @@ export const register: Register = on => {
           {swimStrip ?? sceneStrip}
           <Text bold>Connect Home Assistant first</Text>
           <Text wrap="wrap">
-            This pane follows Claude's work through the Home Assistant MCP (@vortitron/home-assistant-mcp), and no
-            server with its tools is connected in this session.
+            This pane follows Claude's work through the Home Assistant MCP (@vortitron/home-assistant-mcp), and nothing
+            connected in this session has its tools.
           </Text>
           <Box flexDirection="column" marginTop={1}>
-            <Text bold>Your home on Vome</Text>
+            <Text bold>Through Vome: one key, nothing to run</Text>
             <Text wrap="wrap">
-              Sign in, then under Account → API tokens pick Claude Code: it gives you the one command that connects it.
+              1. Get a key. Home Assistant on your own hardware: the Vome app's Agent tab, no sign-up needed. A home on
+              Vome: vome.io, Account → API tokens.
             </Text>
-            <Link href={VOME_TOKENS_URL}>vome.io → API tokens</Link>
+            <Text wrap="wrap">2. Run this; it asks for the key:</Text>
+            <Code source={CONNECT_COMMAND} />
+            <Box flexDirection="row" gap={2}>
+              <Button key="copy-connect" hotkey="c" onPress={press => $.ui.copy({ text: CONNECT_COMMAND, surface: press.surface })}>
+                Copy the command
+              </Button>
+              <Link href={VOME_TOKENS_URL}>vome.io → API tokens</Link>
+              <Link href={CONNECT_README_URL}>About vome-connect</Link>
+            </Box>
           </Box>
           <Box flexDirection="column" marginTop={1}>
-            <Text bold>Your own Home Assistant</Text>
+            <Text bold>Without Vome</Text>
             <Text wrap="wrap">Run the same MCP on your machine with npx, pointed at your Home Assistant and a token.</Text>
             <Link href={OWN_HA_URL}>How to set it up</Link>
           </Box>
           <Box marginTop={1}>
             <Text dimColor wrap="wrap">
-              Once it's connected (check with /mcp), this goes by itself; ask Claude about an automation to fill the pane.
+              Then run /reload-plugins. Once it's connected (check with /mcp) this goes by itself; ask Claude about an
+              automation to fill the pane.
             </Text>
           </Box>
         </Box>

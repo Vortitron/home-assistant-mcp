@@ -413,6 +413,15 @@ That needs Claude Code 2.1.275 or newer; its README has the two-command form
 for older versions, how to turn on updates, and the read-only tools to allow in
 auto mode.
 
+To connect Claude Code to a home through Vome without any of the config above,
+install [**vome-connect**](claude-plugin/vome-connect/README.md) from the same
+marketplace; it asks for one key, which the Vome app's Agent tab in Home
+Assistant gives you without signing up:
+
+```
+/plugin install vome-connect --marketplace Vortitron/home-assistant-mcp
+```
+
 ### Multiple Home Assistants
 
 Each entry under `mcpServers` is its own server process with its own

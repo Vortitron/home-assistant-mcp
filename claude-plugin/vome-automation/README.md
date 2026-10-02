@@ -30,11 +30,17 @@ The pane follows Claude's work through the Home Assistant MCP server,
 before (or after) installing the pane; until it is connected, the pane says so
 and shows these two ways in:
 
-- **A home on [Vome](https://vome.io):** sign in, open **Account → API tokens**,
-  create a key and pick **Claude Code**. The page gives you the command that
-  connects it, and the lines to allow (see below).
-- **Your own Home Assistant:** run the MCP on your machine with `npx`, pointed at
-  your Home Assistant's address and a long-lived access token. See
+- **Through Vome (one key, nothing to run):** get a key from the Vome app's
+  **Agent** tab in Home Assistant (no sign-up needed) or, for a home hosted on
+  Vome, from vome.io under **Account → API tokens**. Then install
+  [`vome-connect`](../vome-connect/README.md), which asks for the key:
+
+  ```
+  /plugin install vome-connect --marketplace Vortitron/home-assistant-mcp
+  ```
+
+- **Without Vome:** run the MCP on your machine with `npx`, pointed at your
+  Home Assistant's address and a long-lived access token. See
   [Install](../../README.md#install) in the MCP's README.
 
 Check it's connected with `/mcp`; the pane picks it up by itself.

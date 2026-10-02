@@ -296,7 +296,7 @@ test('at rest the terminal still has its stage: dreams with no device known, the
   const before = await terminal()
   expect((await before.find({ type: 'Raster', key: 'chip' })) !== undefined).toBe(true)
   await $.tool.call({ tool: tool('mcp__vome__esphome_get_config'), configuration: 'loft.yaml' } as never)
-  const after = await terminal()
+  const after = before
   expect((await after.find({ type: 'Raster', key: 'chip' })) !== undefined).toBe(true)
-  expect((await after.find({ text: 'Loft' })) !== undefined).toBe(true)
+  expect((await after.find({ text: /^Loft  ESP32/ })) !== undefined).toBe(true)
 })

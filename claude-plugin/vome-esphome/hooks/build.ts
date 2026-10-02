@@ -68,9 +68,10 @@ export function progressOf(lines: string[], command: string): Progress {
       const total = Number(step[2])
       if (total > 0) p.compilePercent = Math.min(100, Math.round((done / total) * 100))
       p.compiled = done
-      p.phase = higher(p.phase, /^Linking/.test(step[3] ?? '') ? 'linking' : 'compiling')
+      // Static libraries are linked all through the build; only the executable is the final link.
+      p.phase = higher(p.phase, /^Linking (C|CXX) executable/.test(step[3] ?? '') ? 'linking' : 'compiling')
     }
-    if (/^Linking |Linking (C|CXX) executable/.test(line)) p.phase = higher(p.phase, 'linking')
+    if (/^Linking \.pio|^Linking .*firmware\.elf|Linking (C|CXX) executable/.test(line)) p.phase = higher(p.phase, 'linking')
     if (/^Building .*firmware\.(bin|elf|factory\.bin)|Successfully created .* image|elf2image|Generated .*\.bin/i.test(line)) p.phase = higher(p.phase, 'image')
     const ram = /^RAM:\s+\[[^\]]*\]\s+([\d.]+%)/.exec(line)
     if (ram) p.ram = ram[1] ?? null

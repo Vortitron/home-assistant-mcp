@@ -53,6 +53,11 @@ const fxOn = { plugin: 'vome-automation', key: 'fxOn' } as const
 const fx = { plugin: 'vome-automation', key: 'fx' } as const
 const building = { plugin: 'vome-automation', key: 'building' } as const
 const blocked = { plugin: 'vome-automation', key: 'blocked' } as const
+const servers = { plugin: 'vome-automation', key: 'servers' } as const
+
+/** Where someone with no Home Assistant connected yet goes next. */
+const VOME_TOKENS_URL = 'https://vome.io/account/api-tokens'
+const OWN_HA_URL = 'https://github.com/Vortitron/home-assistant-mcp#install'
 
 /** The pane's background reads; in auto mode each needs an allow rule (README: "Allow the pane's reads"). */
 const READ_TOOLS = ['ha_get_automation', 'ha_get_trace', 'ha_list_traces', 'vomehome_get_instance']
@@ -64,6 +69,8 @@ let lastPoll = 0
 let hasToldNarrow = false
 let lastLogged = ''
 let isBlocked = false
+/** Whether a server with our tools has been seen; once it has, the check stops. */
+let hasSeenServer = false
 /** The note line holds an error, which the next read that works should take away. */
 let isNoteAnError = false
 /** When the automation was last read or acted on; the swim ends BUILD_IDLE_MS after. */
@@ -318,6 +325,37 @@ export const register: Register = on => {
       }
     } else {
       fxSite = null
+    }
+
+    const connected = (await $.state.get(servers)).value ?? null
+    if (!current && connected !== null && connected.length === 0) {
+      return (
+        <Box flexDirection="column">
+          {swimStrip ?? sceneStrip}
+          <Text bold>Connect Home Assistant first</Text>
+          <Text wrap="wrap">
+            This pane follows Claude's work through the Home Assistant MCP (@vortitron/home-assistant-mcp), and no
+            server with its tools is connected in this session.
+          </Text>
+          <Box flexDirection="column" marginTop={1}>
+            <Text bold>Your home on Vome</Text>
+            <Text wrap="wrap">
+              Sign in, then under Account → API tokens pick Claude Code: it gives you the one command that connects it.
+            </Text>
+            <Link href={VOME_TOKENS_URL}>vome.io → API tokens</Link>
+          </Box>
+          <Box flexDirection="column" marginTop={1}>
+            <Text bold>Your own Home Assistant</Text>
+            <Text wrap="wrap">Run the same MCP on your machine with npx, pointed at your Home Assistant and a token.</Text>
+            <Link href={OWN_HA_URL}>How to set it up</Link>
+          </Box>
+          <Box marginTop={1}>
+            <Text dimColor wrap="wrap">
+              Once it's connected (check with /mcp), this goes by itself; ask Claude about an automation to fill the pane.
+            </Text>
+          </Box>
+        </Box>
+      )
     }
 
     if (!current) {
@@ -664,10 +702,28 @@ async function animate($: EngineInterface) {
 
 // ---------------------------------------------------------------- polling
 
+/**
+ * Which connected MCP servers carry our tools. Someone who installs the pane before connecting
+ * Home Assistant otherwise sees a pane that waits forever for an automation; with none, it tells
+ * them how to connect instead. Servers connect after the session starts, so this runs each tick
+ * until one is seen.
+ */
+async function lookForServers($: EngineInterface) {
+  const names = (await $.tool.list())
+    .map(tool => ourTool(tool.name))
+    .filter((found): found is { server: string; name: string } => found !== null && found.name === 'ha_get_automation')
+    .map(found => found.server)
+  hasSeenServer = names.length > 0
+  const before = (await $.state.get(servers)).value
+  if (!before || before.join() !== names.join()) await $.state.set(servers, names)
+}
+
 async function tick($: EngineInterface) {
   if (isBusy) return
   isBusy = true
   try {
+    // Its own failure must not stop the reads below it: worst case, the connect screen waits.
+    if (!hasSeenServer) await lookForServers($).catch(() => undefined)
     const want = (await $.state.get(pending)).value ?? null
     if (want) {
       await $.state.set(pending, null)

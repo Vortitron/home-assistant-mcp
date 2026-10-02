@@ -23,6 +23,22 @@ working on, kept up to date as Claude reads it, edits it and runs it.
 The pane only reads. It never changes anything in your home itself; every
 change is Claude's own tool call, which you see and approve as usual.
 
+## Connect Home Assistant first
+
+The pane follows Claude's work through the Home Assistant MCP server,
+[`@vortitron/home-assistant-mcp`](../../README.md). Connect that to Claude Code
+before (or after) installing the pane; until it is connected, the pane says so
+and shows these two ways in:
+
+- **A home on [Vome](https://vome.io):** sign in, open **Account → API tokens**,
+  create a key and pick **Claude Code**. The page gives you the command that
+  connects it, and the lines to allow (see below).
+- **Your own Home Assistant:** run the MCP on your machine with `npx`, pointed at
+  your Home Assistant's address and a long-lived access token. See
+  [Install](../../README.md#install) in the MCP's README.
+
+Check it's connected with `/mcp`; the pane picks it up by itself.
+
 ## What it needs
 
 - **[`@vortitron/home-assistant-mcp`](../../README.md)** connected to Claude

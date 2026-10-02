@@ -38,6 +38,7 @@ test('a read auto mode refuses becomes the exact allow lines for that server, a 
     return { result: [{ type: 'text', text }], text }
   })
   on('mcp.call', () => ({ deny: VERDICT }))
+  on('tool.list', () => ({ value: [{ name: 'mcp__ha-home__ha_get_automation', description: 'read an automation', mcp: true }] }))
 
   await $.session.start({ source: 'startup', cwd: '/tmp' } as never)
   await $.tool.call({ tool: tool('mcp__ha-home__ha_get_automation'), automation: 'demo' })

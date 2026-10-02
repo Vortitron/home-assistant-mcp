@@ -79,6 +79,8 @@ declare module 'claude-code' {
       building: boolean
       /** Auto mode refused one of the pane's background reads: which, and on which server. */
       blocked: { server: string; tool: string; error: string; isDismissed: boolean } | null
+      /** Connected MCP servers that carry our tools; empty means nothing to follow yet. */
+      servers: string[]
       /** Whether the bulb strip plays; kept across sessions in $.store as well. */
       fxOn: boolean
     }

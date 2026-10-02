@@ -29,7 +29,7 @@ It asks for the key from step 1. Then:
 **3. Ask Claude about an automation**, for example *"Why didn't my hallway
 lights turn off?"*. The pane opens beside the conversation.
 
-In auto mode, the pane asks you to allow its three read-only tools the first
+In auto mode, the pane asks you to allow its read-only tools the first
 time; it shows the exact lines and where they go.
 
 ## What it shows
@@ -39,7 +39,8 @@ time; it shows the exact lines and where they go.
   blocks indented the way the editor shows them.
 - **What a save changed.** After Claude saves, each line is marked **+** added,
   **~** changed or **−** removed, and the changed lines light up for a few
-  seconds.
+  seconds. Steps are matched by what they do, so inserting one marks that one
+  alone, and a step that moved shows as changed.
 - **What the latest run did.** Each step is marked ● ran, ✗ evaluated false
   (or errored) or ○ not reached, so "why didn't it fire?" is answered at a
   glance. Whenever Claude reads, refreshes or saves an automation, the pane
@@ -124,12 +125,12 @@ ask it to. Turn it on once: run `/plugin`, open **Marketplaces**, select
 The pane reads the latest run of the automation in the background, and checks
 every 15 seconds for new ones while it watches. In **auto mode**, Claude
 Code's safety check refuses background calls like these, because no request
-of yours is behind them. The pane then shows a line such as
-`$.mcp.call(vome, ha_get_trace) refused: The server-side auto mode classifier gave no verdict`,
-and run marks and "it ran" notices are missing.
+of yours is behind them, and run marks and "it ran" notices would be missing.
 
-Allow the three read-only tools it uses, under **your** server's name. Find
-the name with `claude mcp list`; the Vome portal's snippet calls it `vome`.
+Allow the read-only tools it uses, under **your** server's name. Find
+the name with `claude mcp list`: the Vome portal's snippet calls it `vome`,
+and [`vome-connect`](../vome-connect/README.md) calls it
+`plugin_vome-connect_vome` (so `mcp__plugin_vome-connect_vome__ha_get_trace`).
 Add them to `~/.claude/settings.json` (every project) or the project's
 `.claude/settings.json`:
 
@@ -140,6 +141,7 @@ Add them to `~/.claude/settings.json` (every project) or the project's
       "mcp__vome__ha_get_automation",
       "mcp__vome__ha_get_trace",
       "mcp__vome__ha_list_traces",
+      "mcp__vome__ha_list_automations",
       "mcp__vome__vomehome_get_instance"
     ]
   }
@@ -168,9 +170,11 @@ with `/automation`.
 
 | | |
 | --- | --- |
-| `/automation` | open the pane |
+| `/automation` | open the pane; with nothing shown yet, list the home's automations to pick from |
+| `/automation list` | list the home's automations to pick from |
 | `/automation <id>` | show an automation by its id or `automation.` entity id |
 | **r** | refresh the automation and its latest run |
+| **o** | pick another automation from the list |
 | **w** | stop watching for runs, or start again (30 minutes) |
 | **b** | the dot-matrix display off or on (remembered) |
 

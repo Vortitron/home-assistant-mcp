@@ -54,6 +54,7 @@ const fx = { plugin: 'vome-automation', key: 'fx' } as const
 const building = { plugin: 'vome-automation', key: 'building' } as const
 const blocked = { plugin: 'vome-automation', key: 'blocked' } as const
 const servers = { plugin: 'vome-automation', key: 'servers' } as const
+const choices = { plugin: 'vome-automation', key: 'choices' } as const
 
 /** Where someone with no Home Assistant connected yet goes next. */
 const VOME_TOKENS_URL = 'https://vome.io/account/api-tokens'
@@ -65,7 +66,7 @@ const CONNECT_COMMAND = '/plugin install vome-connect --marketplace Vortitron/ho
 const CONNECT_README_URL = 'https://github.com/Vortitron/home-assistant-mcp/tree/main/claude-plugin/vome-connect'
 
 /** The pane's background reads; in auto mode each needs an allow rule (README: "Allow the pane's reads"). */
-const READ_TOOLS = ['ha_get_automation', 'ha_get_trace', 'ha_list_traces', 'vomehome_get_instance']
+const READ_TOOLS = ['ha_get_automation', 'ha_get_trace', 'ha_list_traces', 'ha_list_automations', 'vomehome_get_instance']
 const README_URL = 'https://github.com/Vortitron/home-assistant-mcp/tree/main/claude-plugin/vome-automation#allow-the-panes-reads-auto-mode'
 
 // Module variables reset on a reload, which is all these need.
@@ -100,7 +101,7 @@ export const register: Register = on => {
     await $.command.register({
       name: 'automation',
       description: 'Show a Home Assistant automation (via Vome) in a side pane',
-      argumentHint: '[automation id or entity_id]',
+      argumentHint: '[automation id, entity_id, or "list"]',
     })
     const configDir = (await $.env.get('CLAUDE_CONFIG_DIR')) ?? `${(await $.env.get('HOME')) ?? '~'}/.claude`
     settingsFile = `${configDir.replace(/\/+$/, '')}/settings.json`
@@ -119,7 +120,10 @@ export const register: Register = on => {
 
   on('command.run', { command: 'automation' }, async ($, e) => {
     const wanted = e.args.trim()
-    if (wanted) await $.state.set(pending, { automation: wanted, run: true })
+    const isList = wanted === 'list' || (!wanted && !(await $.state.get(view)).value)
+    // Nothing to show yet, or asked for: the home's automations to pick from.
+    if (isList) await $.state.set(pending, { list: true })
+    else if (wanted) await $.state.set(pending, { automation: wanted, run: true })
     const opened = await $.ui.open({ id: PANE, title: 'Automation' })
     const current = (await $.state.get(view)).value ?? null
     // Say plainly when this surface will not draw the pane, rather than look like it did.
@@ -128,6 +132,7 @@ export const register: Register = on => {
     const drawnOn = surfaces.length > 0 ? `drawing on ${surfaces.join(', ')}` : 'no surface is attached to draw it'
     const placement = opened.isPlaced ? ` (pane placed; ${drawnOn})` : ` The pane is not drawn here: ${opened.reason} (${drawnOn}).`
 
+    if (isList) return { text: `Listing the home's automations in the pane to pick from.${placement}` }
     if (wanted) return { text: `Fetching ${wanted} into the automation pane.${placement}` }
     if (current) return { text: `The automation pane shows "${current.alias}".${placement}` }
     return {
@@ -248,6 +253,41 @@ export const register: Register = on => {
     const playing = (await $.state.get(fx)).value ?? null
     const isBuilding = (await $.state.get(building)).value ?? false
     const refusal = (await $.state.get(blocked)).value ?? null
+    const picking = (await $.state.get(choices)).value ?? null
+
+    // The home's automations to pick one from (/automation with nothing shown, or o). The phone app
+    // has no Select, so there they are buttons, the first dozen.
+    let pickerList = null
+    if (picking) {
+      const pick = (id: string) => $.state.set(pending, { automation: id, run: true, server: picking.server })
+      if (e.surface === 'mobile') {
+        pickerList = picking.automations.slice(0, 12).map(item => (
+          <Button key={`pick-${item.id}`} plain onPress={() => pick(item.id)}>
+            {item.alias}
+          </Button>
+        ))
+      } else {
+        const { Select } = $.ui.resolve(e)
+        pickerList = (
+          <Select
+            key="pick"
+            label="Automation"
+            autoFocus
+            options={picking.automations.map(item => ({ value: item.id, label: `${item.isOn ? '●' : '○'} ${item.alias}` }))}
+            onSelect={value => pick(value)}
+          />
+        )
+      }
+    }
+    const picker = picking ? (
+      <Box flexDirection="column" marginTop={1}>
+        <Text bold>Pick an automation ({picking.automations.length})</Text>
+        {pickerList}
+        <Button key="close-picker" dimColor onPress={() => $.state.set(choices, null)}>
+          Close the list
+        </Button>
+      </Box>
+    ) : null
 
     // A refused read takes the whole pane until dismissed: what to add and where, over everything,
     // rather than a HooksError in the note line that names neither.
@@ -378,8 +418,9 @@ export const register: Register = on => {
       return (
         <Box flexDirection="column">
           {swimStrip ?? sceneStrip}
-          <Text dimColor>No automation yet. It appears here when one is read or saved through Vome, or with /automation &lt;id&gt;.</Text>
+          <Text dimColor>No automation yet. It appears here when one is read or saved through Vome, or pick one with /automation.</Text>
           {message ? <Text color="warning">{message}</Text> : null}
+          {picker}
           {showHelp}
         </Box>
       )
@@ -468,6 +509,9 @@ export const register: Register = on => {
             {watching ? 'Stop watching' : 'Watch for runs'}
           </Button>
           {showHelp}
+          <Button key="other" hotkey="o" dimColor onPress={() => $.state.set(pending, { list: true, server: current.server })}>
+            Other automation
+          </Button>
           <Button
             key="bulbs"
             hotkey="b"
@@ -485,6 +529,7 @@ export const register: Register = on => {
           {url ? <Link href={`${url}/config/automation/edit/${encodeURIComponent(current.id)}`}>Open in Home Assistant</Link> : null}
         </Box>
         <Text dimColor>● ran  ✗ false or error  ○ not reached  + added  ~ changed  − removed</Text>
+        {picker}
       </Box>
     )
   })
@@ -629,6 +674,7 @@ async function show(
       }
   await $.state.set(view, next)
   await $.state.set(note, null)
+  await $.state.set(choices, null)
 
   // Watch for its runs by default: a fresh watch for a new automation, a longer one for the same.
   const watching = (await $.state.get(watch)).value ?? null
@@ -773,6 +819,28 @@ async function tick($: EngineInterface) {
 }
 
 async function fetchPending($: EngineInterface, want: Pending) {
+  if (want.list) {
+    const server =
+      want.server ?? ((await $.state.get(view)).value ?? null)?.server ?? ((await $.state.get(servers)).value ?? [])[0] ?? DEFAULT_SERVER
+    const reply = await callVome($, server, 'ha_list_automations', {})
+    const listed = reply.body && Array.isArray(reply.body.automations) ? reply.body.automations.filter(isObj) : []
+    const automations = listed
+      .map(item => ({
+        id: typeof item.id === 'string' ? item.id : typeof item.entity_id === 'string' ? item.entity_id : '',
+        alias: typeof item.friendly_name === 'string' ? item.friendly_name : String(item.id ?? item.entity_id ?? '?'),
+        isOn: item.state === 'on',
+      }))
+      .filter(item => item.id)
+      .sort((a, b) => a.alias.localeCompare(b.alias))
+    if (automations.length === 0) {
+      await $.state.set(note, `No automations to pick from: ${compact(stripStamp(reply.text), 140)}`)
+      return
+    }
+    await $.state.set(choices, { server, automations })
+    await openPane($)
+    return
+  }
+
   if (want.automation) {
     const server = want.server ?? ((await $.state.get(view)).value ?? null)?.server ?? DEFAULT_SERVER
     const reply = await callVome($, server, 'ha_get_automation', { automation: want.automation })

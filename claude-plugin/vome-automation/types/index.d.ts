@@ -42,7 +42,10 @@ export type Watch = { id: string; instance: string | null; since: string; until:
 export type Known = { instance: string | null; config: AutomationConfig }
 
 /** Work the poller owes the pane: fetch a config by name, fetch the latest run. */
-export type Pending = { automation?: string; run?: boolean; server?: string }
+export type Pending = { automation?: string; run?: boolean; server?: string; list?: boolean }
+
+/** The home's automations, fetched for the picker. */
+export type Choices = { server: string; automations: { id: string; alias: string; isOn: boolean }[] }
 
 /** Rows lit for a few seconds: those a save changed, or those a new run went through. */
 export type Flash = { at: number; paths: string[]; kind: 'change' | 'run' }
@@ -81,6 +84,8 @@ declare module 'claude-code' {
       blocked: { server: string; tool: string; error: string; isDismissed: boolean } | null
       /** Connected MCP servers that carry our tools; empty means nothing to follow yet. */
       servers: string[]
+      /** The picker's list, while it is open. */
+      choices: Choices | null
       /** Whether the bulb strip plays; kept across sessions in $.store as well. */
       fxOn: boolean
     }

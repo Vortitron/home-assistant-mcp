@@ -83,21 +83,66 @@ export function buildRows(config: AutomationConfig, run: RunView | null, prev: A
   const rows = walk(config, run)
   if (!prev) return rows
 
-  const before = new Map(walk(prev, null).map(row => [row.path, row]))
-  const now = new Set(rows.map(row => row.path))
-  const marked = rows.map(row => {
-    if (row.isSection) return row
-    const old = before.get(row.path)
-    const change: Change = !old ? '+' : old.fingerprint !== row.fingerprint ? '~' : null
-    return { ...row, change }
+  // Rows are matched by what they say, not where they sit: matched by position, inserting one
+  // step marked every step after it as changed. A longest common subsequence over the rows of
+  // each section (same depth, same content) finds what stayed; a new row left unmatched is a
+  // change if an unmatched old row held its place, and an addition otherwise.
+  const isStep = (row: Row) => !row.isSection && !row.path.endsWith('/-')
+  const key = (row: Row) => `${row.path.split('/')[0]}|${row.depth}|${row.fingerprint}`
+  const after = rows.filter(isStep)
+  const before = walk(prev, null).filter(isStep)
+  const kept = lcs(before.map(key), after.map(key))
+
+  const unmatchedBefore = new Map(before.filter((_, i) => !kept.before.has(i)).map(row => [row.path, row]))
+  const changes = new Map<Row, Change>()
+  after.forEach((row, i) => {
+    if (kept.after.has(i)) return
+    // The same step somewhere else: it moved, which is a change here and not a removal there.
+    const moved = [...unmatchedBefore.values()].find(old => key(old) === key(row))
+    if (moved) {
+      unmatchedBefore.delete(moved.path)
+      changes.set(row, '~')
+    } else if (unmatchedBefore.has(row.path)) {
+      unmatchedBefore.delete(row.path)
+      changes.set(row, '~')
+    } else {
+      changes.set(row, '+')
+    }
   })
-  const removed = [...before.values()].filter(row => !row.isSection && !row.path.endsWith('/-') && !now.has(row.path))
+
+  const marked = rows.map(row => (changes.has(row) ? { ...row, change: changes.get(row) ?? null } : row))
+  const removed = [...unmatchedBefore.values()]
   if (removed.length === 0) return marked
   return [
     ...marked,
     section('Removed', 'removed'),
     ...removed.map(row => ({ ...row, tone: 'plain' as Tone, change: '-' as Change })),
   ]
+}
+
+/** Indices of a longest common subsequence of two key lists, on each side. */
+function lcs(a: string[], b: string[]): { before: Set<number>; after: Set<number> } {
+  const table: number[][] = Array.from({ length: a.length + 1 }, () => new Array<number>(b.length + 1).fill(0))
+  for (let i = a.length - 1; i >= 0; i--) {
+    for (let j = b.length - 1; j >= 0; j--) {
+      table[i]![j] = a[i] === b[j] ? table[i + 1]![j + 1]! + 1 : Math.max(table[i + 1]![j]!, table[i]![j + 1]!)
+    }
+  }
+  const before = new Set<number>()
+  const after = new Set<number>()
+  let i = 0
+  let j = 0
+  while (i < a.length && j < b.length) {
+    if (a[i] === b[j]) {
+      before.add(i++)
+      after.add(j++)
+    } else if (table[i + 1]![j]! >= table[i]![j + 1]!) {
+      i++
+    } else {
+      j++
+    }
+  }
+  return { before, after }
 }
 
 /** How many rows were added, changed and removed. */

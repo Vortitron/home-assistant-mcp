@@ -397,6 +397,22 @@ VS Code can prompt for the token so it is not stored in the file:
 
 Add the same block under `mcpServers` in `claude_desktop_config.json`.
 
+### Claude Code: the automation pane
+
+Claude Code takes the same block in `.mcp.json`, or one server at a time with
+`claude mcp add-json <name> '<entry>'`. With it connected, the
+[**vome-automation**](claude-plugin/vome-automation/README.md) plugin adds a
+side pane in the terminal. It shows the automation Claude is working on, what
+a save changed and which steps the latest run took:
+
+```
+/plugin marketplace add Vortitron/home-assistant-mcp
+/plugin install vome-automation@vome
+```
+
+In auto mode it needs three read-only tools allowed; its README has the exact
+lines.
+
 ### Multiple Home Assistants
 
 Each entry under `mcpServers` is its own server process with its own

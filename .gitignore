@@ -7,3 +7,7 @@ coverage/
 .env.*.local
 .DS_Store
 *.tsbuildinfo
+
+# Written by Claude Code when it loads a plugin from this checkout
+claude-plugin/*/.claude-plugin/types/
+claude-plugin/*/tsconfig.json

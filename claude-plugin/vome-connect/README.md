@@ -9,7 +9,9 @@ logs, dashboards and the rest of the MCP's tools, within what the key allows.
 ## Get a key
 
 - **Home Assistant on your own hardware:** install the Vome app in Home
-  Assistant, open it and go to the **Agent** tab. Tick what Claude may do and
+  Assistant ([add it to your Home Assistant](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2FVortitron%2FVomeSync): this opens your own Home
+  Assistant and adds the app's repository; then pick **Vome** and **Install**),
+  open it and go to the **Agent** tab. Tick what Claude may do and
   create a key; no account is needed. A key made this way is a trial that lasts
   two days, covering that one home; sign in to Vome from the app to keep it, and
   the same key carries on working.
@@ -34,9 +36,10 @@ run `/reload-plugins` and check with `/mcp`: the server is listed as
 `plugin:vome-connect:vome`. To change the key later, run
 `/plugin configure vome-connect@vome`.
 
-If you already connected Vome another way (the portal's snippet, or
-`claude mcp add`), you don't need this plugin: two connections would give
-Claude every tool twice.
+If Vome's MCP server is already in your Claude Code config, added by hand
+from the portal's or the app's JSON snippet or with `claude mcp add`, you
+don't need this plugin. It adds the same server under a second name, which
+would give Claude every tool twice. Remove one of the two.
 
 ## Which home
 

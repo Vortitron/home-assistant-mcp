@@ -36,6 +36,8 @@ test('with no Home Assistant MCP connected, the pane says how to connect one, th
   const command = (await ui.find({ type: 'Code' }))?.text ?? ''
   expect(command).toBe('/plugin install vome-connect --marketplace Vortitron/home-assistant-mcp')
   expect((await ui.find({ text: /Agent tab, no sign-up/ })) !== undefined).toBe(true)
+  const addApp = await ui.find({ type: 'Link', text: /Add the Vome app/ })
+  expect(String(addApp?.props.href)).toContain('my.home-assistant.io/redirect/supervisor_add_addon_repository')
 
   // The server connects a little later, under whatever name it has: the usual empty pane.
   tools = [...tools, { name: 'mcp__home-assistant__ha_get_automation', description: 'read an automation', mcp: true }]

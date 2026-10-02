@@ -58,6 +58,9 @@ const servers = { plugin: 'vome-automation', key: 'servers' } as const
 /** Where someone with no Home Assistant connected yet goes next. */
 const VOME_TOKENS_URL = 'https://vome.io/account/api-tokens'
 const OWN_HA_URL = 'https://github.com/Vortitron/home-assistant-mcp#install'
+/** Opens the person's own Home Assistant and adds the Vome app's repository (the portal's link too). */
+const ADD_APP_URL =
+  'https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2FVortitron%2FVomeSync'
 const CONNECT_COMMAND = '/plugin install vome-connect --marketplace Vortitron/home-assistant-mcp'
 const CONNECT_README_URL = 'https://github.com/Vortitron/home-assistant-mcp/tree/main/claude-plugin/vome-connect'
 
@@ -345,6 +348,7 @@ export const register: Register = on => {
               1. Get a key. Home Assistant on your own hardware: the Vome app's Agent tab, no sign-up needed. A home on
               Vome: vome.io, Account → API tokens.
             </Text>
+            <Link href={ADD_APP_URL}>Add the Vome app to Home Assistant</Link>
             <Text wrap="wrap">2. Run this; it asks for the key:</Text>
             <Code source={CONNECT_COMMAND} />
             <Box flexDirection="row" gap={2}>

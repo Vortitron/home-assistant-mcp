@@ -422,6 +422,15 @@ the build it runs as it happens:
 /plugin install vome-esphome --marketplace Vortitron/home-assistant-mcp
 ```
 
+And just for fun, [**dont-panic**](https://github.com/Vortitron/dont-panic)
+adds the Guide: a pane that animates whatever the agent is doing and files a
+live, irreverent Guide entry on it. Its README has the price levels; `/guide
+canned` costs nothing:
+
+```
+/plugin install dont-panic --marketplace Vortitron/home-assistant-mcp
+```
+
 To connect Claude Code to a home through Vome without any of the config above,
 install [**vome-connect**](claude-plugin/vome-connect/README.md) from the same
 marketplace; it asks for one key, which the Vome app's Agent tab in Home

@@ -25,6 +25,15 @@
       "source": "./claude-plugin/vome-esphome",
       "description": "A side pane for ESPHome: a map of the device from its YAML, and the build Claude is running as it happens.",
       "category": "productivity"
+    },
+    {
+      "name": "dont-panic",
+      "source": {
+        "source": "github",
+        "repo": "Vortitron/dont-panic"
+      },
+      "description": "Just for fun: a Guide-style pane with animated scenes and live, irreverent Guide entries on whatever the agent is doing, and doodles that evolve as you work.",
+      "category": "fun"
     }
   ]
 }

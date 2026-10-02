@@ -6,6 +6,7 @@ import {
 	type EsphomeCommandRequest,
 	type EsphomeCommandResult
 } from "./client.js";
+import { createEsphomeActivityLog } from "./activity.js";
 
 /** Build output is polled; these bound how eagerly and for how long. */
 const POLL_MIN_MS = 500;
@@ -66,6 +67,8 @@ export function createBrokeredEsphomeDashboardClient(
 	logger: Logger,
 	activeInstanceId: () => string
 ): EsphomeClient {
+	// What the build commands are doing, for esphome_activity (see activity.ts).
+	const activityLog = createEsphomeActivityLog();
 	// Resolve the base per-request so the ESPHome client follows the active
 	// instance (vomehome_use_instance / vomehome_create_instance) exactly like
 	// the brokered HA client — otherwise a switch would leave ESPHome pinned to
@@ -126,8 +129,21 @@ export function createBrokeredEsphomeDashboardClient(
 	 * minutes and should not be asked about 600 times.
 	 */
 	async function runStreamJob(request: EsphomeCommandRequest): Promise<EsphomeCommandResult> {
-		const deadline = Date.now() + (request.timeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS);
-		const maxLines = request.maxLines ?? DEFAULT_MAX_LINES;
+		const jobId = await startStreamJob(request);
+		activityLog.begin(jobId, request.command, request.configuration);
+		try {
+			const result = await followStreamJob(request, jobId);
+			// `logs` ends by timing out, which is how it is meant to end, not a failure.
+			const stoppedEarly = result.timedOut === true && request.command !== "logs";
+			activityLog.finish(jobId, { exitCode: result.exitCode, error: stoppedEarly ? "stopped watching (timeout)" : null });
+			return result;
+		} catch (error) {
+			activityLog.finish(jobId, { exitCode: null, error: error instanceof Error ? error.message : String(error) });
+			throw error;
+		}
+	}
+
+	async function startStreamJob(request: EsphomeCommandRequest): Promise<string> {
 		const started = await broker<{ job_id?: string }>("/stream", {
 			method: "POST",
 			body: {
@@ -140,6 +156,12 @@ export function createBrokeredEsphomeDashboardClient(
 		if (!jobId) {
 			throw new EsphomeError("The relay did not return an ESPHome job id.");
 		}
+		return jobId;
+	}
+
+	async function followStreamJob(request: EsphomeCommandRequest, jobId: string): Promise<EsphomeCommandResult> {
+		const deadline = Date.now() + (request.timeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS);
+		const maxLines = request.maxLines ?? DEFAULT_MAX_LINES;
 
 		const lines: string[] = [];
 		let truncated = false;
@@ -165,6 +187,7 @@ export function createBrokeredEsphomeDashboardClient(
 			const poll = await broker<StreamPoll>(
 				`/stream/${encodeURIComponent(jobId)}?cursor=${cursor}`
 			);
+			activityLog.addLines(jobId, poll?.lines ?? []);
 			for (const line of poll?.lines ?? []) {
 				if (lines.length < maxLines) {
 					lines.push(line);
@@ -191,6 +214,7 @@ export function createBrokeredEsphomeDashboardClient(
 
 	return {
 		isEnabled: () => true,
+		activity: (since) => activityLog.snapshot(since),
 		listDevices: () => broker<unknown>("/devices"),
 		getVersion: () => broker<unknown>("/version"),
 		getConfig: async (configuration) => {

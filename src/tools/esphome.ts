@@ -109,6 +109,28 @@ export function registerEsphomeTools(server: McpServer, ctx: ToolContext): void 
 	);
 
 	server.registerTool(
+		"esphome_activity",
+		{
+			title: "ESPHome build activity",
+			description:
+				"What the ESPHome build commands (validate, compile, upload, logs) started in this session are doing: " +
+				"each running or recently finished job with its newest output lines. Pass back the returned 'seq' as " +
+				"'since' to get only lines produced after it. For watching a long build while it runs; the build " +
+				"tools themselves return the full output when they finish.",
+			inputSchema: {
+				since: z
+					.number()
+					.int()
+					.nonnegative()
+					.optional()
+					.describe("Return only output lines newer than this sequence number (the 'seq' of an earlier call).")
+			},
+			annotations: { readOnlyHint: true, openWorldHint: false }
+		},
+		async ({ since }) => runTool(ctx.logger, "esphome_activity", async () => jsonResult(ctx.esphome.activity(since)))
+	);
+
+	server.registerTool(
 		"esphome_list_devices",
 		{
 			title: "List ESPHome devices",

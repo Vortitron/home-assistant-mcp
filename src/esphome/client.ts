@@ -13,6 +13,7 @@
  * have meant maintaining a second implementation of a protocol that only the
  * component can actually reach.
  */
+import type { EsphomeActivitySnapshot } from "./activity.js";
 
 /** Commands Vome exposes, each mapped to a dashboard `/ws` command by the component. */
 export type EsphomeStreamCommand = "validate" | "compile" | "upload" | "logs" | "clean";
@@ -60,6 +61,8 @@ export interface EsphomeClient {
 	getMigrations(configuration: string): Promise<unknown>;
 	/** How ESPHome is reached, for `esphome_dashboard_info`. */
 	describe(): Promise<EsphomeAccessStatus>;
+	/** The build commands running or recently finished, with their newest output. */
+	activity(since?: number): EsphomeActivitySnapshot;
 }
 
 export class EsphomeError extends Error {
@@ -92,6 +95,7 @@ export function createUnavailableEsphomeClient(): EsphomeClient {
 		saveConfig: refuse,
 		runCommand: refuse,
 		getMigrations: refuse,
+		activity: () => ({ seq: 0, jobs: [] }),
 		describe: async () => ({
 			mode: "unavailable",
 			streaming: false,

@@ -300,3 +300,34 @@ test('at rest the terminal still has its stage: dreams with no device known, the
   expect((await after.find({ type: 'Raster', key: 'chip' })) !== undefined).toBe(true)
   expect((await after.find({ text: /^Loft  ESP32/ })) !== undefined).toBe(true)
 })
+
+test('a flash follows both of its jobs, the compile and then the upload, as one build', async ($, on) => {
+  const clock = mock.clock(on)
+  base(on)
+  on('tool.call', { tool: tool('mcp__vome__esphome_upload') }, () => ({
+    isError: true,
+    result: null,
+    text: 'MCP tool "vome/esphome_upload" is still running after 120s. It was moved to the background as task t1 and keeps running',
+  }))
+  let stage = 0
+  on('mcp.call', (_$, e) => {
+    if (e.tool === 'esphome_get_config') return { value: { content: [{ type: 'text', text: 'Not found' }], isError: true } }
+    const at = new Date().toISOString()
+    const compile = { job_id: 'c', command: 'compile', configuration: 'loft.yaml', started: at, done: stage > 0, exit_code: stage > 0 ? 0 : null, lines: stage === 0 ? ['[500/1000] Building C object\n'] : [] }
+    const upload = { job_id: 'u', command: 'upload', configuration: 'loft.yaml', started: at, done: stage > 1, exit_code: stage > 1 ? 0 : null, lines: stage === 1 ? ['Uploading: [=====     ] 50%\n'] : [] }
+    return { value: { content: [{ type: 'text', text: JSON.stringify({ seq: stage + 1, jobs: stage === 0 ? [compile] : [compile, upload] }) + STAMP }], isError: false } }
+  })
+  await $.session.start({ source: 'startup', cwd: '/tmp' } as never)
+  await $.tool.call({ tool: tool('mcp__vome__esphome_upload'), configuration: 'loft.yaml' } as never)
+  await clock.advance(1_600)
+  const ui = await mount($)
+  expect((await ui.find({ text: /Compiling 50%/ })) !== undefined).toBe(true)
+  // The compile finishing is not the end of the flash.
+  stage = 1
+  await clock.advance(1_600)
+  expect((await ui.find({ text: /Uploading 50%/ })) !== undefined).toBe(true)
+  expect((await ui.find({ text: /✓/ })) === undefined).toBe(true)
+  stage = 2
+  await clock.advance(1_600)
+  expect((await ui.find({ text: /✓ Flashed in/ })) !== undefined).toBe(true)
+})

@@ -310,16 +310,42 @@ export function registerEsphomeTools(server: McpServer, ctx: ToolContext): void 
 						"Refused: flashing firmware requires write access for the active instance."
 					);
 				}
-				// This used to pre-flight with `validate`, which was actively
-				// harmful: ESPHome Device Builder removed that endpoint, so the
-				// check failed on every current dashboard and took every flash
-				// with it. No safety was lost — `upload` compiles first and a
-				// failed build never reaches the device.
-				return runStream("upload", configuration, {
-					port: port ?? "OTA",
-					timeoutSeconds: timeout_seconds,
-					fullOutput: full_output,
-					extra
+				// Device Builder's `firmware/upload` only sends a firmware that is already built
+				// (its own Install button queues a compile, then an upload). Flashing a config
+				// with no fresh build failed with "No such file .../<name>.bin" (GamlaBio's
+				// LoftC3, 2 Oct 2026), or would send a stale one. So compile first here; a build
+				// that fails never reaches the device.
+				const progress = buildProgressFor(extra);
+				const timeoutMs = timeout_seconds ? timeout_seconds * SECONDS_TO_MS : undefined;
+				const built = await ctx.esphome.runCommand({ command: "compile", configuration, onProgress: progress, timeoutMs });
+				if (built.exitCode !== 0 || built.timedOut) {
+					const summary = full_output ? null : summariseOutput(built.output, BUILD_TAIL);
+					return jsonResult({
+						command: "upload",
+						configuration,
+						exit_code: built.exitCode,
+						success: false,
+						stopped: built.timedOut ? "timeout" : "completed",
+						failed_step: "compile",
+						note: "The build failed, so nothing was sent to the device.",
+						truncated: built.truncated,
+						output: summary ? summary.output : built.output,
+						...(summary?.summarised ? { output_lines: summary.total_lines, output_summarised: true } : {})
+					});
+				}
+				const sent = await ctx.esphome.runCommand({ command: "upload", configuration, port: port ?? "OTA", onProgress: progress, timeoutMs });
+				const both = `${built.output}${built.output.endsWith("\n") ? "" : "\n"}${sent.output}`;
+				const summary = full_output ? null : summariseOutput(both, BUILD_TAIL);
+				return jsonResult({
+					command: "upload",
+					configuration,
+					exit_code: sent.exitCode,
+					success: sent.exitCode === 0 && !sent.timedOut,
+					stopped: sent.timedOut ? "timeout" : "completed",
+					...(sent.exitCode !== 0 ? { failed_step: "upload" } : {}),
+					truncated: built.truncated || sent.truncated,
+					output: summary ? summary.output : both,
+					...(summary?.summarised ? { output_lines: summary.total_lines, output_summarised: true } : {})
 				});
 			})
 	);

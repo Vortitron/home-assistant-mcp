@@ -550,12 +550,16 @@ async function poll($: EngineInterface) {
     }
     const body = parseJson(text)
     const jobs = body && Array.isArray(body.jobs) ? (body.jobs as Record<string, unknown>[]) : []
-    // This build's job: same command and configuration, started no earlier than the call.
-    const job = jobs
-      .filter(j => j.command === current.command && j.configuration === current.configuration)
+    // This build's jobs: same configuration, started no earlier than the call. A flash is two
+    // (the MCP compiles, then uploads), followed as one build.
+    const commands = current.command === 'upload' ? ['compile', 'upload'] : [current.command]
+    const mine = jobs
+      .filter(j => commands.includes(String(j.command)) && j.configuration === current.configuration)
       .filter(j => Date.parse(String(j.started)) >= current.startedAt - 5_000)
-      .at(-1)
-    const fresh = job && Array.isArray(job.lines) ? toLines(job.lines.map(String)) : []
+    const fresh = mine.flatMap(j => (Array.isArray(j.lines) ? toLines(j.lines.map(String)) : []))
+    // The job that says how it ended: the last one, once it is the build's own command or has failed.
+    const last = mine.at(-1)
+    const job = last && (last.command === current.command || (last.done === true && last.exit_code !== 0)) ? last : undefined
     const seq = typeof body?.seq === 'number' ? body.seq : current.seq
     const latest = (await $.state.get(build)).value ?? current
     if (latest.outcome !== 'running') return

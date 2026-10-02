@@ -5,7 +5,7 @@ import { loadConfig } from "../src/config.js";
 import { createLogger } from "../src/logger.js";
 import { HaApiError, type HaRestClient } from "../src/ha/restClient.js";
 import type { HaWsClient } from "../src/ha/wsClient.js";
-import { createUnavailableEsphomeClient } from "../src/esphome/client.js";
+import { createUnavailableEsphomeClient, type EsphomeClient, type EsphomeCommandRequest } from "../src/esphome/client.js";
 import { createNodeRedClient } from "../src/nodered/client.js";
 import { createVomeHomeClient, type VomeHomeClient } from "../src/vomehome/client.js";
 import { createInstanceManager } from "../src/vomehome/instances.js";
@@ -45,6 +45,7 @@ function buildHarness(
 		rest?: Partial<HaRestClient>;
 		ws?: Partial<HaWsClient>;
 		vomehome?: Partial<VomeHomeClient>;
+		esphome?: Partial<EsphomeClient>;
 	} = {}
 ): FakeServer {
 	const config = loadConfig({ HA_URL: "http://ha.local:8123", HA_TOKEN: "tok", ...options.env });
@@ -55,7 +56,7 @@ function buildHarness(
 		logger,
 		rest: mockRest,
 		ws: (options.ws ?? {}) as unknown as HaWsClient,
-		esphome: createUnavailableEsphomeClient(),
+		esphome: { ...createUnavailableEsphomeClient(), ...options.esphome } as EsphomeClient,
 		nodered: createNodeRedClient(config, logger),
 		vomehome: (options.vomehome ?? createVomeHomeClient(config, logger)) as VomeHomeClient,
 		instances
@@ -217,6 +218,42 @@ describe("esphome tools with no route to a home", () => {
 		expect(result.isError).toBe(true);
 		expect(textOf(result)).toMatch(/VOMEHOME_TOKEN/);
 		expect(textOf(result)).toMatch(/Vome add-on/);
+	});
+});
+
+describe("esphome_upload", () => {
+	const fakeEsphome = (exitCodes: Record<string, number>) => {
+		const ran: string[] = [];
+		const runCommand = async (request: EsphomeCommandRequest) => {
+			ran.push(request.command);
+			return {
+				command: request.command,
+				configuration: request.configuration,
+				exitCode: exitCodes[request.command] ?? 0,
+				output: `${request.command} output\n`,
+				truncated: false,
+				timedOut: false
+			};
+		};
+		return { ran, client: { runCommand } as unknown as Partial<EsphomeClient> };
+	};
+
+	it("compiles before it flashes, since Device Builder's upload only sends a firmware already built", async () => {
+		const fake = fakeEsphome({});
+		const server = buildHarness({ env: { HA_ALLOW_WRITE: "true" }, esphome: fake.client });
+		const body = jsonOf(await server.call("esphome_upload", { configuration: "loft.yaml" }));
+		expect(fake.ran).toEqual(["compile", "upload"]);
+		expect(body.success).toBe(true);
+		expect(body.output).toBe("compile output\nupload output\n");
+	});
+
+	it("never reaches the device when the build fails", async () => {
+		const fake = fakeEsphome({ compile: 1 });
+		const server = buildHarness({ env: { HA_ALLOW_WRITE: "true" }, esphome: fake.client });
+		const body = jsonOf(await server.call("esphome_upload", { configuration: "loft.yaml" }));
+		expect(fake.ran).toEqual(["compile"]);
+		expect(body.success).toBe(false);
+		expect(body.failed_step).toBe("compile");
 	});
 });
 

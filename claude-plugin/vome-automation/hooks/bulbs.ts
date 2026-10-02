@@ -159,15 +159,13 @@ export const SWIM_ROWS = 6
 
 /**
  * One frame of the swim at `now` ms: three bulbs swimming through the water and
- * leaping like the dolphins did, trailing sparkles, beside a little graphic
- * equaliser. Each cell is two pixels, upper and lower, each drawn as a round
- * cluster of dots rather than a block.
+ * leaping like the dolphins did, trailing sparkles. Each cell is two pixels,
+ * upper and lower, each drawn as a round cluster of dots rather than a block.
  */
 export function swim(now: number, columns: number): string {
   const p: Pixels = { w: columns, h: SWIM_ROWS * 2, px: new Uint32Array(columns * SWIM_ROWS * 2) }
   const t = now / 1000
-  const eqWidth = columns >= 30 ? 12 : 0
-  const width = columns - eqWidth
+  const width = columns
 
   for (let k = 0; k < Math.max(3, Math.floor(columns / 10)); k++) {
     const x = Math.floor(hash(k * 5.3) * width)
@@ -178,7 +176,6 @@ export function swim(now: number, columns: number): string {
   for (const bulb of bulbs) sparkleTrail(p, bulb, t, width)
   for (const bulb of bulbs) swimmer(p, bulb)
   waves(p, t, width)
-  if (eqWidth > 0) equaliser(p, t, width + 1, eqWidth - 1)
 
   return encodePixels(p)
 }
@@ -242,17 +239,6 @@ function waves(p: Pixels, t: number, width: number) {
       // Over whatever swam into it: the crest bright, the depth see-through.
       blendPixel(p, x, y, isCrest ? CREST : mix(0x0a3d7a, 0x041c3d, (y - level) / 3), isCrest ? 0.9 : 0.72)
     }
-  }
-}
-
-function equaliser(p: Pixels, t: number, left: number, width: number) {
-  for (let y = 0; y < p.h; y++) put(p, left - 1, y, 0x1b2a44)
-  for (let b = 0; b < Math.floor(width / 2); b++) {
-    const level = Math.abs(Math.sin(t * (3.1 + b * 0.7) + b * 1.9) * 0.6 + Math.sin(t * 7.3 + b) * 0.4)
-    const height = Math.round(level * (p.h - 1))
-    for (let k = 0; k < height; k++) put(p, left + b * 2, p.h - 1 - k, k / p.h > 0.75 ? RED : k / p.h > 0.5 ? AMBER : GREEN)
-    const peak = p.h - 1 - Math.round(Math.max(level, Math.abs(Math.sin(t * 1.3 + b))) * (p.h - 1))
-    put(p, left + b * 2, Math.max(0, peak), 0xdfe8ff)
   }
 }
 

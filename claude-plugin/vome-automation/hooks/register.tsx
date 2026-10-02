@@ -27,6 +27,8 @@ const WATCH_AFTER_SAVE_MS = 15 * 60_000
 const WATCH_AFTER_TRIGGER_MS = 2 * 60_000
 const POLL_RUNS_MS = 15_000
 const TICK_MS = 3_000
+/** The swim stops this long after the last call about the automation, even mid-turn. */
+const BUILD_IDLE_MS = 90_000
 /** The interstitial's frame interval: 25 a second. */
 const FRAME_MS = 40
 /** A lit row fades in three steps over three seconds. */
@@ -61,6 +63,8 @@ let lastLogged = ''
 let isBlocked = false
 /** The note line holds an error, which the next read that works should take away. */
 let isNoteAnError = false
+/** When the automation was last read or acted on; the swim ends BUILD_IDLE_MS after. */
+let buildingSince = 0
 /** Where this person's Claude Code settings live, for the link when auto mode refuses a read. */
 let settingsFile = '~/.claude/settings.json'
 // The animation's own bookkeeping: what plays, where it is mounted, the fade.
@@ -91,6 +95,7 @@ export const register: Register = on => {
     // line forever: start clean, and let the next read say again if something is wrong.
     await $.state.set(note, null)
     await $.state.set(blocked, null)
+    await $.state.set(building, false)
     await $.state.set(fxOn, isFxOn)
     $.clock.every(FRAME_MS, () => void animate($))
 
@@ -141,6 +146,7 @@ export const register: Register = on => {
       const prev = sameHome ? before.config : {}
       await show($, server, id, config, stamp, { prev })
       await $.state.set(building, false)
+      buildingSince = 0
       await $.state.set(run, null)
       const changed = buildRows(config, null, prev).filter(row => row.change !== null)
       await startFlash($, changed.map(row => row.path), 'change')
@@ -155,6 +161,7 @@ export const register: Register = on => {
     const ran = await next(e)
     if (ran.deny !== undefined || ran.isError) return ran
     const text = ran.text ?? ''
+    if (buildingSince > 0) buildingSince = Date.now()
 
     if (name === 'ha_get_automation') {
       // The model read an automation: show it, and swim while it is worked on.
@@ -165,6 +172,7 @@ export const register: Register = on => {
           await show($, server, id, body.config, parseStamp(text), null)
           await $.state.set(pending, { run: true })
           await $.state.set(building, true)
+          buildingSince = Date.now()
           await openPane($)
         }
       }
@@ -207,6 +215,7 @@ export const register: Register = on => {
   // The turn is over: whatever was being built is done (or set aside), so the swimmers rest.
   on('turn.complete', async ($, e, next) => {
     const result = await next(e)
+    buildingSince = 0
     if ((await $.state.get(building)).value) await $.state.set(building, false)
 
     return result
@@ -604,6 +613,11 @@ async function startFlash($: EngineInterface, paths: string[], kind: Flash['kind
 /** Every frame: step the highlight's fade, and repaint the bulbs where the strip is mounted. */
 async function animate($: EngineInterface) {
   const now = Date.now()
+  // A long turn about something else should not leave the swimmers over the header.
+  if (buildingSince > 0 && now - buildingSince > BUILD_IDLE_MS) {
+    buildingSince = 0
+    await $.state.set(building, false)
+  }
   if (flashAt > 0) {
     const step = Math.floor((now - flashAt) / FLASH_STEP_MS)
     if (step >= FLASH_COLOURS.change.length) {

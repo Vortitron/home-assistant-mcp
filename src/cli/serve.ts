@@ -506,7 +506,12 @@ export async function startMcpHttpServer(args: ServeArgs, logger: Logger): Promi
 		close: async () => {
 			clearInterval(sweep);
 			await Promise.all([...sessions.keys()].map((id) => dropSession(id)));
-			await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+			await new Promise<void>((resolve) => {
+				httpServer.close(() => resolve());
+				// Node 18 (still supported) leaves idle keep-alive sockets open on close(), so it
+				// waited out their 5 s timeout: every restart, and every test on the CI box.
+				httpServer.closeAllConnections();
+			});
 		}
 	};
 }

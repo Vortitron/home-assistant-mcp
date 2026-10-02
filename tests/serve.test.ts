@@ -71,7 +71,11 @@ async function makeFakePortal(): Promise<FakePortal> {
 	const { port } = server.address() as AddressInfo;
 	return {
 		url: `http://127.0.0.1:${port}`,
-		close: () => new Promise<void>((resolve) => server.close(() => resolve()))
+		close: () =>
+			new Promise<void>((resolve) => {
+				server.close(() => resolve());
+				server.closeAllConnections(); // Node 18 would otherwise wait out idle keep-alives
+			})
 	};
 }
 

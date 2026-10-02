@@ -166,3 +166,29 @@ test('real ESP-IDF output: colour codes sent as text, and ninja steps as a perce
   finish(reply({ command: 'compile', configuration: 'vome-pane-test.yaml', exit_code: 0, success: true, stopped: 'completed', output: '' }))
   await call
 })
+
+test('when Claude stops waiting, the pane keeps following the build and takes its result from the job', async ($, on) => {
+  const clock = mock.clock(on)
+  base(on)
+  let finish: (value: { isError: true; result: unknown; text: string }) => void = () => undefined
+  on('tool.call', { tool: tool('mcp__vome-staging__esphome_compile') }, () => new Promise(resolve => (finish = resolve)))
+  let isDone = false
+  on('mcp.call', () => {
+    const lines = isDone ? ['[972/972] Linking CXX executable vome-pane-test.elf\n'] : ['[10/972] Building C object\n']
+    const job = { job_id: 'j', command: 'compile', configuration: 'vome-pane-test.yaml', started: new Date().toISOString(), done: isDone, exit_code: isDone ? 0 : null, lines }
+    return { value: { content: [{ type: 'text', text: JSON.stringify({ seq: isDone ? 20 : 10, jobs: [job] }) + STAMP }], isError: false } }
+  })
+
+  await $.session.start({ source: 'startup', cwd: '/tmp' } as never)
+  const call = $.tool.call({ tool: tool('mcp__vome-staging__esphome_compile'), configuration: 'vome-pane-test.yaml' } as never)
+  await clock.advance(1_600)
+  finish({ isError: true, result: null, text: 'MCP server "vome-staging" tool "esphome_compile" sent no response or progress for 300s; aborting.' })
+  await call
+  const ui = await mount($)
+  expect((await ui.find({ text: /Failed/ })) === undefined).toBe(true)
+  expect((await ui.find({ text: /Compiling 1%/ })) !== undefined).toBe(true)
+
+  isDone = true
+  await clock.advance(1_600)
+  expect((await ui.find({ text: /✓ Compiled in/ })) !== undefined).toBe(true)
+})

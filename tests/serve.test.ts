@@ -57,6 +57,18 @@ async function makeFakePortal(): Promise<FakePortal> {
 			});
 			return;
 		}
+		// A short ESPHome build: started, then two polls of output.
+		if (req.url === "/api/v1/instances/inst-one/esphome/stream" && req.method === "POST") {
+			json(200, { job_id: "job-1" });
+			return;
+		}
+		if (req.url?.startsWith("/api/v1/instances/inst-one/esphome/stream/job-1?cursor=")) {
+			const first = req.url.endsWith("cursor=0");
+			json(200, first
+				? { lines: ["INFO Reading configuration\n", "[1/2] Building C object\n"], cursor: 2, done: false }
+				: { lines: ["[2/2] Linking CXX executable\n"], cursor: 3, done: true, exit_code: 0 });
+			return;
+		}
 		if (req.url === "/api/v1/instances/inst-one/ha/config") {
 			json(200, { version: "2026.8.0", location_name: "Test Home" });
 			return;
@@ -366,6 +378,24 @@ describe("MCP HTTP server", () => {
 		/** A pin is held to the grant like memory is: a revoked instance is never reached through it. */
 		const client = await connectTo(`${endpoint}?instance=inst-elsewhere`);
 		expect(await activeOf(client)).toBe("inst-one");
+		await client.close();
+	});
+
+	it("sends progress while an ESPHome build runs, so the client keeps waiting", async () => {
+		/**
+		 * Claude Code abandons a tool call that sends nothing for 300s, and a first
+		 * ESP-IDF build is silent for longer; a progress notification keeps it alive.
+		 */
+		const client = await connectTo(endpoint);
+		const seen: { progress: number; message?: string }[] = [];
+		const result = await client.callTool(
+			{ name: "esphome_compile", arguments: { configuration: "lr.yaml" } },
+			undefined,
+			{ onprogress: (p) => seen.push({ progress: p.progress, message: p.message }) }
+		);
+		expect(seen.length).toBeGreaterThan(0);
+		expect(seen[0]?.message).toBe("[1/2] Building C object");
+		expect(JSON.parse((result.content as { text: string }[])[0]?.text ?? "{}").success).toBe(true);
 		await client.close();
 	});
 

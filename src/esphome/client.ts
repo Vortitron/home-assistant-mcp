@@ -24,6 +24,8 @@ export interface EsphomeCommandRequest {
 	port?: string;
 	timeoutMs?: number;
 	maxLines?: number;
+	/** Called after each poll of a running job: lines so far and the newest one (for MCP progress). */
+	onProgress?: (lineCount: number, latest: string | null) => void;
 }
 
 export interface EsphomeCommandResult {

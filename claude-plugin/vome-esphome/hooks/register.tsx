@@ -106,6 +106,13 @@ export const register: Register = on => {
     const lines = current.isLive && current.lines.length > 0 ? current.lines : toLines([output]).slice(-KEEP_LINES)
     const isOk =
       ran.deny === undefined && !ran.isError && body !== null && (body.success === true || (command === 'logs' && body.stopped === 'timeout'))
+    // Claude Code gave up waiting (an older MCP sends no progress, and a long build is silent), but the
+    // build carries on at home: keep following it, and let the job itself say how it ended.
+    const isAbandoned = !isOk && current.isLive && /no response or progress|aborted|cancel|timed? ?out/i.test(ran.text ?? ran.deny ?? '')
+    if (isAbandoned) {
+      await $.state.set(build, { ...current, error: 'Claude stopped waiting; the build carries on at home and shows here.' })
+      return ran
+    }
     await $.state.set(build, {
       ...current,
       lines,
@@ -329,6 +336,18 @@ async function poll($: EngineInterface) {
     const seq = typeof body?.seq === 'number' ? body.seq : current.seq
     const latest = (await $.state.get(build)).value ?? current
     if (latest.outcome !== 'running') return
+    // The job finished: the result comes from it when the tool call was abandoned before it.
+    if (job && job.done === true && latest.error) {
+      await $.state.set(build, {
+        ...latest,
+        lines: [...latest.lines, ...fresh].slice(-KEEP_LINES),
+        seq,
+        finishedAt: Date.now(),
+        outcome: job.exit_code === 0 ? 'ok' : 'failed',
+        error: job.exit_code === 0 ? null : typeof job.error === 'string' ? job.error : `exit code ${String(job.exit_code)}`,
+      })
+      return
+    }
     if (fresh.length > 0 || seq !== latest.seq) {
       await $.state.set(build, {
         ...latest,

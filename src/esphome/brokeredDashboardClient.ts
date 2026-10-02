@@ -188,6 +188,7 @@ export function createBrokeredEsphomeDashboardClient(
 				`/stream/${encodeURIComponent(jobId)}?cursor=${cursor}`
 			);
 			activityLog.addLines(jobId, poll?.lines ?? []);
+			request.onProgress?.(lines.length + (poll?.lines?.length ?? 0), (poll?.lines ?? []).at(-1) ?? lines.at(-1) ?? null);
 			for (const line of poll?.lines ?? []) {
 				if (lines.length < maxLines) {
 					lines.push(line);

@@ -3,6 +3,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { EsphomeStreamCommand } from "../esphome/client.js";
 import { evaluateConfigWrite } from "../safety.js";
 import { summariseOutput } from "../esphome/summary.js";
+import { buildProgressFor, type ProgressExtra } from "../esphome/progress.js";
 import { errorResult, jsonResult, runTool, textResult, type ToolContext } from "./helpers.js";
 
 const SECONDS_TO_MS = 1000;
@@ -52,11 +53,12 @@ export function registerEsphomeTools(server: McpServer, ctx: ToolContext): void 
 	const runStream = async (
 		command: EsphomeStreamCommand,
 		configuration: string,
-		options: { port?: string; timeoutSeconds?: number; openEnded?: boolean; fullOutput?: boolean } = {}
+		options: { port?: string; timeoutSeconds?: number; openEnded?: boolean; fullOutput?: boolean; extra?: ProgressExtra } = {}
 	) => {
 		const result = await ctx.esphome.runCommand({
 			command,
 			configuration,
+			onProgress: buildProgressFor(options.extra),
 			port: options.port,
 			timeoutMs: options.timeoutSeconds ? options.timeoutSeconds * SECONDS_TO_MS : undefined
 		});
@@ -253,9 +255,9 @@ export function registerEsphomeTools(server: McpServer, ctx: ToolContext): void 
 			},
 			annotations: { readOnlyHint: true, openWorldHint: true }
 		},
-		async ({ configuration, timeout_seconds, full_output }) =>
+		async ({ configuration, timeout_seconds, full_output }, extra) =>
 			runTool(ctx.logger, "esphome_validate", async () =>
-				runStream("validate", configuration, { timeoutSeconds: timeout_seconds, fullOutput: full_output })
+				runStream("validate", configuration, { timeoutSeconds: timeout_seconds, fullOutput: full_output, extra })
 			)
 	);
 
@@ -276,9 +278,9 @@ export function registerEsphomeTools(server: McpServer, ctx: ToolContext): void 
 			},
 			annotations: { readOnlyHint: false, openWorldHint: true }
 		},
-		async ({ configuration, timeout_seconds, full_output }) =>
+		async ({ configuration, timeout_seconds, full_output }, extra) =>
 			runTool(ctx.logger, "esphome_compile", async () =>
-				runStream("compile", configuration, { timeoutSeconds: timeout_seconds, fullOutput: full_output })
+				runStream("compile", configuration, { timeoutSeconds: timeout_seconds, fullOutput: full_output, extra })
 			)
 	);
 
@@ -301,7 +303,7 @@ export function registerEsphomeTools(server: McpServer, ctx: ToolContext): void 
 			},
 			annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true }
 		},
-		async ({ configuration, port, timeout_seconds, full_output }) =>
+		async ({ configuration, port, timeout_seconds, full_output }, extra) =>
 			runTool(ctx.logger, "esphome_upload", async () => {
 				if (!ctx.instances.currentSafety().allowWrite) {
 					return errorResult(
@@ -316,7 +318,8 @@ export function registerEsphomeTools(server: McpServer, ctx: ToolContext): void 
 				return runStream("upload", configuration, {
 					port: port ?? "OTA",
 					timeoutSeconds: timeout_seconds,
-					fullOutput: full_output
+					fullOutput: full_output,
+					extra
 				});
 			})
 	);
@@ -350,13 +353,14 @@ export function registerEsphomeTools(server: McpServer, ctx: ToolContext): void 
 			},
 			annotations: { readOnlyHint: true, openWorldHint: true }
 		},
-		async ({ configuration, port, timeout_seconds, full_output }) =>
+		async ({ configuration, port, timeout_seconds, full_output }, extra) =>
 			runTool(ctx.logger, "esphome_logs", async () =>
 				runStream("logs", configuration, {
 					port: port ?? "OTA",
 					timeoutSeconds: timeout_seconds,
 					openEnded: true,
-					fullOutput: full_output
+					fullOutput: full_output,
+					extra
 				})
 			)
 	);

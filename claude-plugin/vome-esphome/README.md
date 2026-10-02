@@ -1,5 +1,7 @@
 # vome-esphome: ESPHome at the side of Claude Code
 
+![The pane's chip on the bench: dreaming, compiling in the forge, flashing, fireworks, then the device's things wired to it.](../../docs/images/vome-esphome.gif)
+
 A side pane for the ESPHome device Claude is working on. Claude reads and
 edits YAML and runs builds that take minutes, and its tools answer only at the
 end; this pane shows the device and the build as they are:
@@ -29,20 +31,34 @@ calls, which you approve as usual.
 
 ## Quickstart
 
-**1. Connect a Home Assistant that runs ESPHome, through Vome.** ESPHome's
-dashboard is only reachable through the Vome app in Home Assistant, so a home
-linked to Vome is needed. See [vome-connect](../vome-connect/README.md): one key
-from the Vome app's Agent tab, no sign-up.
+**1. Add the Vome app to Home Assistant**, then get a key from it. No sign-up needed.
 
-**2. Paste this into Claude Code** (version 2.1.275 or newer, in a terminal):
+[![Add the Vome app to your Home Assistant.](https://my.home-assistant.io/badges/supervisor_add_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_add_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2FVortitron%2FVomeSync)
+
+The button opens your own Home Assistant and adds the app's repository. Pick
+**Vome** and **Install**, open it, and on the **Agent** tab create a key. The
+same Home Assistant needs the **ESPHome Device Builder** app: that is what
+compiles and flashes, and Vome reaches it for Claude with no ports opened.
+
+**2. Paste these into Claude Code**, in a terminal (version 2.1.275 or newer):
+
+```
+/plugin install vome-connect --marketplace Vortitron/home-assistant-mcp
+```
+
+It asks for the key from step 1. Then:
 
 ```
 /plugin install vome-esphome --marketplace Vortitron/home-assistant-mcp
 /reload-plugins
 ```
 
-**3. Ask Claude to build something**, for example *"Update the living room
-sensor's firmware"*. The pane opens when the build starts.
+**3. Ask Claude about a device**, for example *"Add a temperature sensor on
+GPIO4 to the hallway node and flash it"*. The pane opens beside the
+conversation with the device's map, and the build when it starts.
+
+In auto mode, the pane asks you to allow its two read-only tools the first
+time; it shows the exact lines and where they go.
 
 ## Allow its reads (auto mode)
 

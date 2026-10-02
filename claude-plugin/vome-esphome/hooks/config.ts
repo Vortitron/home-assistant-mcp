@@ -154,6 +154,8 @@ const DOMAINS: [string, string, string][] = [
   ['script', 'Logic', '▶'],
   ['interval', 'Logic', '↻'],
 ]
+/** A section lists this many, then says how many more. */
+const MAX_PER_DOMAIN = 8
 const QUIET_KEYS = new Set(['esphome', 'substitutions', 'packages', 'dashboard_import', 'preferences', 'external_components', 'font', 'image', 'color', 'animation', 'psram', 'debug'])
 const HIDDEN = /password|(^|_)key$|^key$|psk|token|secret/i
 const PIN_KEY = /^(pin|.*_pin|sda|scl|tx|rx|clk|mosi|miso|cs|dc|reset|data)$/
@@ -190,33 +192,48 @@ export function mapDevice(yaml: string): DeviceMap {
   for (const key of BUSES) {
     for (const item of itemsOf(child(root, key))) {
       const label = val(item, 'id') ?? key
-      const wires = item.children.filter(c => c.key && PIN_KEY.test(c.key)).map(c => `${c.key} ${pinOf(c) ?? '?'}`)
-      for (const c of item.children) if (c.key && PIN_KEY.test(c.key) && pinOf(c)) pins.push({ pin: pinOf(c)!, owner: `${key} ${c.key}` })
+      const wires = item.children.filter(c => c.key && PIN_KEY.test(c.key)).map(c => `${c.key} ${pinOf(c, sub) ?? '?'}`)
+      for (const c of item.children) if (c.key && PIN_KEY.test(c.key) && pinOf(c, sub)) pins.push({ pin: pinOf(c, sub)!, owner: `${key} ${c.key}` })
       add('Buses', 0, '═', `${key}${label !== key ? ` ${label}` : ''}`, [...wires, val(item, 'baud_rate') ? `${val(item, 'baud_rate')} baud` : null, val(item, 'frequency')].filter(Boolean).join(' · '))
     }
   }
 
   // Everything it does.
   const seen = new Set<string>()
+  const labels = new Map<string, number>()
   for (const [domain, section, icon] of DOMAINS) {
     const node = child(root, domain)
     if (!node) continue
     seen.add(domain)
-    for (const item of itemsOf(node)) {
-      const named = val(item, 'name') ?? val(item, 'id')
-      const label = named ?? val(item, 'platform') ?? (item.value ? sub(item.value) : domain)
+    const items = itemsOf(node)
+    // Values the device only reads from Home Assistant, and its own variables, are one row each:
+    // a real device has dozens of them, and they are not what the map is for.
+    const imported = items.filter(item => val(item, 'platform') === 'homeassistant')
+    if (imported.length > 0) add(section, 0, '⌂', `${imported.length} from Home Assistant`, imported.slice(0, 4).map(item => val(item, 'name') ?? val(item, 'id') ?? '').filter(Boolean).join(', ') + (imported.length > 4 ? ', …' : ''))
+    if (domain === 'globals') {
+      add(section, 0, icon, `${items.length} variable${items.length === 1 ? '' : 's'}`, items.slice(0, 5).map(item => val(item, 'id') ?? '').filter(Boolean).join(', ') + (items.length > 5 ? ', …' : ''))
+      continue
+    }
+    const shown = items.filter(item => !imported.includes(item))
+    for (const item of shown.slice(0, MAX_PER_DOMAIN)) {
+      const named = val(item, 'name') ?? val(item, 'id') ?? (domain === 'interval' && val(item, 'interval') ? `every ${val(item, 'interval')}` : null)
+      const base = named ?? val(item, 'platform') ?? (item.value ? sub(item.value) : domain)
+      // Two rows with one label (two `every 1s` intervals) would share a key in the diff.
+      const repeats = labels.get(`${section}|${base}`) ?? 0
+      labels.set(`${section}|${base}`, repeats + 1)
+      const label = repeats > 0 ? `${base} (${repeats + 1})` : base
       const detail = [
         named ? val(item, 'platform') : null,
         val(item, 'address'),
-        ...pinsIn(item).map(p => p.pin),
-        domain === 'interval' && val(item, 'interval') ? `every ${val(item, 'interval')}` : null,
+        ...pinsIn(item, sub).map(p => p.pin),
+
         val(item, 'update_interval') ? `every ${val(item, 'update_interval')}` : null,
         item.children.some(c => c.tag === '!lambda') ? 'λ' : null,
       ]
         .filter(Boolean)
         .join(' · ')
       add(section, 0, icon, label, detail)
-      for (const p of pinsIn(item)) pins.push({ pin: p.pin, owner: label })
+      for (const p of pinsIn(item, sub)) pins.push({ pin: p.pin, owner: label })
       // A platform that makes several entities (a BME280's temperature, humidity...).
       for (const sub of item.children) {
         if (sub.key && !sub.isItem && val(sub, 'name') && sub.key !== 'then') add(section, 1, '↳', val(sub, 'name')!, sub.key.replace(/_/g, ' '))
@@ -224,6 +241,10 @@ export function mapDevice(yaml: string): DeviceMap {
       for (const trigger of item.children.filter(c => c.key?.startsWith('on_') || (domain === 'interval' && c.key === 'then') || (domain === 'script' && c.key === 'then'))) {
         add(section, 1, '⚡', trigger.key === 'then' ? 'runs' : trigger.key!.replace(/^on_/, 'on ').replace(/_/g, ' '), actionsOf(trigger).join(', ') || '…')
       }
+    }
+    if (shown.length > MAX_PER_DOMAIN) {
+      const rest = shown.slice(MAX_PER_DOMAIN)
+      add(section, 0, '…', `${rest.length} more`, rest.slice(0, 4).map(item => val(item, 'name') ?? val(item, 'id') ?? '').filter(Boolean).join(', ') + (rest.length > 4 ? ', …' : ''))
     }
   }
   for (const trigger of (core?.children ?? []).filter(c => c.key?.startsWith('on_'))) {
@@ -261,8 +282,9 @@ function itemsOf(node: YNode | undefined): YNode[] {
   return items.length > 0 ? items : node.children.length > 0 ? [node] : []
 }
 
-function pinOf(node: YNode): string | null {
-  const raw = node.value ?? child(node, 'number')?.value ?? null
+function pinOf(node: YNode, sub: (text: string) => string = text => text): string | null {
+  const found = node.value ?? child(node, 'number')?.value ?? null
+  const raw = found === null ? null : sub(found)
   if (!raw) return null
   const flow = /number:\s*([A-Za-z0-9_]+)/.exec(raw)
   const pin = (flow?.[1] ?? raw).trim()
@@ -270,8 +292,8 @@ function pinOf(node: YNode): string | null {
   return /^(GPIO|D|A|P|PA|PB)\d+|^GPIO/i.test(pin) ? pin.toUpperCase() : null
 }
 
-function pinsIn(item: YNode): { pin: string }[] {
-  return item.children.filter(c => c.key && PIN_KEY.test(c.key)).map(c => pinOf(c)).filter((p): p is string => !!p).map(pin => ({ pin }))
+function pinsIn(item: YNode, sub: (text: string) => string): { pin: string }[] {
+  return item.children.filter(c => c.key && PIN_KEY.test(c.key)).map(c => pinOf(c, sub)).filter((p): p is string => !!p).map(pin => ({ pin }))
 }
 
 /** Pins the chip reads at boot, which ESPHome warns about: fine with care, a trap with a pull resistor. */
@@ -293,7 +315,11 @@ function pinNumber(pin: string): number {
 /** What a trigger does, as its action names: `light.toggle, delay`. */
 function actionsOf(trigger: YNode): string[] {
   const steps = trigger.children.find(c => c.key === 'then') ?? trigger
-  const names = steps.children.flatMap(c => (c.isItem ? c.children.slice(0, 1).map(a => a.key ?? '') : c.key && c.key !== 'then' ? [c.key] : []))
+  // A trigger written as a list of `- priority: ... then: ...` entries: their actions, not their settings.
+  if (steps === trigger && trigger.children.some(c => c.isItem && c.children.some(k => k.key === 'then'))) {
+    return [...new Set(trigger.children.filter(c => c.isItem).flatMap(actionsOf))].slice(0, 4)
+  }
+  const names = steps.children.flatMap(c => (c.isItem ? c.children.slice(0, 1).map(a => a.key ?? '') : c.key && !['then', 'priority', 'mode'].includes(c.key) ? [c.key] : []))
   if (trigger.tag === '!lambda' || steps.children.some(c => c.key === 'lambda')) names.push('λ')
   return [...new Set(names.filter(Boolean).map(n => (n === 'lambda' ? 'λ' : n)))].slice(0, 4)
 }

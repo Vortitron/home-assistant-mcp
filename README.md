@@ -106,7 +106,8 @@ policy (see [Safety](#safety)).
 | `esphome_list_devices` | List dashboard configurations/devices; flags configs needing renames. |
 | `esphome_list_migrations` | ESPHome spellings a config still uses that have been renamed. |
 | `esphome_get_config` | Read a configuration's YAML. |
-| `esphome_save_config` | Write a configuration's YAML (write-gated). |
+| `esphome_save_config` | Write a configuration's YAML, whole: for a new file (write-gated). |
+| `esphome_edit_config` | Change part of a configuration in place with exact find-and-replace edits, so a long file is not resent (write-gated). |
 | `esphome_validate` | Validate a configuration. |
 | `esphome_compile` | Compile firmware. |
 | `esphome_upload` | Compile + flash a device over the air; validates first (write-gated). |
@@ -692,7 +693,7 @@ reading this: start there.
 - *"Fix my morning automation"* → `ha_get_automation` → edit → `ha_set_automation`
   → `ha_check_config` → `ha_trigger_automation`.
 - *"Add a sensor to this ESPHome node and flash it"* → `esphome_get_config` →
-  `esphome_save_config` → `esphome_validate` → `esphome_upload`.
+  `esphome_edit_config` (or `esphome_save_config` for a new file) → `esphome_validate` → `esphome_upload`.
 - *"Tidy up my Node-RED 'Heating' tab"* → `nodered_get_flows` (find the tab id)
   → `nodered_get_flow` → edit the nodes → `nodered_update_flow`.
 - *"Spin up a sandbox and open it"* → `vomehome_create_instance` →

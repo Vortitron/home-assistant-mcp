@@ -99,6 +99,13 @@ export const register: Register = on => {
       return ran
     }
 
+    if (name === 'esphome_edit_config' && typeof args.configuration === 'string') {
+      // The edits carry only the changed lines: read the file back for the map, which marks what changed.
+      const ran = await next(e)
+      if (ran.deny === undefined && !ran.isError) await loadConfig($, server, args.configuration)
+      return ran
+    }
+
     if (name === 'esphome_list_devices') {
       const ran = await next(e)
       if (ran.deny === undefined && !ran.isError) {

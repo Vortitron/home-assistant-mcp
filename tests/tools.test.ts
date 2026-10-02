@@ -257,6 +257,47 @@ describe("esphome_upload", () => {
 	});
 });
 
+describe("esphome_edit_config", () => {
+	const fakeFiles = (yaml: string) => {
+		const saved: string[] = [];
+		const client = {
+			getConfig: async () => yaml,
+			saveConfig: async (_name: string, text: string) => {
+				saved.push(text);
+			}
+		} as unknown as Partial<EsphomeClient>;
+		return { saved, client };
+	};
+	const env = { HA_ALLOW_WRITE: "true", HA_ALLOW_CONFIG_WRITE: "true" };
+
+	it("changes only what the edits name, so a long file is not resent whole", async () => {
+		const files = fakeFiles("ota:\n  - platform: esphome\n    password: hunter2\nsensor:\n  - name: Gas/Smoke\n");
+		const server = buildHarness({ env, esphome: files.client });
+		const body = jsonOf(
+			await server.call("esphome_edit_config", {
+				configuration: "loft.yaml",
+				edits: [
+					{ old_text: "    password: hunter2", new_text: "    encryption: {}" },
+					{ old_text: "Gas/Smoke", new_text: "Gas⁄Smoke" }
+				]
+			})
+		);
+		expect(body.edits_applied).toBe(2);
+		expect(files.saved).toEqual(["ota:\n  - platform: esphome\n    encryption: {}\nsensor:\n  - name: Gas⁄Smoke\n"]);
+	});
+
+	it("saves nothing when an edit matches nothing, or more than once", async () => {
+		const files = fakeFiles("a: 1\nb: 1\n");
+		const server = buildHarness({ env, esphome: files.client });
+		const missing = await server.call("esphome_edit_config", { configuration: "x.yaml", edits: [{ old_text: "c: 1", new_text: "c: 2" }] });
+		const twice = await server.call("esphome_edit_config", { configuration: "x.yaml", edits: [{ old_text: ": 1", new_text: ": 2" }] });
+		expect(missing.isError).toBe(true);
+		expect(textOf(missing)).toMatch(/matches nothing/);
+		expect(textOf(twice)).toMatch(/more than once/);
+		expect(files.saved).toEqual([]);
+	});
+});
+
 describe("ha_get_system_log", () => {
 	const entries = [
 		{

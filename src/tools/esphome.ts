@@ -219,7 +219,7 @@ export function registerEsphomeTools(server: McpServer, ctx: ToolContext): void 
 		{
 			title: "Save ESPHome config",
 			description:
-				"Write YAML to an ESPHome configuration file. Requires HA_ALLOW_WRITE=true and HA_ALLOW_CONFIG_WRITE=true. Follow with esphome_validate to confirm it compiles, then esphome_upload to flash it.",
+				"Write YAML to an ESPHome configuration file, whole: for a new file. To change part of an existing one, use esphome_edit_config. Requires HA_ALLOW_WRITE=true and HA_ALLOW_CONFIG_WRITE=true. Follow with esphome_validate to confirm it compiles, then esphome_upload to flash it.",
 			inputSchema: {
 				configuration: z.string().describe("Configuration filename, e.g. 'living-room.yaml'."),
 				yaml: z.string().describe("Full YAML content to write.")
@@ -235,6 +235,62 @@ export function registerEsphomeTools(server: McpServer, ctx: ToolContext): void 
 				}
 				await ctx.esphome.saveConfig(configuration, yaml);
 				return jsonResult({ saved: true, configuration });
+			})
+	);
+
+	server.registerTool(
+		"esphome_edit_config",
+		{
+			title: "Edit ESPHome config",
+			description:
+				"Change part of an ESPHome configuration file in place: each edit replaces one exact piece of " +
+				"text with another, and must match exactly once. Prefer this to esphome_save_config for any " +
+				"change to an existing file: a real device's YAML runs to thousands of lines, and resending all " +
+				"of it to change a few is slow and risks a slip anywhere in it. Nothing is saved unless every " +
+				"edit applies. Requires HA_ALLOW_WRITE=true and HA_ALLOW_CONFIG_WRITE=true. Follow with " +
+				"esphome_validate, then esphome_upload to flash it.",
+			inputSchema: {
+				configuration: z.string().describe("Configuration filename, e.g. 'living-room.yaml'."),
+				edits: z
+					.array(
+						z.object({
+							old_text: z.string().min(1).describe("Text in the file now, exactly, including indentation. Must occur once."),
+							new_text: z.string().describe("What it becomes.")
+						})
+					)
+					.min(1)
+					.describe("Applied in order, each to the result of the one before.")
+			},
+			annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true }
+		},
+		async ({ configuration, edits }) =>
+			runTool(ctx.logger, "esphome_edit_config", async () => {
+				const decision = evaluateConfigWrite(ctx.instances.currentSafety());
+				if (!decision.allowed) {
+					return errorResult(`Refused: ${decision.reason}`);
+				}
+				const before = await ctx.esphome.getConfig(configuration);
+				let yaml = before;
+				for (const [index, edit] of edits.entries()) {
+					const at = yaml.indexOf(edit.old_text);
+					const again = at < 0 ? -1 : yaml.indexOf(edit.old_text, at + 1);
+					if (at < 0 || again >= 0) {
+						return errorResult(
+							`Nothing saved: edit ${index + 1} of ${edits.length} ${at < 0 ? "matches nothing" : "matches more than once"} ` +
+								`in ${configuration}. Quote more of the surrounding text so it matches exactly once.`
+						);
+					}
+					yaml = yaml.slice(0, at) + edit.new_text + yaml.slice(at + edit.old_text.length);
+				}
+				await ctx.esphome.saveConfig(configuration, yaml);
+				const count = (text: string) => text.split("\n").length;
+				return jsonResult({
+					saved: true,
+					configuration,
+					edits_applied: edits.length,
+					lines_before: count(before),
+					lines_after: count(yaml)
+				});
 			})
 	);
 

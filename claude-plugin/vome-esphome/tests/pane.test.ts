@@ -331,3 +331,21 @@ test('a flash follows both of its jobs, the compile and then the upload, as one 
   await clock.advance(1_600)
   expect((await ui.find({ text: /✓ Flashed in/ })) !== undefined).toBe(true)
 })
+
+test('an edit in place redraws the map from the file, lighting what changed', async ($, on) => {
+  base(on)
+  let yaml = LOFT
+  on('tool.call', { tool: tool('mcp__vome__esphome_get_config') }, () => ({ result: [{ type: 'text', text: yaml + STAMP }], text: yaml + STAMP }))
+  on('tool.call', { tool: tool('mcp__vome__esphome_edit_config') }, () => {
+    yaml = LOFT.replace('name: Hatch', 'name: Loft hatch')
+    return reply({ saved: true, configuration: 'loft.yaml', edits_applied: 1 })
+  })
+  on('mcp.call', (_$, e) => {
+    expect(e.tool).toBe('esphome_get_config')
+    return { value: { content: [{ type: 'text', text: yaml + STAMP }], isError: false } }
+  })
+  await $.tool.call({ tool: tool('mcp__vome__esphome_get_config'), configuration: 'loft.yaml' } as never)
+  await $.tool.call({ tool: tool('mcp__vome__esphome_edit_config'), configuration: 'loft.yaml', edits: [] } as never)
+  const ui = await mount($)
+  expect((await ui.find({ text: /^\+.*Loft hatch/ })) !== undefined).toBe(true)
+})

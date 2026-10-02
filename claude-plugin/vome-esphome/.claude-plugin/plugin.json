@@ -1,0 +1,11 @@
+{
+  "name": "vome-esphome",
+  "version": "0.1.0",
+  "description": "A side pane for the ESPHome build Claude is running: the phase, a progress bar, the output as it arrives with errors picked out, and the result, so a compile or a flash can be watched rather than waited for. Needs @vortitron/home-assistant-mcp with esphome_activity.",
+  "author": { "name": "Vortitron", "url": "https://vome.io" },
+  "homepage": "https://github.com/Vortitron/home-assistant-mcp/tree/main/claude-plugin/vome-esphome",
+  "repository": "https://github.com/Vortitron/home-assistant-mcp",
+  "license": "MIT",
+  "keywords": ["home-assistant", "esphome", "vome", "mcp"],
+  "types": "./types/index.d.ts"
+}

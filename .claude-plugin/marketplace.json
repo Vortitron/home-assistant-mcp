@@ -19,6 +19,12 @@
       "source": "./claude-plugin/vome-connect",
       "description": "Connects Claude Code to your Home Assistant through Vome's hosted MCP, with one key from the Vome app (no sign-up) or vome.io.",
       "category": "productivity"
+    },
+    {
+      "name": "vome-esphome",
+      "source": "./claude-plugin/vome-esphome",
+      "description": "A side pane for the ESPHome build Claude is running: phase, progress, live output with errors picked out, and the result.",
+      "category": "productivity"
     }
   ]
 }

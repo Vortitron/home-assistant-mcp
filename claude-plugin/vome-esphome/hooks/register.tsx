@@ -18,6 +18,7 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { Build, ConfigView, Device } from '../types'
 import { bar, elapsed, kindOf, phaseWords, progressOf, toLines } from './build'
 import { chipFrame, STRIP_ROWS } from './chip'
+import type { ChipState, Scene, Thing } from './chip'
 import { diffMaps, mapDevice, rowKey } from './config'
 import type { MapRow } from './config'
 import type { LineKind } from './build'
@@ -42,9 +43,9 @@ const showLog = { plugin: 'vome-esphome', key: 'showLog' } as const
 /** How long a save's changes stay lit in the map. */
 const CHANGE_MS = 8_000
 const LOG_LINES = 2
-/** The strip repaints this often while a build runs, and for a few seconds after. */
+/** The strip repaints this often while a build runs, and every few frames at rest. */
 const FRAME_MS = 80
-const AFTERGLOW_MS = 4_000
+const IDLE_EVERY = 3
 
 // Module variables reset on a reload, which is all these need.
 let isPolling = false
@@ -52,7 +53,8 @@ let isPolling = false
 let isUnsupported = false
 let settingsFile = '~/.claude/settings.json'
 /** Where the strip is mounted and what it shows, for the frame timer. */
-let strip: { columns: number; state: Parameters<typeof chipFrame>[1] } | null = null
+let strip: { columns: number; state: ChipState } | null = null
+let frame = 0
 let isFxOn = true
 let isBlitting = false
 let shownTitle = 'ESPHome'
@@ -207,10 +209,29 @@ export const register: Register = on => {
     ) : null
 
     const map = view ? deviceMap($.ui.resolve(e), view) : null
+    const isStage = e.surface === 'terminal' && isFxEnabled
+    const things = view ? thingsOf(view) : []
+    const stage = (state: Omit<ChipState, 'things' | 'hasWifi'>) => {
+      if (e.surface !== 'terminal') return null
+      const { Raster } = $.ui.resolve(e)
+      const columns = Math.min(512, width)
+      strip = { columns, state: { ...state, things, hasWifi: !!view?.rows.some(row => row.section === 'Network' && row.label === 'wifi') } }
+      return <Raster key="chip" columns={columns} rows={STRIP_ROWS} cells={chipFrame(Date.now(), strip.state, columns)} />
+    }
 
     if (!current) {
+      if (!isStage) strip = null
       return (
         <Box flexDirection="column">
+          {isStage
+            ? stage({
+                outcome: 'idle',
+                scene: 'idle',
+                percent: null,
+                words: view ? `${view.name} · ${things.length || 'no'} thing${things.length === 1 ? '' : 's'} attached` : 'dreaming of devices…',
+                endedAt: null,
+              })
+            : null}
           {map ?? (
             <Text dimColor wrap="wrap">
               Nothing building. When Claude reads, edits or builds an ESPHome device, its map shows here, and a build's
@@ -241,26 +262,24 @@ export const register: Register = on => {
 
     // The chip on the bench: a Raster, which only the terminal draws. Not for a logs read.
     let chip = null
-    if (e.surface === 'terminal' && isFxEnabled && current.command !== 'logs') {
-      const { Raster } = $.ui.resolve(e)
-      const columns = Math.min(512, width)
+    if (isStage) {
+      // The scene follows the build, not the command: a flash compiles first, then uploads.
+      const isUploadPhase = current.command === 'upload' && (progress.uploadPercent !== null || progress.phase === 'uploading')
+      const scene: Scene =
+        current.command === 'logs' ? 'logs' : current.command === 'validate' ? 'validate' : isUploadPhase ? 'upload' : 'compile'
       const words =
         current.outcome === 'running'
-          ? `${current.command === 'upload' ? 'flashing' : current.command === 'validate' ? 'checking' : 'compiling'} ${current.configuration}${(progress.uploadPercent ?? progress.compilePercent) !== null ? ` · ${progress.uploadPercent ?? progress.compilePercent}%` : ''}`
+          ? `${scene === 'upload' ? 'flashing' : scene === 'validate' ? 'checking' : scene === 'logs' ? 'listening to' : 'compiling'} ${current.configuration}${(scene === 'upload' ? progress.uploadPercent : progress.compilePercent) !== null && scene !== 'logs' ? ` · ${scene === 'upload' ? progress.uploadPercent : progress.compilePercent}%` : ''}`
           : current.outcome === 'ok'
             ? `✓ ${current.configuration} ${done.toLowerCase()}`
             : `✗ ${current.configuration} failed`
-      strip = {
-        columns,
-        state: {
-          outcome: current.outcome,
-          command: current.command,
-          percent: progress.uploadPercent ?? progress.compilePercent,
-          words,
-          endedAt: current.finishedAt,
-        },
-      }
-      chip = <Raster key="chip" columns={columns} rows={STRIP_ROWS} cells={chipFrame(Date.now(), strip.state, columns)} />
+      chip = stage({
+        outcome: current.outcome,
+        scene,
+        percent: scene === 'upload' ? progress.uploadPercent : progress.compilePercent,
+        words,
+        endedAt: current.finishedAt,
+      })
     } else {
       strip = null
     }
@@ -336,8 +355,11 @@ export const register: Register = on => {
 /** Repaints the chip while the build runs and briefly after, without redrawing the pane. */
 async function animate($: EngineInterface) {
   if (!isFxOn || !strip || isBlitting) return
+  // At rest (idle, or a finished build that has settled), a gentler frame rate.
   const ended = strip.state.endedAt
-  if (ended !== null && Date.now() - ended > AFTERGLOW_MS) return
+  const isResting = strip.state.outcome === 'idle' || (ended !== null && Date.now() - ended > 5_000)
+  frame = (frame + 1) % IDLE_EVERY
+  if (isResting && frame !== 0) return
   isBlitting = true
   try {
     const result = await $.ui.blit({ requestId: PANE, key: 'chip', cells: chipFrame(Date.now(), strip.state, strip.columns) })
@@ -398,6 +420,27 @@ function deviceMap(ui: ReturnType<EngineInterface['ui']['resolve']>, view: Confi
       })}
     </Box>
   )
+}
+
+/** What to draw wired to the chip at rest: the device's things, from its map, six at most. */
+function thingsOf(view: ConfigView): Thing[] {
+  const things: Thing[] = []
+  for (const row of view.rows) {
+    if (row.icon === '⚡') continue
+    const words = `${row.label} ${row.detail}`.toLowerCase()
+    const kind: Thing | null =
+      row.section === 'Lights' ? 'light'
+      : row.section === 'Sensors' ? (/humid|moist|water/.test(words) ? 'droplet' : /batt|adc|volt/.test(words) ? 'battery' : row.depth === 0 && view.rows.some(r => r.depth === 1 && r.section === 'Sensors' && view.rows.indexOf(r) === view.rows.indexOf(row) + 1) ? null : 'thermometer')
+      : row.section === 'Binary sensors' || row.section === 'Buttons' ? 'button'
+      : row.section === 'Switches' ? 'toggle'
+      : row.section === 'Fans' ? 'fan'
+      : row.section === 'Displays' ? 'screen'
+      : row.section === 'Climate' ? 'thermometer'
+      : ['Covers', 'Locks', 'Valves', 'Numbers', 'Selects', 'Media', 'Infrared and RF'].includes(row.section) ? 'gadget'
+      : null
+    if (kind) things.push(kind)
+  }
+  return things.slice(0, 6)
 }
 
 /** Maps the YAML and, against the last map of the same file, marks what changed. */

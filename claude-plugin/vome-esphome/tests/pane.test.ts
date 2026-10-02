@@ -287,3 +287,16 @@ test('a call Claude Code moves to the background is not a failure: the pane foll
   await clock.advance(1_600)
   expect((await ui.find({ text: /✓ Compiled in/ })) !== undefined).toBe(true)
 })
+
+test('at rest the terminal still has its stage: dreams with no device known, the device after a read', async ($, on) => {
+  base(on)
+  on('tool.call', { tool: tool('mcp__vome__esphome_get_config') }, () => ({ result: [{ type: 'text', text: LOFT + STAMP }], text: LOFT + STAMP }))
+  const terminal = () =>
+    $.ui.mount({ plugin: 'vome-esphome', surface: 'terminal', component: 'Pane', requestId: 'vome-esphome', props: PANE_PROPS, viewport: { columns: 160, rows: 60 } })
+  const before = await terminal()
+  expect((await before.find({ type: 'Raster', key: 'chip' })) !== undefined).toBe(true)
+  await $.tool.call({ tool: tool('mcp__vome__esphome_get_config'), configuration: 'loft.yaml' } as never)
+  const after = await terminal()
+  expect((await after.find({ type: 'Raster', key: 'chip' })) !== undefined).toBe(true)
+  expect((await after.find({ text: 'Loft' })) !== undefined).toBe(true)
+})

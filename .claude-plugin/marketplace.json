@@ -23,7 +23,7 @@
     {
       "name": "vome-esphome",
       "source": "./claude-plugin/vome-esphome",
-      "description": "A side pane for the ESPHome build Claude is running: phase, progress, live output with errors picked out, and the result.",
+      "description": "A side pane for ESPHome: a map of the device from its YAML, and the build Claude is running as it happens.",
       "category": "productivity"
     }
   ]

@@ -413,6 +413,14 @@ That needs Claude Code 2.1.275 or newer; its README has the two-command form
 for older versions, how to turn on updates, and the read-only tools to allow in
 auto mode.
 
+For ESPHome, [**vome-esphome**](claude-plugin/vome-esphome/README.md) adds a
+pane with a map of the device Claude is working on, drawn from its YAML, and
+the build it runs as it happens:
+
+```
+/plugin install vome-esphome --marketplace Vortitron/home-assistant-mcp
+```
+
 To connect Claude Code to a home through Vome without any of the config above,
 install [**vome-connect**](claude-plugin/vome-connect/README.md) from the same
 marketplace; it asks for one key, which the Vome app's Agent tab in Home

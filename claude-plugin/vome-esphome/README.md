@@ -1,20 +1,28 @@
-# vome-esphome: watch an ESPHome build in Claude Code
+# vome-esphome: ESPHome at the side of Claude Code
 
-A side pane that shows the ESPHome build Claude is running, while it runs. A
-compile or a flash takes minutes, and Claude's tool returns its output only at
-the end; this pane shows it as it happens:
+A side pane for the ESPHome device Claude is working on. Claude reads and
+edits YAML and runs builds that take minutes, and its tools answer only at the
+end; this pane shows the device and the build as they are:
 
-- **The phase and a progress bar**: reading the configuration, compiling (with
-  a count of files), linking, building the firmware image, uploading with its
-  percentage, done.
-- **The latest output**, with errors in red and warnings in yellow, and the
-  first error picked out if the build fails.
-- **The result**: "✓ Flashed in 2:41", or "✗ Failed after 1:02".
+- **A map of the device**, from its YAML, whenever Claude reads, saves or
+  builds a config: the board and framework, how it connects, its buses, every
+  entity with its pins, what reacts to what (`on press → light.toggle`), and
+  which pin does what. A pin used twice, or a strapping pin the chip boots
+  from, is flagged. After a save, what it added, changed or removed is lit for
+  a few seconds. Passwords and keys in the YAML are never shown.
+- **The build as it runs**: the phase and a progress bar (compiling with its
+  percentage, linking, uploading), the latest two lines of output with errors
+  in red and warnings in yellow, and the result: "✓ Flashed in 2:41", or
+  "✗ Failed after 1:02" with the first error. Press **l** for the whole log.
 - **Your devices**, after Claude lists them, with the ones that have newer
   firmware waiting marked ↑.
-- **A chip on the bench**, in the terminal: data streams into it while the
-  build runs, its LED lights green when the flash succeeds, and a failed one
-  lets a little smoke out. Press **b** to turn it off.
+- **A chip on the bench**, in the terminal, in round dots. Compiling is a
+  forge: cogs turn and spark, object files fall onto the growing firmware.
+  Flashing sends it to the chip in glittering whooshes. A good build ends in
+  fireworks, a failed one in smoke. At rest the device's own things hang off
+  the chip (a bulb glowing, a thermometer creeping, a button blinking), and
+  with no device known it sleeps and dreams of some. Press **b** to turn it
+  off.
 
 The pane only reads. It never starts a build: Claude does, with its own tool
 calls, which you approve as usual.
@@ -36,31 +44,39 @@ from the Vome app's Agent tab, no sign-up.
 **3. Ask Claude to build something**, for example *"Update the living room
 sensor's firmware"*. The pane opens when the build starts.
 
-## Allow its read (auto mode)
+## Allow its reads (auto mode)
 
-The pane reads the build's progress in the background with the MCP's
-read-only `esphome_activity` tool. In auto mode, Claude Code refuses
-background calls that no request of yours is behind, unless they're allowed by
-name; the pane then shows the exact line to add and where. Under your server's
-name, for example:
+The pane reads in the background with two of the MCP's read-only tools: the
+build's progress (`esphome_activity`) and, when Claude builds a device it has
+not read, its YAML for the map (`esphome_get_config`). In auto mode, Claude
+Code refuses background calls that no request of yours is behind, unless
+they're allowed by name; the pane then shows the exact lines to add and where.
+Under your server's name, for example:
 
 ```json
-{ "permissions": { "allow": ["mcp__vome__esphome_activity"] } }
+{ "permissions": { "allow": ["mcp__vome__esphome_activity", "mcp__vome__esphome_get_config"] } }
 ```
 
-With `vome-connect` the server is `plugin_vome-connect_vome`, so the line is
-`mcp__plugin_vome-connect_vome__esphome_activity`. Without it, the pane still
-shows the elapsed time, and the output once the build finishes.
+With `vome-connect` the server is `plugin_vome-connect_vome`, so the lines are
+`mcp__plugin_vome-connect_vome__esphome_activity` and
+`mcp__plugin_vome-connect_vome__esphome_get_config`. Without them, the pane
+still shows the elapsed time, the map of any config Claude reads, and the
+output once the build finishes.
 
 ## Keys
 
 | | |
 | --- | --- |
 | `/esphome` | open the pane |
+| **l** | the whole build log, or back to the map and the latest lines |
 | **b** | the chip animation off or on (remembered) |
+
+If another pane is in front, the ESPHome tab's title says how the build is
+going (`ESPHome · 45%`, `ESPHome ✓`).
 
 ## Privacy
 
 The pane reads only from your own MCP server, through the connection Claude
-Code already has, and only what the build commands Claude ran have printed.
+Code already has: what the build commands Claude ran have printed, and the
+YAML of the device being built.
 Nothing is sent anywhere else.

@@ -57,6 +57,17 @@ test('a read auto mode refuses becomes the exact allow lines for that server, a 
   expect(lines).toContain('"mcp__ha-home__ha_get_automation"')
   expect((await ui.find({ type: 'Markdown', text: /file:\/\/\/home\/someone\/\.claude\/settings\.json/ })) !== undefined).toBe(true)
 
+  // It takes the pane: the tree is not drawn behind it, and it quotes what Claude Code said.
+  expect((await ui.find({ text: 'WHEN' })) === undefined).toBe(true)
+  expect((await ui.find({ text: /Claude Code said: .*gave no verdict/ })) !== undefined).toBe(true)
+
   await ui.press({ key: 'copy-rules' })
   expect(copied[0]).toBe(lines)
+
+  // Dismissed, the pane is back, with h to bring the help back.
+  await ui.press({ key: 'dismiss' })
+  expect((await ui.find({ text: 'WHEN' })) !== undefined).toBe(true)
+  expect((await ui.find({ type: 'Code' })) === undefined).toBe(true)
+  await ui.press({ key: 'help' })
+  expect((await ui.find({ type: 'Code' })) !== undefined).toBe(true)
 })

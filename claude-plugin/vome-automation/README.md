@@ -77,9 +77,10 @@ Add them to `~/.claude/settings.json` (every project) or the project's
 }
 ```
 
-If you skip this, the pane says which read was refused and shows these exact
-lines for your server, with a button to copy them and a link to your
-`settings.json`.
+If you skip this, the pane turns into a "needs permission" screen the first
+time a read is refused. It names the read, shows these exact lines for your
+server with a button to copy them, links your `settings.json`, and quotes
+what Claude Code said. **d** dismisses it and **h** brings it back.
 
 Replace `vome` with your server's name, for example
 `mcp__home-assistant__ha_get_trace` for a server named `home-assistant`. The

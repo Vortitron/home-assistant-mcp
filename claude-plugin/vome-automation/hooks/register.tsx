@@ -59,6 +59,8 @@ let lastPoll = 0
 let hasToldNarrow = false
 let lastLogged = ''
 let isBlocked = false
+/** The note line holds an error, which the next read that works should take away. */
+let isNoteAnError = false
 /** Where this person's Claude Code settings live, for the link when auto mode refuses a read. */
 let settingsFile = '~/.claude/settings.json'
 // The animation's own bookkeeping: what plays, where it is mounted, the fade.
@@ -85,6 +87,10 @@ export const register: Register = on => {
     settingsFile = `${configDir.replace(/\/+$/, '')}/settings.json`
     $.clock.every(TICK_MS, () => void tick($))
     isFxOn = (await $.store.get('fxOn')) !== false
+    // State outlives a reload, so a HooksError an older version wrote would sit in the note
+    // line forever: start clean, and let the next read say again if something is wrong.
+    await $.state.set(note, null)
+    await $.state.set(blocked, null)
     await $.state.set(fxOn, isFxOn)
     $.clock.every(FRAME_MS, () => void animate($))
 
@@ -219,24 +225,68 @@ export const register: Register = on => {
     const isBuilding = (await $.state.get(building)).value ?? false
     const refusal = (await $.state.get(blocked)).value ?? null
 
-    // Below everything, so the tree does not move: what to add when auto mode refuses a read.
-    const rules = refusal ? READ_TOOLS.map(tool => `"mcp__${refusal.server}__${tool}"`).join(',\n') : ''
-    const help = refusal ? (
-      <Box flexDirection="column" marginTop={1}>
-        <Text color="warning">
-          Auto mode refused the pane's read of {refusal.tool}. Allow its read-only tools by adding these to
-          permissions.allow:
-        </Text>
-        <Code source={rules} />
-        <Markdown
-          text={`In [${settingsFile}](file://${settingsFile}) (every project), or with \`/permissions\` → Allow. Then press **r**. [Why it needs them](${README_URL})`}
-        />
-        <Box flexDirection="row" gap={2}>
-          <Button key="copy-rules" hotkey="c" onPress={press => $.ui.copy({ text: rules, surface: press.surface })}>
-            Copy the lines
-          </Button>
+    // A refused read takes the whole pane until dismissed: what to add and where, over everything,
+    // rather than a HooksError in the note line that names neither.
+    if (refusal && !refusal.isDismissed) {
+      fxSite = null
+      const rules = READ_TOOLS.map(tool => `"mcp__${refusal.server}__${tool}"`).join(',\n')
+      return (
+        <Box flexDirection="column" borderStyle="round" borderColor="warning" paddingX={1}>
+          <Text bold color="warning">
+            The automation pane needs permission to read
+          </Text>
+          <Text wrap="wrap">
+            Auto mode refused its background read of {refusal.tool} on the {refusal.server} server. Claude Code refuses
+            reads nobody asked for unless they are allowed by name.
+          </Text>
+          <Box marginTop={1}>
+            <Text wrap="wrap">Add these lines to permissions.allow in</Text>
+          </Box>
+          <Markdown text={`[${settingsFile}](file://${settingsFile})`} />
+          <Code source={rules} />
+          <Text dimColor wrap="wrap">
+            Or run /permissions and choose Allow for each. They only read: an automation and its recorded runs.
+          </Text>
+          <Box marginTop={1}>
+            <Text dimColor wrap="wrap">
+              Claude Code said: {compact(refusal.error, 300)}
+            </Text>
+          </Box>
+          <Box flexDirection="row" gap={2} marginTop={1}>
+            <Button
+              key="copy-rules"
+              hotkey="c"
+              variant="primary"
+              autoFocus
+              onPress={press => $.ui.copy({ text: rules, surface: press.surface })}
+            >
+              Copy the lines
+            </Button>
+            <Button
+              key="retry"
+              hotkey="r"
+              onPress={async () => {
+                isBlocked = false
+                await $.state.set(blocked, null)
+                await $.state.set(note, null)
+                await $.state.set(pending, { run: true })
+              }}
+            >
+              Try again
+            </Button>
+            <Button key="dismiss" hotkey="d" role="dismiss" onPress={() => $.state.set(blocked, { ...refusal, isDismissed: true })}>
+              Dismiss
+            </Button>
+          </Box>
+          <Link href={README_URL}>Why the pane needs these</Link>
         </Box>
-      </Box>
+      )
+    }
+    // Dismissed: the pane as usual, its note line saying how to get the help back.
+    const showHelp = refusal ? (
+      <Button key="help" hotkey="h" dimColor onPress={() => $.state.set(blocked, { ...refusal, isDismissed: false })}>
+        What to allow
+      </Button>
     ) : null
 
     // While an interstitial plays it takes the header's first four lines; the swim (the intro, or
@@ -264,7 +314,7 @@ export const register: Register = on => {
           {swimStrip ?? sceneStrip}
           <Text dimColor>No automation yet. It appears here when one is read or saved through Vome, or with /automation &lt;id&gt;.</Text>
           {message ? <Text color="warning">{message}</Text> : null}
-          {help}
+          {showHelp}
         </Box>
       )
     }
@@ -351,6 +401,7 @@ export const register: Register = on => {
           >
             {watching ? 'Stop watching' : 'Watch for runs'}
           </Button>
+          {showHelp}
           <Button
             key="bulbs"
             hotkey="b"
@@ -368,7 +419,6 @@ export const register: Register = on => {
           {url ? <Link href={`${url}/config/automation/edit/${encodeURIComponent(current.id)}`}>Open in Home Assistant</Link> : null}
         </Box>
         <Text dimColor>● ran  ✗ false or error  ○ not reached  + added  ~ changed  − removed</Text>
-        {help}
       </Box>
     )
   })
@@ -615,6 +665,7 @@ async function tick($: EngineInterface) {
       lastLogged = text
       $.ui.log(text)
     }
+    isNoteAnError = true
     await $.state.set(note, compact(text, 400))
   } finally {
     isBusy = false
@@ -701,16 +752,17 @@ async function callVome($: EngineInterface, server: string, tool: string, args: 
     // Auto mode refuses a background read nobody asked for unless it is allowed by name. Say so
     // where it shows, with the exact lines for this server, rather than as a raw HooksError. Its
     // wording differs between builds, so only "auto mode" is relied on; server and tool are ours.
-    if (/auto mode/i.test(String(error))) {
+    if (/auto mode|classifier|permission|denied|not allowed/i.test(String(error))) {
       isBlocked = true
-      await $.state.set(blocked, { server, tool })
-      await $.state.set(note, `Auto mode refused the pane's read of ${tool}: allow it below.`)
+      await $.state.set(blocked, { server, tool, error: String(error), isDismissed: false })
+      await $.state.set(note, `A read of ${tool} was refused: press h for what to allow.`)
       throw new RefusedRead(tool)
     }
     throw new Error(`${tool}: ${String(error)}`)
   }
-  if (isBlocked) {
+  if (isBlocked || isNoteAnError) {
     isBlocked = false
+    isNoteAnError = false
     await $.state.set(blocked, null)
     await $.state.set(note, null)
   }

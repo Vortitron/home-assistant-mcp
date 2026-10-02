@@ -2,9 +2,13 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { EsphomeStreamCommand } from "../esphome/client.js";
 import { evaluateConfigWrite } from "../safety.js";
+import { summariseOutput } from "../esphome/summary.js";
 import { errorResult, jsonResult, runTool, textResult, type ToolContext } from "./helpers.js";
 
 const SECONDS_TO_MS = 1000;
+/** Lines kept from the end of a long build's output, and of a long log read. */
+const BUILD_TAIL = 60;
+const LOG_TAIL = 200;
 
 /**
  * Shared tail for the streaming build commands.
@@ -48,7 +52,7 @@ export function registerEsphomeTools(server: McpServer, ctx: ToolContext): void 
 	const runStream = async (
 		command: EsphomeStreamCommand,
 		configuration: string,
-		options: { port?: string; timeoutSeconds?: number; openEnded?: boolean } = {}
+		options: { port?: string; timeoutSeconds?: number; openEnded?: boolean; fullOutput?: boolean } = {}
 	) => {
 		const result = await ctx.esphome.runCommand({
 			command,
@@ -62,6 +66,10 @@ export function registerEsphomeTools(server: McpServer, ctx: ToolContext): void 
 		// done exactly what was asked.
 		const stoppedByTimeout = result.timedOut === true;
 		const success = stoppedByTimeout ? options.openEnded === true : result.exitCode === 0;
+		// A log read keeps more of its end: the recent lines are what was asked to be watched.
+		const summary = options.fullOutput
+			? null
+			: summariseOutput(result.output, command === "logs" ? LOG_TAIL : BUILD_TAIL);
 		return jsonResult({
 			command: result.command,
 			configuration: result.configuration,
@@ -69,7 +77,8 @@ export function registerEsphomeTools(server: McpServer, ctx: ToolContext): void 
 			success,
 			stopped: stoppedByTimeout ? "timeout" : "completed",
 			truncated: result.truncated,
-			output: result.output,
+			output: summary ? summary.output : result.output,
+			...(summary?.summarised ? { output_lines: summary.total_lines, output_summarised: true } : {}),
 			...(stoppedByTimeout && options.openEnded
 				? {
 						note:
@@ -236,13 +245,17 @@ export function registerEsphomeTools(server: McpServer, ctx: ToolContext): void 
 				STREAM_AVAILABILITY,
 			inputSchema: {
 				configuration: z.string().describe("Configuration filename, e.g. 'living-room.yaml'."),
-				timeout_seconds: z.number().int().positive().optional().describe("Override the command timeout.")
+				timeout_seconds: z.number().int().positive().optional().describe("Override the command timeout."),
+				full_output: z
+					.boolean()
+					.optional()
+					.describe("Return every line of output. By default a long output comes back summarised: all errors and warnings, memory use, and the last lines.")
 			},
 			annotations: { readOnlyHint: true, openWorldHint: true }
 		},
-		async ({ configuration, timeout_seconds }) =>
+		async ({ configuration, timeout_seconds, full_output }) =>
 			runTool(ctx.logger, "esphome_validate", async () =>
-				runStream("validate", configuration, { timeoutSeconds: timeout_seconds })
+				runStream("validate", configuration, { timeoutSeconds: timeout_seconds, fullOutput: full_output })
 			)
 	);
 
@@ -255,13 +268,17 @@ export function registerEsphomeTools(server: McpServer, ctx: ToolContext): void 
 				STREAM_AVAILABILITY,
 			inputSchema: {
 				configuration: z.string().describe("Configuration filename, e.g. 'living-room.yaml'."),
-				timeout_seconds: z.number().int().positive().optional().describe("Override the command timeout.")
+				timeout_seconds: z.number().int().positive().optional().describe("Override the command timeout."),
+				full_output: z
+					.boolean()
+					.optional()
+					.describe("Return every line of output. By default a long output comes back summarised: all errors and warnings, memory use, and the last lines.")
 			},
 			annotations: { readOnlyHint: false, openWorldHint: true }
 		},
-		async ({ configuration, timeout_seconds }) =>
+		async ({ configuration, timeout_seconds, full_output }) =>
 			runTool(ctx.logger, "esphome_compile", async () =>
-				runStream("compile", configuration, { timeoutSeconds: timeout_seconds })
+				runStream("compile", configuration, { timeoutSeconds: timeout_seconds, fullOutput: full_output })
 			)
 	);
 
@@ -276,11 +293,15 @@ export function registerEsphomeTools(server: McpServer, ctx: ToolContext): void 
 			inputSchema: {
 				configuration: z.string().describe("Configuration filename, e.g. 'living-room.yaml'."),
 				port: z.string().optional().describe("Device address (IP/hostname) or 'OTA'. Defaults to 'OTA'."),
-				timeout_seconds: z.number().int().positive().optional().describe("Override the command timeout.")
+				timeout_seconds: z.number().int().positive().optional().describe("Override the command timeout."),
+				full_output: z
+					.boolean()
+					.optional()
+					.describe("Return every line of output. By default a long output comes back summarised: all errors and warnings, memory use, and the last lines.")
 			},
 			annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true }
 		},
-		async ({ configuration, port, timeout_seconds }) =>
+		async ({ configuration, port, timeout_seconds, full_output }) =>
 			runTool(ctx.logger, "esphome_upload", async () => {
 				if (!ctx.instances.currentSafety().allowWrite) {
 					return errorResult(
@@ -294,7 +315,8 @@ export function registerEsphomeTools(server: McpServer, ctx: ToolContext): void 
 				// failed build never reaches the device.
 				return runStream("upload", configuration, {
 					port: port ?? "OTA",
-					timeoutSeconds: timeout_seconds
+					timeoutSeconds: timeout_seconds,
+					fullOutput: full_output
 				});
 			})
 	);
@@ -320,16 +342,21 @@ export function registerEsphomeTools(server: McpServer, ctx: ToolContext): void 
 					.int()
 					.positive()
 					.optional()
-					.describe("How long to capture logs for. Defaults to the standard command timeout.")
+					.describe("How long to capture logs for. Defaults to the standard command timeout."),
+				full_output: z
+					.boolean()
+					.optional()
+					.describe("Return every line of output. By default a long output comes back summarised: all errors and warnings, memory use, and the last lines.")
 			},
 			annotations: { readOnlyHint: true, openWorldHint: true }
 		},
-		async ({ configuration, port, timeout_seconds }) =>
+		async ({ configuration, port, timeout_seconds, full_output }) =>
 			runTool(ctx.logger, "esphome_logs", async () =>
 				runStream("logs", configuration, {
 					port: port ?? "OTA",
 					timeoutSeconds: timeout_seconds,
-					openEnded: true
+					openEnded: true,
+					fullOutput: full_output
 				})
 			)
 	);

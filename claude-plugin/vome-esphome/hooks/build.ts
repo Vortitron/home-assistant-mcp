@@ -50,6 +50,7 @@ export function kindOf(line: string): LineKind {
 
 /** Where a build is, from all its lines so far. */
 export function progressOf(lines: string[], command: string): Progress {
+  let mainTotal = 0
   const p: Progress = { phase: 'starting', compiled: 0, compilePercent: null, uploadPercent: null, ram: null, flash: null, errors: [], warnings: 0 }
   for (const line of lines) {
     const kind = kindOf(line)
@@ -63,9 +64,12 @@ export function progressOf(lines: string[], command: string): Progress {
       p.phase = higher(p.phase, 'compiling')
     }
     const step = /^\[\s*(\d+)\/(\d+)\]\s+(.*)/.exec(line)
-    if (step) {
+    // Near the end ESP-IDF builds the bootloader as a project of its own, counting "[1/110]" again:
+    // follow the main build's count (the largest total) so the bar does not drop from 99% to 1%.
+    if (step && Number(step[2]) >= mainTotal) {
       const done = Number(step[1])
       const total = Number(step[2])
+      mainTotal = total
       if (total > 0) p.compilePercent = Math.min(100, Math.round((done / total) * 100))
       p.compiled = done
       // Static libraries are linked all through the build; only the executable is the final link.

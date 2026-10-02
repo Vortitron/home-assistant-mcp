@@ -189,6 +189,7 @@ export const register: Register = on => {
           ? `✓ ${done} in ${took}`
           : `✗ Failed after ${took}`
     const isUploading = current.outcome === 'running' && progress.uploadPercent !== null
+    const isCompiling = current.outcome === 'running' && !isUploading && progress.compilePercent !== null
     const tail = current.lines.filter(line => current.command === 'logs' || kindOf(line) !== 'debug').slice(-rows)
 
     // The chip on the bench: a Raster, which only the terminal draws. Not for a logs read.
@@ -198,13 +199,13 @@ export const register: Register = on => {
       const columns = Math.min(512, width)
       const words =
         current.outcome === 'running'
-          ? `${current.command === 'upload' ? 'flashing' : current.command === 'validate' ? 'checking' : 'compiling'} ${current.configuration}${progress.uploadPercent !== null ? ` · ${progress.uploadPercent}%` : ''}`
+          ? `${current.command === 'upload' ? 'flashing' : current.command === 'validate' ? 'checking' : 'compiling'} ${current.configuration}${(progress.uploadPercent ?? progress.compilePercent) !== null ? ` · ${progress.uploadPercent ?? progress.compilePercent}%` : ''}`
           : current.outcome === 'ok'
             ? `✓ ${current.configuration} ${done.toLowerCase()}`
             : `✗ ${current.configuration} failed`
       strip = {
         columns,
-        state: { outcome: current.outcome, percent: progress.uploadPercent, words, endedAt: current.finishedAt },
+        state: { outcome: current.outcome, percent: progress.uploadPercent ?? progress.compilePercent, words, endedAt: current.finishedAt },
       }
       chip = <Raster key="chip" columns={columns} rows={STRIP_ROWS} cells={chipFrame(Date.now(), strip.state, columns)} />
     } else {
@@ -223,6 +224,10 @@ export const register: Register = on => {
         {isUploading ? (
           <Text color="suggestion">
             {bar(progress.uploadPercent ?? 0, Math.min(40, width - 8))} {progress.uploadPercent}%
+          </Text>
+        ) : isCompiling ? (
+          <Text color="suggestion">
+            {bar(progress.compilePercent ?? 0, Math.min(40, width - 8))} {progress.compilePercent}%
           </Text>
         ) : current.outcome === 'running' ? (
           <Text color="suggestion">{busy(Date.now(), Math.min(40, width - 8))}</Text>

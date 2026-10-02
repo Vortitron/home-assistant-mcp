@@ -39,4 +39,12 @@ describe("summariseOutput", () => {
 		const output = compileOutput(300, ["INFO Done, 0 errors"]);
 		expect(summariseOutput(output, 60).output).not.toContain("── errors and warnings ──");
 	});
+
+	it("reads colour codes the stream sends as text", () => {
+		// What the dashboard really sends: `\\033[32m` as characters, not an escape.
+		const output = compileOutput(300, ["\\033[33mWARNING something is deprecated\\033[0m"]);
+		const summary = summariseOutput(output, 60).output;
+		expect(summary).toContain("WARNING something is deprecated");
+		expect(summary).not.toContain("\\033");
+	});
 });

@@ -19,8 +19,9 @@ export interface OutputSummary {
 const WHOLE_UP_TO = 150;
 const KEEP_ISSUES = 60;
 
-// Terminal colour codes; built from the escape character's code, since lint refuses it raw.
-const ANSI = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*[A-Za-z]`, "g");
+// Terminal colour codes, real or written out as text (the dashboard's stream sends `\033[32m`
+// as characters). The escape character is built from its code, since lint refuses it raw.
+const ANSI = new RegExp(`(${String.fromCharCode(27)}|\\\\033|\\\\x1b|\\\\u001b)\\[[0-9;]*[A-Za-z]`, "g");
 const ISSUE = /\[[EW]\]|^(ERROR|WARNING)\b|\b(error|warning):|\*\*\* \[|\bFAILED\b/i;
 const MILESTONE = /^(RAM|Flash):\s|Successfully (compiled|uploaded)|OTA successful|Configuration is valid|^INFO (Reading|Uploading|Successfully)/;
 

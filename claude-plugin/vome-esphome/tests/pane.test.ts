@@ -139,3 +139,30 @@ test('when auto mode refuses the progress read, the pane gives the exact line to
   await call
   expect((await ui.find({ text: /✓ Compiled in/ })) !== undefined).toBe(true)
 })
+
+test('real ESP-IDF output: colour codes sent as text, and ninja steps as a percentage', async ($, on) => {
+  const clock = mock.clock(on)
+  base(on)
+  let finish: (value: ReturnType<typeof reply>) => void = () => undefined
+  on('tool.call', { tool: tool('mcp__vome-staging__esphome_compile') }, () => new Promise(resolve => (finish = resolve)))
+  on('mcp.call', () => {
+    // As chap-test2's dashboard really streamed it, 2 Oct 2026.
+    const lines = [
+      '\\033[32mINFO ESPHome 2026.9.1\\033[0m\n\n',
+      '\\033[32mINFO Compiling app... Build path: /data/build/vome-pane-test\\033[0m\n\n',
+      '[437/972] Building C object esp-idf/freertos/CMakeFiles/__idf_freertos.dir/port.c.obj\n',
+    ]
+    const text = JSON.stringify({ seq: 9, jobs: [{ job_id: 'j', command: 'compile', configuration: 'vome-pane-test.yaml', started: new Date().toISOString(), done: false, lines }] })
+    return { value: { content: [{ type: 'text', text: text + STAMP }], isError: false } }
+  })
+
+  await $.session.start({ source: 'startup', cwd: '/tmp' } as never)
+  const call = $.tool.call({ tool: tool('mcp__vome-staging__esphome_compile'), configuration: 'vome-pane-test.yaml' } as never)
+  await clock.advance(1_600)
+  const ui = await mount($)
+  expect((await ui.find({ text: /Compiling 45% \(437 steps\)/ })) !== undefined).toBe(true)
+  expect((await ui.find({ text: 'INFO ESPHome 2026.9.1' })) !== undefined).toBe(true)
+  expect((await ui.find({ text: /\\033/ })) === undefined).toBe(true)
+  finish(reply({ command: 'compile', configuration: 'vome-pane-test.yaml', exit_code: 0, success: true, stopped: 'completed', output: '' }))
+  await call
+})

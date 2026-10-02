@@ -7,7 +7,7 @@
 // RAM and Flash usage, and for a flash an "Uploading: [====   ] 45%" bar that
 // redraws itself with carriage returns.
 
-export type Phase = 'starting' | 'config' | 'compiling' | 'linking' | 'image' | 'uploading' | 'done' | 'failed'
+export type Phase = 'starting' | 'config' | 'setup' | 'compiling' | 'linking' | 'image' | 'uploading' | 'done' | 'failed'
 
 export type LineKind = 'error' | 'warning' | 'info' | 'debug' | 'plain'
 
@@ -15,6 +15,8 @@ export type Progress = {
   phase: Phase
   /** Source files compiled so far. */
   compiled: number
+  /** ESP-IDF's ninja counts its build steps ("[437/972] Building C object ..."), so a percentage is known. */
+  compilePercent: number | null
   /** Upload progress, 0 to 100, once uploading. */
   uploadPercent: number | null
   ram: string | null
@@ -23,7 +25,8 @@ export type Progress = {
   warnings: number
 }
 
-const ANSI = /\x1b\[[0-9;]*[A-Za-z]/g
+// Colour codes, real or written out as text: the dashboard's stream sends `\033[32m` as characters.
+const ANSI = /(\x1b|\\033|\\x1b|\\u001b)\[[0-9;]*[A-Za-z]/g
 
 /** Output chunks as display lines: colours removed, carriage-return redraws collapsed to their last state. */
 export function toLines(chunks: string[]): string[] {
@@ -47,18 +50,28 @@ export function kindOf(line: string): LineKind {
 
 /** Where a build is, from all its lines so far. */
 export function progressOf(lines: string[], command: string): Progress {
-  const p: Progress = { phase: 'starting', compiled: 0, uploadPercent: null, ram: null, flash: null, errors: [], warnings: 0 }
+  const p: Progress = { phase: 'starting', compiled: 0, compilePercent: null, uploadPercent: null, ram: null, flash: null, errors: [], warnings: 0 }
   for (const line of lines) {
     const kind = kindOf(line)
     if (kind === 'error') p.errors.push(line)
     if (kind === 'warning') p.warnings += 1
     if (/Reading configuration|Generating C\+\+ source|Configuration is valid/.test(line)) p.phase = higher(p.phase, 'config')
+    // A first build fetches and unpacks the toolchain before compiling anything.
+    if (/Downloading ESP-IDF|Installing ESP-IDF|Installing tools|ESP-IDF tool|^Extracting |platformio.*install/i.test(line)) p.phase = higher(p.phase, 'setup')
     if (/^Compiling .*\.o\b/.test(line)) {
       p.compiled += 1
       p.phase = higher(p.phase, 'compiling')
     }
-    if (/^Linking /.test(line)) p.phase = higher(p.phase, 'linking')
-    if (/^Building .*firmware\.(bin|elf|factory\.bin)|Successfully created .* image/i.test(line)) p.phase = higher(p.phase, 'image')
+    const step = /^\[\s*(\d+)\/(\d+)\]\s+(.*)/.exec(line)
+    if (step) {
+      const done = Number(step[1])
+      const total = Number(step[2])
+      if (total > 0) p.compilePercent = Math.min(100, Math.round((done / total) * 100))
+      p.compiled = done
+      p.phase = higher(p.phase, /^Linking/.test(step[3] ?? '') ? 'linking' : 'compiling')
+    }
+    if (/^Linking |Linking (C|CXX) executable/.test(line)) p.phase = higher(p.phase, 'linking')
+    if (/^Building .*firmware\.(bin|elf|factory\.bin)|Successfully created .* image|elf2image|Generated .*\.bin/i.test(line)) p.phase = higher(p.phase, 'image')
     const ram = /^RAM:\s+\[[^\]]*\]\s+([\d.]+%)/.exec(line)
     if (ram) p.ram = ram[1] ?? null
     const flash = /^Flash:\s+\[[^\]]*\]\s+([\d.]+%)/.exec(line)
@@ -74,7 +87,7 @@ export function progressOf(lines: string[], command: string): Progress {
   return p
 }
 
-const ORDER: Phase[] = ['starting', 'config', 'compiling', 'linking', 'image', 'uploading', 'done', 'failed']
+const ORDER: Phase[] = ['starting', 'config', 'setup', 'compiling', 'linking', 'image', 'uploading', 'done', 'failed']
 
 function higher(a: Phase, b: Phase): Phase {
   return ORDER.indexOf(b) > ORDER.indexOf(a) ? b : a
@@ -99,8 +112,12 @@ export function phaseWords(p: Progress, command: string): string {
       return command === 'logs' ? 'Connecting to the device' : 'Starting'
     case 'config':
       return command === 'validate' ? 'Checking the configuration' : 'Reading the configuration'
+    case 'setup':
+      return 'Setting up the toolchain (first build)'
     case 'compiling':
-      return `Compiling (${p.compiled} file${p.compiled === 1 ? '' : 's'})`
+      return p.compilePercent !== null
+        ? `Compiling ${p.compilePercent}% (${p.compiled} steps)`
+        : `Compiling (${p.compiled} file${p.compiled === 1 ? '' : 's'})`
     case 'linking':
       return 'Linking'
     case 'image':

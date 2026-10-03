@@ -1751,3 +1751,62 @@ describe("ha_camera_image", () => {
 		expect(result.content[0]).toMatchObject({ type: "image" });
 	});
 });
+
+describe("vome health", () => {
+	// GamlaBio's sensor on 3 Oct 2026, trimmed: the score is the state, the report is in the attributes.
+	const sensor = {
+		entity_id: "sensor.vome_vome_health_score",
+		state: "75",
+		attributes: {
+			unit_of_measurement: "/100",
+			summary: "GamlaBio is broadly in good order.",
+			generated_at: 1789385157,
+			categories: [{ id: "flapping", label: "Chatty devices", severity: "warn" }],
+			findings: [
+				{
+					id: "d9e72640",
+					category: "flapping",
+					severity: "warn",
+					title: "7 entities are flooding the recorder",
+					recommendation: "Exclude them from the recorder.",
+					entities: ["sensor.allrum_motion_motion_gate_2_energy"]
+				}
+			],
+			saved_to_account: true
+		}
+	};
+	const other = { entity_id: "sensor.kitchen_temperature", state: "21", attributes: { unit_of_measurement: "°C" } };
+
+	it("finds the score by what it carries, whatever the entity is called", async () => {
+		const server = buildHarness({ rest: { getStates: async () => [other, sensor] } as never });
+		const body = jsonOf(await server.call("vome_health_report"));
+		expect(body.found).toBe(true);
+		expect(body.entity_id).toBe("sensor.vome_vome_health_score");
+		expect(body.score).toBe(75);
+		expect(body.generated_at).toMatch(/^2026-/);
+		expect(body.findings[0].title).toBe("7 entities are flooding the recorder");
+	});
+
+	it("says how to get one when the home has none", async () => {
+		const server = buildHarness({ rest: { getStates: async () => [other] } as never });
+		const body = jsonOf(await server.call("vome_health_report"));
+		expect(body.found).toBe(false);
+		expect(body.note).toMatch(/vome_health_check/);
+	});
+
+	it("runs a check through the integration's own action, and only with write access", async () => {
+		const calls: string[] = [];
+		const rest = {
+			getStates: async () => [sensor],
+			callService: async (domain: string, service: string) => {
+				calls.push(`${domain}.${service}`);
+				return [];
+			}
+		} as never;
+		const refused = await buildHarness({ rest }).call("vome_health_check");
+		expect(refused.isError).toBe(true);
+		const body = jsonOf(await buildHarness({ env: { HA_ALLOW_WRITE: "true" }, rest }).call("vome_health_check"));
+		expect(calls).toEqual(["vomesync.health_score_run"]);
+		expect(body.previous_score).toBe(75);
+	});
+});

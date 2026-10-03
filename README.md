@@ -108,6 +108,8 @@ policy (see [Safety](#safety)).
 | `esphome_get_config` | Read a configuration's YAML. |
 | `esphome_save_config` | Write a configuration's YAML, whole: for a new file (write-gated). |
 | `esphome_edit_config` | Change part of a configuration in place with exact find-and-replace edits, so a long file is not resent (write-gated). |
+| `vome_health_report` | Vome's health score for the home and every finding, with severity, evidence, a recommendation and the entities involved. |
+| `vome_health_check` | Run a fresh health check, to re-score after fixes (write-gated). |
 | `esphome_validate` | Validate a configuration. |
 | `esphome_compile` | Compile firmware. |
 | `esphome_upload` | Compile + flash a device over the air; validates first (write-gated). |
@@ -413,6 +415,14 @@ a save changed and which steps the latest run took:
 That needs Claude Code 2.1.275 or newer; its README has the two-command form
 for older versions, how to turn on updates, and the read-only tools to allow in
 auto mode.
+
+For the home's health, [**vome-health**](claude-plugin/vome-health/README.md)
+shows Vome's score and what its check found, marked as Claude fixes each, and
+re-scored with a roll and fireworks:
+
+```
+/plugin install vome-health --marketplace Vortitron/home-assistant-mcp
+```
 
 For ESPHome, [**vome-esphome**](claude-plugin/vome-esphome/README.md) adds a
 pane with a map of the device Claude is working on, drawn from its YAML, and

@@ -21,6 +21,7 @@ import { registerHelperEntityTools } from "./helperEntities.js";
 import { registerConfigFileTools } from "./configFiles.js";
 import { registerHacsTools } from "./hacs.js";
 import { registerUserTools } from "./users.js";
+import { registerHealthTools } from "./health.js";
 
 /**
  * Registers every tool group on the given server.
@@ -52,4 +53,5 @@ export function registerAllTools(rawServer: McpServer, ctx: ToolContext): void {
 	registerConfigFileTools(server, ctx);
 	registerHacsTools(server, ctx);
 	registerUserTools(server, ctx);
+	registerHealthTools(server, ctx);
 }

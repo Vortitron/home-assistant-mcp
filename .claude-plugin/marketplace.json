@@ -27,6 +27,12 @@
       "category": "productivity"
     },
     {
+      "name": "vome-health",
+      "source": "./claude-plugin/vome-health",
+      "description": "A side pane for your Home Assistant's health: Vome's score and what its check found, marked as Claude fixes it, re-scored with a roll and fireworks.",
+      "category": "productivity"
+    },
+    {
       "name": "dont-panic",
       "source": {
         "source": "github",

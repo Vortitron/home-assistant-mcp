@@ -35,6 +35,7 @@ const CONFIG = {
           ],
         },
         { type: 'history-graph', title: 'Arousal', hours_to_show: 48, entities: [{ entity: 'sensor.housefly_arousal', name: 'HouseFly' }] },
+        { type: 'picture-entity', entity: 'camera.anasmotet_sydvast' },
       ],
     },
     { title: 'History', path: 'history', cards: [] },
@@ -78,7 +79,13 @@ function setup(on: On) {
     if (e.tool === 'ha_list_dashboards') return text({ dashboards: [{ url_path: 'lovelace', title: 'Overview' }, { url_path: 'claude-lights', title: 'Lights' }] })
     if (e.tool === 'ha_get_dashboard' && e.args.url_path === 'lovelace') return text({ url_path: 'lovelace', config: CONFIG })
     if (e.tool === 'ha_get_dashboard') return text({ url_path: e.args.url_path, config: { title: 'Lights', views: [{ title: 'Home', cards: [{ type: 'entities', title: 'Bulbs', entities: ['light.kitchen_2'] }] }] } })
+    if (e.tool === 'ha_get_history' && e.args.max_points) return text({ series: [{ entity_id: 'sensor.housefly_arousal', unit: null, points: [0.1, 0.4, 0.9, 0.3].map((v, i) => [`t${i}`, v]) }] })
     if (e.tool === 'ha_get_history') return text({ series: [[0.1, 0.4, 0.9, 0.3].map(v => ({ entity_id: 'sensor.housefly_arousal', state: String(v) }))] })
+    if (e.tool === 'ha_camera_frame') {
+      // A 4 x 2 frame: red on top, blue below.
+      const rgb = btoa(String.fromCharCode(...[255, 0, 0, 255, 0, 0, 255, 0, 0, 255, 0, 0, 0, 0, 255, 0, 0, 255, 0, 0, 255, 0, 0, 255]))
+      return text({ entity_id: e.args.entity_id, width: 4, height: 2, rgb })
+    }
     if (e.tool === 'ha_call_service') {
       if (e.args.domain === 'light') STATES['light.kitchen_2'] = { state: 'off', attributes: { friendly_name: 'Kitchen' } }
       // A socket whose device is slow: Home Assistant takes the call, nothing has changed yet.
@@ -197,4 +204,15 @@ test("the hourly limit pauses the reads and says so, keeping the last states", a
   await ui.press({ key: 'reload' })
   expect((await ui.find({ text: /hourly limit/ })) !== undefined).toBe(true)
   expect((await ui.find({ text: /not found/ })) === undefined).toBe(true)
+})
+
+test('a camera card is the camera\'s picture, in half blocks, in the terminal', async ($, on) => {
+  const calls = setup(on)
+  await $.session.start({ source: 'startup', cwd: '/tmp' } as never)
+  await $.tool.call({ tool: tool('mcp__vome__ha_get_dashboard'), url_path: 'lovelace' } as never)
+  const terminal = await $.ui.mount({ plugin: 'vome-dash', surface: 'terminal', component: 'Pane', requestId: 'vome-dash', props: PANE_PROPS, viewport: { columns: 160, rows: 80 } })
+  expect(calls.some(c => c.tool === 'ha_camera_frame' && c.args.entity_id === 'camera.anasmotet_sydvast')).toBe(true)
+  expect((await terminal.find({ type: 'Raster', key: 'frame-v0/c6' })) !== undefined).toBe(true)
+  // Charts ask for a few points, not thousands of states.
+  expect(calls.some(c => c.tool === 'ha_get_history' && typeof c.args.max_points === 'number')).toBe(true)
 })

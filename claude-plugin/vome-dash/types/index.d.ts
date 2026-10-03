@@ -40,6 +40,8 @@ declare module 'claude-code' {
       pending: Record<string, Pending>
       /** The dashboards sidebar, shown until one is picked. */
       sidebarOpen: boolean
+      /** Camera frames by card key: pixels to draw in half blocks. */
+      frames: Record<string, { width: number; height: number; rgb: string; at: number }>
       /** Auto mode refused one of the pane's calls: on which server, which tool. */
       blocked: { server: string; tool: string } | null
       note: string | null

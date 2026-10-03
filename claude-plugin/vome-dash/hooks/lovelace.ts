@@ -29,8 +29,12 @@ export type Card = {
   /** History graphs: hours shown, and the entities graphed. */
   hours: number | null
   children: Card[]
-  /** A card only Home Assistant can draw (custom:*, pictures, maps). */
+  /** A card only Home Assistant can draw (custom:*, maps). */
   isForeign: boolean
+  /** A picture card's camera, drawn from its frames. */
+  camera: string | null
+  /** Entities cards: whether the header has a switch for all of them (Home Assistant's default). */
+  headerToggle: boolean
 }
 
 export type View = { title: string; path: string | null; cards: Card[] }
@@ -55,7 +59,18 @@ export function viewsOf(config: unknown): View[] {
 
 function cardOf(card: Obj, key: string): Card {
   const type = str(card.type) ?? 'unknown'
-  const base: Card = { key, type, title: str(card.title) ?? str(card.name), rows: [], markdown: null, hours: null, children: [], isForeign: false }
+  const base: Card = {
+    key,
+    type,
+    title: str(card.title) ?? str(card.name),
+    rows: [],
+    markdown: null,
+    hours: null,
+    children: [],
+    isForeign: false,
+    camera: null,
+    headerToggle: card.show_header_toggle !== false,
+  }
   switch (type) {
     case 'vertical-stack':
     case 'horizontal-stack':
@@ -73,6 +88,13 @@ function cardOf(card: Obj, key: string): Card {
         hours: typeof card.hours_to_show === 'number' ? card.hours_to_show : 24,
         rows: (Array.isArray(card.entities) ? card.entities : []).map(rowOf).filter((row): row is Row => row !== null),
       }
+    case 'picture-entity':
+    case 'picture-glance':
+    case 'picture-elements': {
+      const camera = [str(card.camera_image), str(card.entity)].find(e => e?.startsWith('camera.')) ?? null
+      const named = (Array.isArray(card.entities) ? card.entities : []).map(e => (isObj(e) ? str(e.entity) : str(e))).filter((e): e is string => !!e)
+      return { ...base, camera, title: base.title ?? (camera ? null : base.title), rows: named.map(entity => ({ kind: 'entity' as const, entity, name: null })), isForeign: !camera }
+    }
     case 'button': {
       const entity = str(card.entity)
       const call = actionOf(card.tap_action, entity)
@@ -318,7 +340,7 @@ const MDI: Array<[RegExp, string]> = [
   [/weather-sunny|sun/, '🌞'],
   [/moon|night|sleep/, '🌙'],
   [/robot|auto/, '🤖'],
-  [/thermometer|temperature/, '🌡'],
+  [/thermometer|temperature/, '🌡️'],
 ]
 
 /** The picture an entity is drawn with: its own mdi icon, else what kind of thing it is. */
@@ -360,11 +382,11 @@ export function glyphFor(entity: string, attributes: Record<string, unknown>, ic
       return '🔘'
     case 'input_number':
     case 'number':
-      return '🎚'
+      return '🎚️'
     case 'binary_sensor':
       return /occupancy|motion|presence/.test(kind) ? '🚶' : /door|garage/.test(kind) ? '🚪' : /window/.test(kind) ? '🪟' : /smoke|heat/.test(kind) ? '🔥' : /moisture/.test(kind) ? '💧' : '🔵'
     case 'sensor':
-      return /temperature/.test(kind) ? '🌡' : /humidity|moisture/.test(kind) ? '💧' : /battery/.test(kind) ? '🔋' : /power|energy|current|voltage/.test(kind) ? '⚡' : /illuminance/.test(kind) ? '🌞' : /distance/.test(kind) ? '📏' : '📊'
+      return /temperature/.test(kind) ? '🌡️' : /humidity|moisture/.test(kind) ? '💧' : /battery/.test(kind) ? '🔋' : /power|energy|current|voltage/.test(kind) ? '⚡' : /illuminance/.test(kind) ? '🌞' : /distance/.test(kind) ? '📏' : '📊'
     default:
       return '🔵'
   }
@@ -388,4 +410,54 @@ export function glowFor(entity: string, state: string, attributes: Record<string
 export function lightColour(attributes: Record<string, unknown>): string {
   const rgb = Array.isArray(attributes.rgb_color) && attributes.rgb_color.length === 3 ? (attributes.rgb_color as number[]) : [255, 204, 102]
   return `#${rgb.map(c => Math.round(c).toString(16).padStart(2, '0')).join('')}`
+}
+
+
+/**
+ * A picture in half blocks for a Raster: two pixels a cell, the upper one the
+ * foreground of an upper half block and the lower one its background. `rgb` is
+ * 3 bytes a pixel, `width` x `height`; the cells are 12 bytes each (code point,
+ * foreground, background), base64, as a Raster takes them.
+ */
+export function halfBlocks(rgb: Uint8Array, width: number, height: number): { cells: string; columns: number; rows: number } {
+  const rows = Math.ceil(height / 2)
+  const bytes = new Uint8Array(width * rows * 12)
+  const view = new DataView(bytes.buffer)
+  const at = (x: number, y: number) => {
+    if (y >= height) return 0x000000
+    const i = (y * width + x) * 3
+    return ((rgb[i] ?? 0) << 16) | ((rgb[i + 1] ?? 0) << 8) | (rgb[i + 2] ?? 0)
+  }
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < width; c++) {
+      const cell = (r * width + c) * 12
+      view.setUint32(cell, 0x2580, true)
+      view.setUint32(cell + 4, at(c, r * 2), true)
+      view.setUint32(cell + 8, at(c, r * 2 + 1), true)
+    }
+  }
+  let out = ''
+  const A = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+  for (let i = 0; i < bytes.length; i += 3) {
+    const n = ((bytes[i] ?? 0) << 16) | ((bytes[i + 1] ?? 0) << 8) | (bytes[i + 2] ?? 0)
+    out += A[(n >> 18) & 63]! + A[(n >> 12) & 63]!
+    out += i + 1 < bytes.length ? A[(n >> 6) & 63]! : '='
+    out += i + 2 < bytes.length ? A[n & 63]! : '='
+  }
+  return { cells: out, columns: width, rows }
+}
+
+/** base64 to bytes, without a Buffer. */
+export function fromBase64(text: string): Uint8Array {
+  const A = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+  const clean = text.replace(/[^A-Za-z0-9+/]/g, '')
+  const out = new Uint8Array(Math.floor((clean.length * 3) / 4))
+  let o = 0
+  for (let i = 0; i < clean.length; i += 4) {
+    const n = (A.indexOf(clean[i]!) << 18) | (A.indexOf(clean[i + 1] ?? 'A') << 12) | (A.indexOf(clean[i + 2] ?? 'A') << 6) | A.indexOf(clean[i + 3] ?? 'A')
+    if (o < out.length) out[o++] = (n >> 16) & 255
+    if (o < out.length) out[o++] = (n >> 8) & 255
+    if (o < out.length) out[o++] = n & 255
+  }
+  return out
 }

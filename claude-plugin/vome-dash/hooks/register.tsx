@@ -13,7 +13,7 @@
 import type { EngineInterface, Register, RenderChildren } from 'claude-code'
 
 import type { Dash, Live, Pending } from '../types'
-import { brailleChart, changedCards, entitiesOf, glowFor, glyphFor, lightColour, stepFor, toggleFor, viewsOf } from './lovelace'
+import { brailleChart, changedCards, entitiesOf, fromBase64, glowFor, glyphFor, halfBlocks, lightColour, stepFor, toggleFor, viewsOf } from './lovelace'
 import type { Card, Row, ServiceCall, View } from './lovelace'
 
 const PANE = 'vome-dash'
@@ -41,6 +41,9 @@ const confirm = { plugin: 'vome-dash', key: 'confirm' } as const
 const choices = { plugin: 'vome-dash', key: 'choices' } as const
 const pending = { plugin: 'vome-dash', key: 'pending' } as const
 const sidebarOpen = { plugin: 'vome-dash', key: 'sidebarOpen' } as const
+const frames = { plugin: 'vome-dash', key: 'frames' } as const
+/** A camera's frame is fetched this often while it is on show. */
+const FRAME_EVERY_MS = 30_000
 /** How long a press waits to see its device change, how often it looks, how long the outcome stays. */
 const WATCH_MS = 8_000
 /** After a press, the device is looked at this long after it, then no more. */
@@ -54,6 +57,12 @@ const note = { plugin: 'vome-dash', key: 'note' } as const
 let isPolling = false
 /** Reads paused until then: the hourly limit was hit. */
 let pausedUntil = 0
+let lastFrames = 0
+/** The card width last drawn, for the size of camera frames and the points in a chart. */
+let lastCardWidth = 40
+/** The MCP has no ha_camera_frame, or no max_points on ha_get_history: ask the older way. */
+let hasFrames = true
+let hasMaxPoints = true
 let lastTemplates = 0
 let lastHistory = 0
 let settingsFile = '~/.claude/settings.json'
@@ -121,6 +130,7 @@ export const register: Register = on => {
     const message = (await $.state.get(note)).value ?? null
     const presses = (await $.state.get(pending)).value ?? {}
     const isMenuOpen = (await $.state.get(sidebarOpen)).value ?? false
+    const pictures = (await $.state.get(frames)).value ?? {}
     const width = Math.max(30, e.props.bodyColumns)
     const isLit = (key: string) => lighting !== null && Date.now() - lighting.at < LIT_MS && lighting.keys.some(k => key === k || key.startsWith(`${k}/`))
 
@@ -213,6 +223,7 @@ export const register: Register = on => {
     // Columns as Home Assistant's desktop layout has them: as many as fit, cards stacked in each.
     const columns = mainWidth >= 120 ? 3 : mainWidth >= 72 ? 2 : 1
     const cardWidth = columns > 1 ? Math.floor((mainWidth - (columns - 1)) / columns) : mainWidth
+    lastCardWidth = cardWidth
     /** What a control's press is doing, for the row it is on. */
     const pressOf = (prefix: string): Pending | undefined =>
       Object.entries(presses)
@@ -258,12 +269,20 @@ export const register: Register = on => {
       // A light that is on glows in its own colour, as brightly as it is lit.
       const glow = glowFor(row.entity, state, attributes)
       const isLight = row.entity.startsWith('light.') && isOn
+      // A slider's position, as Home Assistant draws its bar.
+      const min = typeof attributes.min === 'number' ? attributes.min : null
+      const max = typeof attributes.max === 'number' ? attributes.max : null
+      const isSlider = /^(input_number|number)\./.test(row.entity) && min !== null && max !== null && max > min
+      const slider = isSlider ? sliderBar((Number(state) - min!) / (max! - min!), 8) : null
       return (
-        <Box flexDirection="row" justifyContent="space-between" backgroundColor={glow ?? undefined}>
-          <Text wrap="truncate-end" backgroundColor={glow ?? undefined}>
-            {glyphFor(row.entity, attributes, row.icon)} <Text bold={isLight}>{name}</Text>
-          </Text>
-          <Box flexDirection="row" gap={1}>
+        <Box flexDirection="row" backgroundColor={glow ?? undefined}>
+          <Box flexGrow={1} flexShrink={1} minWidth={4} overflow="hidden">
+            <Text wrap="truncate-end" backgroundColor={glow ?? undefined}>
+              {glyphFor(row.entity, attributes, row.icon)} <Text bold={isLight}>{name}</Text>
+            </Text>
+          </Box>
+          <Box flexDirection="row" gap={1} flexShrink={0}>
+            {slider ? <Text color="warning">{slider}</Text> : null}
             {pressNote(going)}
             <Text
               color={isFresh ? 'success' : state === 'unavailable' ? 'error' : isLight ? lightColour(attributes) : isOn ? 'warning' : undefined}
@@ -284,8 +303,8 @@ export const register: Register = on => {
               </Button>
             ) : null}
             {toggle && toggle.service === 'toggle' ? (
-              <Button key={`${key}/toggle`} onPress={() => press(`${key}/toggle`, toggle)}>
-                {isOn ? 'Off' : 'On'}
+              <Button key={`${key}/toggle`} dimColor={!isOn} onPress={() => press(`${key}/toggle`, toggle)}>
+                {isOn ? '━━●' : '○━━'}
               </Button>
             ) : toggle ? (
               <Button key={`${key}/run`} onPress={() => press(`${key}/run`, toggle)}>
@@ -297,12 +316,46 @@ export const register: Register = on => {
       )
     }
 
+    /** An entities card's header switch: all on if any is off, else all off, as Home Assistant's does. */
+    const headerToggle = (card: Card): RenderChildren => {
+      if (card.type !== 'entities' || !card.headerToggle) return null
+      const ids = card.rows.flatMap(row => (row.kind === 'entity' && toggleFor(row.entity)?.service === 'toggle' ? [row.entity] : []))
+      if (ids.length < 2) return null
+      const anyOff = ids.some(id => live[id]?.state !== 'on')
+      const key = `${card.key}/all`
+      return (
+        <Box flexDirection="row" gap={1} flexShrink={0}>
+          {pressNote(pressOf(key))}
+          <Button
+            key={key}
+            dimColor={anyOff}
+            onPress={() => press(key, { domain: 'homeassistant', service: anyOff ? 'turn_on' : 'turn_off', target: { entity_id: ids } })}
+          >
+            {anyOff ? '○━━' : '━━●'}
+          </Button>
+        </Box>
+      )
+    }
+
     const drawCard = (card: Card, cardKey: string): RenderChildren => {
       const titleColour = isLit(card.key) ? 'suggestion' : undefined
       const body: RenderChildren[] = []
       if (card.markdown !== null) {
         const text = texts[card.key] ?? card.markdown.replace(/\{%[\s\S]*?%\}|\{\{[\s\S]*?\}\}/g, '…')
         body.push(<Markdown text={text} />)
+      }
+      if (card.camera) {
+        // The camera's still in half blocks: two pixels a cell, in its own colours.
+        const frame = pictures[card.key]
+        const name = typeof live[card.camera]?.attributes.friendly_name === 'string' ? (live[card.camera]!.attributes.friendly_name as string) : card.camera
+        if (frame && e.surface === 'terminal') {
+          const { Raster } = $.ui.resolve(e)
+          const art = halfBlocks(fromBase64(frame.rgb), frame.width, frame.height)
+          body.push(<Raster key={`frame-${card.key}`} columns={art.columns} rows={art.rows} cells={art.cells} />)
+        } else {
+          body.push(<Text dimColor>{frame ? `📷 ${name}: the picture shows in a terminal` : `📷 ${name}: fetching…`}</Text>)
+        }
+        if (frame) body.push(<Text dimColor wrap="truncate-end">📷 {name} · {since(frame.at)}</Text>)
       }
       if (card.hours !== null) {
         for (const row of card.rows) {
@@ -345,16 +398,16 @@ export const register: Register = on => {
               const isOn = state === 'on'
               return (
                 <Box flexDirection="column" alignItems="center" width={12} backgroundColor={glowFor(row.entity, state, attributes) ?? undefined}>
-                  <Text>{glyphFor(row.entity, attributes, row.icon)}</Text>
                   <Text wrap="truncate-end" dimColor={!isOn}>
                     {name}
                   </Text>
+                  <Text>{glyphFor(row.entity, attributes, row.icon)}</Text>
                   <Text color={isOn ? 'warning' : undefined} dimColor={!isOn}>
                     {formatState(state)}
                   </Text>
                   {toggle && toggle.service === 'toggle' ? (
-                    <Button key={`${key}/toggle`} dimColor onPress={() => press(`${key}/toggle`, toggle)}>
-                      {isOn ? 'Off' : 'On'}
+                    <Button key={`${key}/toggle`} dimColor={!isOn} onPress={() => press(`${key}/toggle`, toggle)}>
+                      {isOn ? '━━●' : '○━━'}
                     </Button>
                   ) : null}
                   {pressNote(pressOf(key))}
@@ -392,9 +445,14 @@ export const register: Register = on => {
       return (
         <Box flexDirection="column" borderStyle="round" borderColor={titleColour ?? 'subtle'} paddingX={1} width={cardWidth}>
           {card.title ? (
-            <Text bold color={titleColour} wrap="truncate-end">
-              {card.title}
-            </Text>
+            <Box flexDirection="row">
+              <Box flexGrow={1} flexShrink={1} overflow="hidden">
+                <Text bold color={titleColour} wrap="truncate-end">
+                  {card.title}
+                </Text>
+              </Box>
+              {headerToggle(card)}
+            </Box>
           ) : null}
           {body}
         </Box>
@@ -615,6 +673,10 @@ async function poll($: EngineInterface, isNow = false) {
       lastHistory = Date.now()
       await readHistory($, current.server, cards)
     }
+    if (isNow || Date.now() - lastFrames > FRAME_EVERY_MS) {
+      lastFrames = Date.now()
+      await readFrames($, current.server, cards)
+    }
   } finally {
     isPolling = false
   }
@@ -680,10 +742,20 @@ async function readHistory($: EngineInterface, server: string, cards: Card[]) {
     const ids = card.rows.flatMap(row => (row.kind === 'entity' ? [row.entity] : []))
     if (ids.length === 0) continue
     const start = new Date(Date.now() - (card.hours ?? 24) * 3600_000).toISOString()
-    const text = await callMcp($, server, 'ha_get_history', { entity_ids: ids, start_time: start, minimal: true })
+    // As many points as the chart has dots across: a day of a sensor is thousands of states otherwise.
+    const points = Math.max(20, Math.min(400, (lastCardWidth - 4) * 2))
+    let text = hasMaxPoints ? await callMcp($, server, 'ha_get_history', { entity_ids: ids, start_time: start, minimal: true, max_points: points }, true) : null
+    if (text === null && hasMaxPoints) {
+      hasMaxPoints = false
+      text = await callMcp($, server, 'ha_get_history', { entity_ids: ids, start_time: start, minimal: true })
+    } else if (!hasMaxPoints) {
+      text = await callMcp($, server, 'ha_get_history', { entity_ids: ids, start_time: start, minimal: true })
+    }
     const body = text ? parseJson(text) : null
-    const lists = body && Array.isArray(body.series) ? (body.series as Record<string, unknown>[][]) : []
     const byEntity: Record<string, Array<number | string>> = {}
+    const compact = body && Array.isArray(body.series) ? (body.series as unknown[]).filter((s): s is { entity_id: string; points: Array<[string, number | string]> } => !!s && typeof s === 'object' && Array.isArray((s as { points?: unknown }).points)) : []
+    for (const one of compact) if (one.entity_id) byEntity[one.entity_id] = one.points.map(([, v]) => v)
+    const lists = compact.length === 0 && body && Array.isArray(body.series) ? (body.series as Record<string, unknown>[][]) : []
     lists.forEach((list, i) => {
       const id = typeof list[0]?.entity_id === 'string' ? (list[0].entity_id as string) : ids[i]
       if (!id) return
@@ -698,10 +770,11 @@ async function readHistory($: EngineInterface, server: string, cards: Card[]) {
 }
 
 /** One call from the pane; a refusal shows what to allow, any other failure a note. */
-async function callMcp($: EngineInterface, server: string, tool: string, args: Record<string, unknown>): Promise<string | null> {
+async function callMcp($: EngineInterface, server: string, tool: string, args: Record<string, unknown>, isQuiet = false): Promise<string | null> {
   try {
     const result = await $.mcp.call(server, tool, args)
     const text = result.content.map(block => block.text ?? '').join('\n')
+    if (result.isError && isQuiet) return null
     if (result.isError) {
       if (/\b429\b|rate.?limit|too many requests|exceeded/i.test(text)) await pause($)
       else await $.state.set(note, firstLine(text) ?? `${tool} failed.`)
@@ -718,6 +791,35 @@ async function callMcp($: EngineInterface, server: string, tool: string, args: R
     }
     return null
   }
+}
+
+/** Camera stills for the picture cards on show, as small grids of pixels to draw in half blocks. */
+async function readFrames($: EngineInterface, server: string, cards: Card[]) {
+  if (!hasFrames) return
+  const cameras: Card[] = []
+  const walk = (card: Card) => {
+    if (card.camera) cameras.push(card)
+    card.children.forEach(walk)
+  }
+  cards.forEach(walk)
+  if (cameras.length === 0) return
+  const before = (await $.state.get(frames)).value ?? {}
+  const next = { ...before }
+  // One pixel a cell across, two down: a cell is about twice as tall as it is wide.
+  const width = Math.max(16, Math.min(160, lastCardWidth - 4))
+  for (const card of cameras.slice(0, 4)) {
+    const text = await callMcp($, server, 'ha_camera_frame', { entity_id: card.camera, width, height: width }, true)
+    const body = text ? parseJson(text) : null
+    if (!body) {
+      hasFrames = !!text
+      if (!text) await $.state.set(note, 'Pictures need the MCP with ha_camera_frame, and a key with Cameras ticked.')
+      continue
+    }
+    if (typeof body.rgb === 'string' && typeof body.width === 'number' && typeof body.height === 'number') {
+      next[card.key] = { width: body.width, height: body.height, rgb: body.rgb, at: Date.now() }
+    }
+  }
+  await $.state.set(frames, next)
 }
 
 /** Reads refused for the hourly limit: pause them, keep what was last seen, and say so. */
@@ -761,6 +863,17 @@ async function dashServers($: EngineInterface): Promise<string[]> {
   return (await $.tool.list())
     .map(tool => /^mcp__(.+)__ha_get_dashboard$/.exec(tool.name)?.[1])
     .filter((server): server is string => !!server)
+}
+
+/** A slider's bar: filled to its position, a knob at the end. */
+function sliderBar(fraction: number, width: number): string {
+  const at = Math.round(Math.max(0, Math.min(1, fraction)) * (width - 1))
+  return '━'.repeat(at) + '●' + '─'.repeat(Math.max(0, width - 1 - at))
+}
+
+function since(at: number): string {
+  const s = Math.max(0, Math.round((Date.now() - at) / 1000))
+  return s < 90 ? `${s} s ago` : `${Math.round(s / 60)} min ago`
 }
 
 function formatState(state: string): string {

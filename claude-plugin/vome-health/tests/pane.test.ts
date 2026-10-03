@@ -97,3 +97,18 @@ test('a home with no score yet says how to get one', async ($, on) => {
   expect((await ui.find({ text: /No health score yet/ })) !== undefined).toBe(true)
   expect((await ui.find({ text: /vome_health_check runs a first check/ })) !== undefined).toBe(true)
 })
+
+test('a home with no score has a button to run the first check', async ($, on) => {
+  base(on)
+  on('tool.call', { tool: tool('mcp__vome__vome_health_report') }, () => reply({ found: false, note: 'No health score on this home yet.' }))
+  const asked: string[] = []
+  on('mcp.call', (_$, e) => {
+    asked.push(e.tool)
+    return { value: { content: [{ type: 'text', text: JSON.stringify({ started: true }) + STAMP }], isError: false } }
+  })
+  await $.tool.call({ tool: tool('mcp__vome__vome_health_report') } as never)
+  const ui = await mount($)
+  await ui.press({ key: 'first-check' })
+  expect(asked).toEqual(['vome_health_check'])
+  expect((await ui.find({ text: /^Checking… the score lands here/ })) !== undefined).toBe(true)
+})

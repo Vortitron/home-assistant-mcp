@@ -1,6 +1,6 @@
 {
   "name": "vome-health",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "A side pane for your Home Assistant's health: Vome's score out of 100 and what its check found, by severity with what to do, marked as Claude works on each, then a re-check rolls the score to the new one. Needs @vortitron/home-assistant-mcp with vome_health_report and the Vome integration.",
   "author": {
     "name": "Vortitron",

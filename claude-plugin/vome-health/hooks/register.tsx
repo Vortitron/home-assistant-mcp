@@ -43,6 +43,8 @@ let strip: { columns: number; state: StageState } | null = null
 let isFxOn = true
 let isBlitting = false
 let frame = 0
+/** The server the last report (or the lack of one) came from, for a first check from the empty pane. */
+let lastServer: string | null = null
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
@@ -185,6 +187,21 @@ export const register: Register = on => {
           {running ? <Text color="suggestion">Checking… the score lands here in a couple of minutes.</Text> : null}
           {message ? <Text color="warning" wrap="wrap">{message}</Text> : null}
           {help}
+          {!running ? (
+            <Box marginTop={1}>
+              <Button
+                key="first-check"
+                hotkey="r"
+                onPress={async () => {
+                  const server = lastServer ?? (await healthServers($))[0]
+                  if (server) await requestCheck($, server)
+                  else await $.state.set(note, 'No connected MCP server has vome_health_check: connect Home Assistant through Vome first.')
+                }}
+              >
+                Run the first check
+              </Button>
+            </Box>
+          ) : null}
         </Box>
       )
     }
@@ -303,6 +320,7 @@ export const register: Register = on => {
 
 /** A report from vome_health_report's reply; against the one before it, what the new check changed. */
 async function applyReport($: EngineInterface, server: string, raw: string) {
+  lastServer = server
   const body = parseJson(raw)
   if (!body) return
   if (body.found === false) {

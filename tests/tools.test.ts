@@ -1855,3 +1855,37 @@ describe("ha_get_history max_points", () => {
 		expect(body.series[0].points.length).toBe(120);
 	});
 });
+
+describe("ha_view_snapshot", () => {
+	it("answers a whole view in one call, and a failing part in its place", async () => {
+		let reads = 0;
+		const states = [
+			{ entity_id: "light.kitchen_2", state: "on", attributes: { brightness: 178 } },
+			{ entity_id: "sensor.kitchen_temperature", state: "21.03", attributes: { unit_of_measurement: "°C" } }
+		];
+		const rest = {
+			getStates: async () => {
+				reads += 1;
+				return states;
+			},
+			renderTemplate: async (t: string) => (t.includes("boom") ? Promise.reject(new Error("TemplateError")) : "Right now: forage"),
+			getHistory: async () => [[{ entity_id: "sensor.kitchen_temperature", state: "20", attributes: { unit_of_measurement: "°C" } }, { state: "22" }]],
+			getCameraImage: async () => Promise.reject(new Error("403: Cameras not ticked"))
+		} as never;
+		const body = jsonOf(
+			await buildHarness({ rest }).call("ha_view_snapshot", {
+				entity_ids: ["light.kitchen_2", "sensor.kitchen_temperature", "light.gone"],
+				templates: { md1: "{{ states('sensor.housefly_mode') }}", md2: "{{ boom }}" },
+				history: [{ key: "g1", entity_ids: ["sensor.kitchen_temperature"], hours: 12, max_points: 50 }],
+				frames: [{ key: "cam", entity_id: "camera.anasmotet_sydvast", width: 72, height: 72 }]
+			})
+		);
+		expect(reads).toBe(1);
+		expect(body.states["light.kitchen_2"].state).toBe("on");
+		expect(body.states["light.gone"]).toBe(null);
+		expect(body.templates.md1).toBe("Right now: forage");
+		expect(body.templates.md2.error).toMatch(/TemplateError/);
+		expect(body.history.g1[0].points.map((p: [string, number]) => p[1])).toEqual([20, 22]);
+		expect(body.frames.cam.error).toMatch(/Cameras/);
+	});
+});

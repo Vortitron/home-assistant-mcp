@@ -22,6 +22,7 @@ import { registerConfigFileTools } from "./configFiles.js";
 import { registerHacsTools } from "./hacs.js";
 import { registerUserTools } from "./users.js";
 import { registerHealthTools } from "./health.js";
+import { registerSnapshotTools } from "./snapshot.js";
 
 /**
  * Registers every tool group on the given server.
@@ -54,4 +55,5 @@ export function registerAllTools(rawServer: McpServer, ctx: ToolContext): void {
 	registerHacsTools(server, ctx);
 	registerUserTools(server, ctx);
 	registerHealthTools(server, ctx);
+	registerSnapshotTools(server, ctx);
 }

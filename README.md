@@ -59,6 +59,7 @@ policy (see [Safety](#safety)).
 | `ha_get_supervisor_log` | Add-on / Core / Supervisor / host logs (HAOS or Supervised). |
 | `ha_camera_image` | A camera's current still, as an image the agent can see. Via VomeHome the key needs Cameras ticked. |
 | `ha_camera_frame` | A camera still decoded and shrunk to a small grid of RGB pixels, for clients that draw pictures in text. |
+| `ha_view_snapshot` | Everything a dashboard view shows in one call: states, rendered templates, history in few points, camera frames. For dashboard clients. |
 | `ha_get_logbook` | Human-readable logbook entries. |
 | `ha_list_traces` | Recent automation/script runs and how each one stopped. |
 | `ha_get_trace` | Step-by-step detail for one run, with `failed_at` naming the blocking step. |

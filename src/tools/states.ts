@@ -13,6 +13,9 @@ function compactState(state: HaState): Record<string, unknown> {
 	};
 }
 
+
+/** From this many entities, ha_get_state reads every state once instead of each in turn. */
+const BULK_FROM = 2;
 export function registerStateTools(server: McpServer, ctx: ToolContext): void {
 	server.registerTool(
 		"ha_list_entities",
@@ -97,6 +100,18 @@ export function registerStateTools(server: McpServer, ctx: ToolContext): void {
 		},
 		async ({ entity_ids }) =>
 			runTool(ctx.logger, "ha_get_state", async () => {
+				// Several entities: one read of every state, not one request each. Vome rate-limits each
+				// endpoint per key (500 an hour), and a dashboard pane reading twenty entities one by one
+				// spent that in minutes, after which every entity read "not found" for the rest of the hour.
+				if (entity_ids.length > BULK_FROM) {
+					const all = new Map((await ctx.rest.getStates()).map((state) => [state.entity_id, state]));
+					return jsonResult({
+						entities: entity_ids.map((entityId) => {
+							const state = all.get(entityId);
+							return state ? { entity_id: entityId, found: true, state } : { entity_id: entityId, found: false, state: null };
+						})
+					});
+				}
 				const results = await Promise.all(
 					entity_ids.map(async (entityId) => {
 						try {

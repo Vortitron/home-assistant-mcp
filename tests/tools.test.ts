@@ -1810,3 +1810,26 @@ describe("vome health", () => {
 		expect(body.previous_score).toBe(75);
 	});
 });
+
+describe("ha_get_state", () => {
+	it("reads several entities with one request, not one each", async () => {
+		let single = 0;
+		let all = 0;
+		const states = ["light.a", "light.b", "light.c"].map((id) => ({ entity_id: id, state: "on", attributes: {} }));
+		const rest = {
+			getState: async () => {
+				single += 1;
+				return states[0];
+			},
+			getStates: async () => {
+				all += 1;
+				return states;
+			}
+		} as never;
+		const body = jsonOf(await buildHarness({ rest }).call("ha_get_state", { entity_ids: ["light.a", "light.b", "light.c", "light.gone"] }));
+		expect([single, all]).toEqual([0, 1]);
+		expect(body.entities.map((e: { found: boolean }) => e.found)).toEqual([true, true, true, false]);
+		jsonOf(await buildHarness({ rest }).call("ha_get_state", { entity_ids: ["light.a"] }));
+		expect(single).toBe(1);
+	});
+});

@@ -420,8 +420,11 @@ async function readStates($: EngineInterface, server: string, ids: string[]) {
   let isChanged = false
   for (const row of rows) {
     if (typeof row.entity_id !== 'string') continue
-    const state = row.state === null || row.state === undefined ? 'unknown' : String(row.state)
-    const attributes = row.attributes && typeof row.attributes === 'object' ? (row.attributes as Record<string, unknown>) : {}
+    // ha_get_state nests the whole state object under `state`: {entity_id, found, state: {state, attributes}}.
+    const held = row.state && typeof row.state === 'object' ? (row.state as Record<string, unknown>) : row
+    const value = held.state
+    const state = row.found === false ? 'not found' : value === null || value === undefined ? 'unknown' : typeof value === 'object' ? 'unknown' : String(value)
+    const attributes = held.attributes && typeof held.attributes === 'object' ? (held.attributes as Record<string, unknown>) : {}
     const was = before[row.entity_id]
     if (!was || was.state !== state || JSON.stringify(was.attributes) !== JSON.stringify(attributes)) isChanged = true
     next[row.entity_id] = { state, attributes, at: Date.now() }

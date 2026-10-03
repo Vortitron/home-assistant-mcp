@@ -66,7 +66,8 @@ function setup(on: On) {
     const text = (body: unknown) => ({ value: { content: [{ type: 'text', text: (typeof body === 'string' ? body : JSON.stringify(body)) + STAMP }], isError: false } })
     if (e.tool === 'ha_get_state') {
       const ids = e.args.entity_ids as string[]
-      return text({ entities: ids.map(id => ({ entity_id: id, found: true, ...(STATES[id] ?? { state: 'unknown', attributes: {} }) })) })
+      // The real shape: the whole state object nested under `state`.
+      return text({ entities: ids.map(id => ({ entity_id: id, found: true, state: { entity_id: id, ...(STATES[id] ?? { state: 'unknown', attributes: {} }) } })) })
     }
     if (e.tool === 'ha_render_template') return text('Right now: *forage*')
     if (e.tool === 'ha_get_history') return text({ series: [[0.1, 0.4, 0.9, 0.3].map(v => ({ entity_id: 'sensor.housefly_arousal', state: String(v) }))] })
@@ -90,6 +91,7 @@ test('a dashboard Claude reads appears working: live states, Markdown rendered b
   expect((await ui.find({ text: /forage/ })) !== undefined).toBe(true)
   expect((await ui.find({ text: /[▁▂▃▄▅▆▇█]{3,}/ })) !== undefined).toBe(true)
   expect((await ui.find({ text: /housefly-overlay · drawn by Home Assistant/ })) === undefined).toBe(true)
+  expect((await ui.find({ text: /object Object/ })) === undefined).toBe(true)
 })
 
 test('pressing a light turns it off through Home Assistant, and the pane reads it straight back', async ($, on) => {

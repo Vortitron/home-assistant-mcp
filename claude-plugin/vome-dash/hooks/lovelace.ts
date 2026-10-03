@@ -14,7 +14,7 @@ export type ServiceCall = {
 }
 
 export type Row =
-  | { kind: 'entity'; entity: string; name: string | null }
+  | { kind: 'entity'; entity: string; name: string | null; icon?: string | null }
   | { kind: 'button'; name: string; icon: string | null; call: ServiceCall | null; entity: string | null }
   | { kind: 'text'; text: string }
 
@@ -89,7 +89,7 @@ function cardOf(card: Obj, key: string): Card {
     case 'alarm-panel':
     case 'weather-forecast': {
       const entity = str(card.entity)
-      return { ...base, rows: entity ? [{ kind: 'entity', entity, name: str(card.name) }] : [] }
+      return { ...base, rows: entity ? [{ kind: 'entity', entity, name: str(card.name), icon: str(card.icon) }] : [] }
     }
     default: {
       // A card the pane cannot draw: keep whatever entities it names.
@@ -108,7 +108,7 @@ function rowOf(row: unknown): Row | null {
   }
   if (row.type === 'section' || row.type === 'divider') return str(row.label) ? { kind: 'text', text: str(row.label)! } : null
   if (row.type === 'text' || row.type === 'attribute') return str(row.name) ? { kind: 'text', text: str(row.name)! } : null
-  return entity ? { kind: 'entity', entity, name: str(row.name) } : null
+  return entity ? { kind: 'entity', entity, name: str(row.name), icon: str(row.icon) } : null
 }
 
 /** A tap_action as the service call it makes; navigation, more-info and URLs are Home Assistant's own. */
@@ -284,4 +284,108 @@ export function brailleChart(values: number[], width: number, rows: number): str
     last = y
   })
   return cells.map(row => row.map(bits => String.fromCharCode(0x2800 + bits)).join(''))
+}
+
+/** Home Assistant's mdi icons as emoji that draw two cells wide everywhere (no variation selectors). */
+const MDI: Array<[RegExp, string]> = [
+  [/lightbulb|lamp|ceiling-light|light-recessed|led/, '💡'],
+  [/power-socket|power-plug|outlet/, '🔌'],
+  [/water|humidity|drop/, '💧'],
+  [/motion|walk|run|human-male|account-arrow/, '🚶'],
+  [/door/, '🚪'],
+  [/window|blinds|curtain|shutter/, '🪟'],
+  [/fan/, '🌀'],
+  [/lock-open/, '🔓'],
+  [/lock/, '🔒'],
+  [/garage|car/, '🚗'],
+  [/home|house/, '🏠'],
+  [/account|person|human|face/, '👤'],
+  [/battery/, '🔋'],
+  [/fire|radiator|heat|flame/, '🔥'],
+  [/snowflake|ice|freezer/, '🧊'],
+  [/television|tv/, '📺'],
+  [/speaker|music|play/, '🎵'],
+  [/bell|alarm/, '🔔'],
+  [/camera|cctv|cam/, '📷'],
+  [/candy|food/, '🍬'],
+  [/hand/, '✋'],
+  [/delete|broom|sweep|trash/, '🧹'],
+  [/butterfly|bug|fly/, '🪰'],
+  [/brain/, '🧠'],
+  [/radar|wifi|antenna|signal/, '📡'],
+  [/chart|graph|trending/, '📈'],
+  [/flash|lightning|power|energy|meter-electric/, '⚡'],
+  [/weather-sunny|sun/, '🌞'],
+  [/moon|night|sleep/, '🌙'],
+  [/robot|auto/, '🤖'],
+  [/thermometer|temperature/, '🌡'],
+]
+
+/** The picture an entity is drawn with: its own mdi icon, else what kind of thing it is. */
+export function glyphFor(entity: string, attributes: Record<string, unknown>, icon?: string | null): string {
+  const mdi = (icon ?? (typeof attributes.icon === 'string' ? attributes.icon : '')).replace(/^mdi:/, '')
+  if (mdi) for (const [pattern, glyph] of MDI) if (pattern.test(mdi)) return glyph
+  const domain = entity.split('.')[0] ?? ''
+  const kind = typeof attributes.device_class === 'string' ? attributes.device_class : ''
+  switch (domain) {
+    case 'light':
+      return '💡'
+    case 'switch':
+      return '🔌'
+    case 'fan':
+      return '🌀'
+    case 'lock':
+      return '🔒'
+    case 'cover':
+      return '🪟'
+    case 'climate':
+    case 'water_heater':
+      return '🔥'
+    case 'person':
+    case 'device_tracker':
+      return '👤'
+    case 'media_player':
+      return '🎵'
+    case 'camera':
+      return '📷'
+    case 'automation':
+      return '🤖'
+    case 'scene':
+      return '🎬'
+    case 'script':
+      return '📜'
+    case 'input_boolean':
+    case 'button':
+    case 'input_button':
+      return '🔘'
+    case 'input_number':
+    case 'number':
+      return '🎚'
+    case 'binary_sensor':
+      return /occupancy|motion|presence/.test(kind) ? '🚶' : /door|garage/.test(kind) ? '🚪' : /window/.test(kind) ? '🪟' : /smoke|heat/.test(kind) ? '🔥' : /moisture/.test(kind) ? '💧' : '🔵'
+    case 'sensor':
+      return /temperature/.test(kind) ? '🌡' : /humidity|moisture/.test(kind) ? '💧' : /battery/.test(kind) ? '🔋' : /power|energy|current|voltage/.test(kind) ? '⚡' : /illuminance/.test(kind) ? '🌞' : /distance/.test(kind) ? '📏' : '📊'
+    default:
+      return '🔵'
+  }
+}
+
+/**
+ * A lit light's glow, as a background for its row: the light's own colour (or warm white), mixed
+ * into the dark panel by how bright it is. Null for anything that is not a light that is on.
+ */
+export function glowFor(entity: string, state: string, attributes: Record<string, unknown>): string | null {
+  if (!entity.startsWith('light.') || state !== 'on') return null
+  const rgb = Array.isArray(attributes.rgb_color) && attributes.rgb_color.length === 3 ? (attributes.rgb_color as number[]) : [255, 196, 96]
+  const level = typeof attributes.brightness === 'number' ? attributes.brightness / 255 : 1
+  const mix = 0.18 + 0.4 * level
+  const base = [24, 26, 32]
+  const hex = rgb.map((c, i) => Math.round(base[i]! + (c - base[i]!) * mix).toString(16).padStart(2, '0')).join('')
+  return `#${hex}`
+}
+
+/** A lit light's colour for its state text: its own, or warm white. */
+export function lightColour(attributes: Record<string, unknown>): string {
+  const rgb = Array.isArray(attributes.rgb_color) && attributes.rgb_color.length === 3 ? (attributes.rgb_color as number[]) : [255, 204, 102]
+  return `#${rgb.map(c => Math.round(c).toString(16).padStart(2, '0')).join('')}`
 }

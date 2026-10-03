@@ -13,7 +13,7 @@
 import type { EngineInterface, Register, RenderChildren } from 'claude-code'
 
 import type { Dash, Live, Pending } from '../types'
-import { brailleChart, changedCards, entitiesOf, iconFor, stepFor, toggleFor, viewsOf } from './lovelace'
+import { brailleChart, changedCards, entitiesOf, glowFor, glyphFor, lightColour, stepFor, toggleFor, viewsOf } from './lovelace'
 import type { Card, Row, ServiceCall, View } from './lovelace'
 
 const PANE = 'vome-dash'
@@ -255,14 +255,22 @@ export const register: Register = on => {
       const shownState = row.entity.startsWith('light.') && isOn && typeof attributes.brightness === 'number' ? `on ${Math.round((attributes.brightness / 255) * 100)}%` : `${formatState(state)}${unit}`
       const going = pressOf(key)
       const isFresh = going?.phase === 'done'
+      // A light that is on glows in its own colour, as brightly as it is lit.
+      const glow = glowFor(row.entity, state, attributes)
+      const isLight = row.entity.startsWith('light.') && isOn
       return (
-        <Box flexDirection="row" justifyContent="space-between">
-          <Text wrap="truncate-end">
-            <Text color={isOn ? 'warning' : undefined}>{iconFor(row.entity, state)}</Text> {name}
+        <Box flexDirection="row" justifyContent="space-between" backgroundColor={glow ?? undefined}>
+          <Text wrap="truncate-end" backgroundColor={glow ?? undefined}>
+            {glyphFor(row.entity, attributes, row.icon)} <Text bold={isLight}>{name}</Text>
           </Text>
           <Box flexDirection="row" gap={1}>
             {pressNote(going)}
-            <Text color={isFresh ? 'success' : state === 'unavailable' ? 'error' : isOn ? 'warning' : undefined} bold={isFresh} dimColor={state === 'off' && !isFresh}>
+            <Text
+              color={isFresh ? 'success' : state === 'unavailable' ? 'error' : isLight ? lightColour(attributes) : isOn ? 'warning' : undefined}
+              backgroundColor={glow ?? undefined}
+              bold={isFresh || isLight}
+              dimColor={state === 'off' && !isFresh}
+            >
               {shownState}
             </Text>
             {down ? (
@@ -322,6 +330,39 @@ export const register: Register = on => {
             body.push(<Text dimColor>{points.length > 0 ? [...new Set(points.map(String))].slice(-4).join(' → ') : '…'}</Text>)
           }
         }
+      } else if (card.type === 'glance') {
+        // A glance card as Home Assistant draws it: a row of icons, each with its name and state under it.
+        body.push(
+          <Box flexDirection="row" flexWrap="wrap" columnGap={1}>
+            {card.rows.map((row, i) => {
+              if (row.kind !== 'entity') return null
+              const now = live[row.entity]
+              const attributes = now?.attributes ?? {}
+              const state = now?.state ?? '…'
+              const name = row.name ?? (typeof attributes.friendly_name === 'string' ? attributes.friendly_name : row.entity)
+              const toggle = toggleFor(row.entity)
+              const key = `${cardKey}/r${i}`
+              const isOn = state === 'on'
+              return (
+                <Box flexDirection="column" alignItems="center" width={12} backgroundColor={glowFor(row.entity, state, attributes) ?? undefined}>
+                  <Text>{glyphFor(row.entity, attributes, row.icon)}</Text>
+                  <Text wrap="truncate-end" dimColor={!isOn}>
+                    {name}
+                  </Text>
+                  <Text color={isOn ? 'warning' : undefined} dimColor={!isOn}>
+                    {formatState(state)}
+                  </Text>
+                  {toggle && toggle.service === 'toggle' ? (
+                    <Button key={`${key}/toggle`} dimColor onPress={() => press(`${key}/toggle`, toggle)}>
+                      {isOn ? 'Off' : 'On'}
+                    </Button>
+                  ) : null}
+                  {pressNote(pressOf(key))}
+                </Box>
+              )
+            })}
+          </Box>,
+        )
       } else {
         card.rows.forEach((row, i) => {
           const key = `${cardKey}/r${i}`

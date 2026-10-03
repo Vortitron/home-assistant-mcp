@@ -13,7 +13,7 @@
 import type { EngineInterface, Register, RenderChildren } from 'claude-code'
 
 import type { Dash, Live, Pending } from '../types'
-import { brailleChart, changedCards, entitiesOf, fromBase64, glowFor, glyphFor, halfBlocks, lightColour, stepFor, toggleFor, viewsOf } from './lovelace'
+import { READS, brailleChart, changedCards, entitiesOf, fromBase64, glowFor, glyphFor, halfBlocks, lightColour, stepFor, toggleFor, viewsOf } from './lovelace'
 import type { Card, Row, ServiceCall, View } from './lovelace'
 
 const PANE = 'vome-dash'
@@ -29,7 +29,6 @@ const HISTORY_MS = 60_000
 const LIT_MS = 8_000
 const CONFIRM_MS = 6_000
 const MAX_ENTITIES = 80
-const READS = ['ha_get_state', 'ha_render_template', 'ha_get_history', 'ha_get_dashboard', 'ha_list_dashboards']
 
 const dash = { plugin: 'vome-dash', key: 'dash' } as const
 const view = { plugin: 'vome-dash', key: 'view' } as const
@@ -176,6 +175,11 @@ export const register: Register = on => {
             hotkey="t"
             onPress={async () => {
               await $.state.set(blocked, null)
+              // Allowed since: nothing stays switched off for having been refused once.
+              hasSnapshot = true
+              hasMaxPoints = true
+              framesRetryAt = 0
+              watchRetryAt = 0
               if (refusal.tool === 'ha_call_service' && lastCall) await callService($, lastCall.server, lastCall.call)
               else void poll($, true)
             }}
@@ -517,6 +521,7 @@ export const register: Register = on => {
             dimColor
             onPress={() => {
               framesRetryAt = 0
+              watchRetryAt = 0
               hasSnapshot = true
               hasMaxPoints = true
               return loadDashboard($, current.server, current.urlPath)

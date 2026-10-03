@@ -462,3 +462,19 @@ export function fromBase64(text: string): Uint8Array {
   }
   return out
 }
+
+/**
+ * Every read the pane makes in the background, all of them read-only: what auto mode needs
+ * allowed by name. Kept beside the calls; a tool the pane starts using must be added here, or the
+ * box asking for permission names the wrong lines (it missed the snapshot, watch and camera reads).
+ */
+export const READS = [
+  'ha_view_snapshot',
+  'ha_watch_states',
+  'ha_camera_frame',
+  'ha_get_state',
+  'ha_render_template',
+  'ha_get_history',
+  'ha_get_dashboard',
+  'ha_list_dashboards',
+]

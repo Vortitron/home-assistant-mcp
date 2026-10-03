@@ -308,3 +308,12 @@ test('a live watch brings changes by itself, and the snapshot stops asking for s
   const watched = calls.find(c => c.tool === 'ha_watch_states')!
   expect((watched.args.entity_ids as string[]).includes('light.kitchen_2')).toBe(true)
 })
+
+test('the permission box names every read the pane makes', async () => {
+  // A tool the pane calls in the background but leaves out of the lines it asks auto mode to allow
+  // leaves the pane refused with no way out (it missed the snapshot, watch and camera reads).
+  const { READS } = await import('../hooks/lovelace')
+  for (const tool of ['ha_view_snapshot', 'ha_watch_states', 'ha_camera_frame', 'ha_get_state', 'ha_render_template', 'ha_get_history', 'ha_get_dashboard', 'ha_list_dashboards']) {
+    expect(READS.includes(tool)).toBe(true)
+  }
+})

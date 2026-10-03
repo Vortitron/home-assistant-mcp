@@ -246,3 +246,42 @@ export function iconFor(entity: string, state: string): string {
       return '·'
   }
 }
+
+const DOT = [
+  [0x01, 0x02, 0x04, 0x40],
+  [0x08, 0x10, 0x20, 0x80],
+]
+
+/**
+ * A line chart in braille, `width` characters by `rows` lines (2 x 4 dots a character): each
+ * value a dot, joined to the next by a vertical run so a jump reads as a line, not a gap.
+ */
+export function brailleChart(values: number[], width: number, rows: number): string[] {
+  const w = Math.max(2, width * 2)
+  const h = Math.max(4, rows * 4)
+  if (values.length === 0) return Array.from({ length: rows }, () => ' '.repeat(width))
+  // One point per dot column: the average of the values that fall in it.
+  const points = Array.from({ length: w }, (_, x) => {
+    const from = Math.floor((x / w) * values.length)
+    const to = Math.max(from + 1, Math.floor(((x + 1) / w) * values.length))
+    const slice = values.slice(from, to)
+    return slice.reduce((a, b) => a + b, 0) / slice.length
+  })
+  const min = Math.min(...points)
+  const max = Math.max(...points)
+  const yOf = (v: number) => (max === min ? Math.floor(h / 2) : Math.round((1 - (v - min) / (max - min)) * (h - 1)))
+  const cells = Array.from({ length: rows }, () => new Array<number>(width).fill(0))
+  const dot = (x: number, y: number) => {
+    const row = Math.floor(y / 4)
+    const col = Math.floor(x / 2)
+    if (row >= 0 && row < rows && col >= 0 && col < width) cells[row]![col]! |= DOT[x % 2]![y % 4]!
+  }
+  let last: number | null = null
+  points.forEach((v, x) => {
+    const y = yOf(v)
+    if (last !== null) for (let k = Math.min(last, y); k <= Math.max(last, y); k++) dot(x, k)
+    dot(x, y)
+    last = y
+  })
+  return cells.map(row => row.map(bits => String.fromCharCode(0x2800 + bits)).join(''))
+}

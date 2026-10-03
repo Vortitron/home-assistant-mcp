@@ -13,12 +13,18 @@
 import type { EngineInterface, Register, RenderChildren } from 'claude-code'
 
 import type { Dash, Live, Pending } from '../types'
-import { changedCards, entitiesOf, iconFor, sparkline, stepFor, toggleFor, viewsOf } from './lovelace'
+import { brailleChart, changedCards, entitiesOf, iconFor, stepFor, toggleFor, viewsOf } from './lovelace'
 import type { Card, Row, ServiceCall, View } from './lovelace'
 
 const PANE = 'vome-dash'
-const STATE_MS = 3_000
-const TEMPLATE_MS = 30_000
+/**
+ * Vome rate-limits each Home Assistant endpoint per key (500 an hour), and Claude's own reads share
+ * it. So states are read every 10 s, and only while the pane is on show: at most 360 an hour.
+ */
+const STATE_MS = 10_000
+/** A refused read (the hourly limit) pauses the pane's reads this long. */
+const BACKOFF_MS = 5 * 60_000
+const TEMPLATE_MS = 60_000
 const HISTORY_MS = 60_000
 const LIT_MS = 8_000
 const CONFIRM_MS = 6_000
@@ -34,15 +40,20 @@ const history = { plugin: 'vome-dash', key: 'history' } as const
 const confirm = { plugin: 'vome-dash', key: 'confirm' } as const
 const choices = { plugin: 'vome-dash', key: 'choices' } as const
 const pending = { plugin: 'vome-dash', key: 'pending' } as const
+const sidebarOpen = { plugin: 'vome-dash', key: 'sidebarOpen' } as const
 /** How long a press waits to see its device change, how often it looks, how long the outcome stays. */
 const WATCH_MS = 8_000
-const WATCH_EVERY_MS = 700
+/** After a press, the device is looked at this long after it, then no more. */
+const WATCH_AT_MS = [1_000, 2_500, 5_000, 8_000]
+const WATCH_EVERY_MS = 500
 const OUTCOME_MS = 3_000
 const SIDEBAR = 20
 const blocked = { plugin: 'vome-dash', key: 'blocked' } as const
 const note = { plugin: 'vome-dash', key: 'note' } as const
 
 let isPolling = false
+/** Reads paused until then: the hourly limit was hit. */
+let pausedUntil = 0
 let lastTemplates = 0
 let lastHistory = 0
 let settingsFile = '~/.claude/settings.json'
@@ -109,6 +120,7 @@ export const register: Register = on => {
     const refusal = (await $.state.get(blocked)).value ?? null
     const message = (await $.state.get(note)).value ?? null
     const presses = (await $.state.get(pending)).value ?? {}
+    const isMenuOpen = (await $.state.get(sidebarOpen)).value ?? false
     const width = Math.max(30, e.props.bodyColumns)
     const isLit = (key: string) => lighting !== null && Date.now() - lighting.at < LIT_MS && lighting.keys.some(k => key === k || key.startsWith(`${k}/`))
 
@@ -194,11 +206,13 @@ export const register: Register = on => {
     const views = viewsOf(current.config)
     const index = Math.min(shownView, Math.max(0, views.length - 1))
     const shown: View | undefined = views[index]
-    // Wide enough, the home's dashboards down the left as Home Assistant's sidebar has them.
-    const isSidebar = width >= 70 && (picking?.length ?? 0) > 1
+    // The home's dashboards down the left, as Home Assistant's sidebar has them, until one is picked.
+    const hasMenu = (picking?.length ?? 0) > 1
+    const isSidebar = isMenuOpen && hasMenu && width >= 70
     const mainWidth = isSidebar ? width - SIDEBAR - 1 : width
-    const columns = mainWidth >= 96 ? 2 : 1
-    const cardWidth = columns === 2 ? Math.floor((mainWidth - 1) / 2) : mainWidth
+    // Columns as Home Assistant's desktop layout has them: as many as fit, cards stacked in each.
+    const columns = mainWidth >= 120 ? 3 : mainWidth >= 72 ? 2 : 1
+    const cardWidth = columns > 1 ? Math.floor((mainWidth - (columns - 1)) / columns) : mainWidth
     /** What a control's press is doing, for the row it is on. */
     const pressOf = (prefix: string): Pending | undefined =>
       Object.entries(presses)
@@ -288,19 +302,25 @@ export const register: Register = on => {
           const points = series[card.key]?.[row.entity] ?? []
           const numbers = points.filter((p): p is number => typeof p === 'number')
           const name = row.name ?? row.entity
+          const unit = typeof live[row.entity]?.attributes.unit_of_measurement === 'string' ? ` ${live[row.entity]!.attributes.unit_of_measurement}` : ''
           body.push(
             <Text wrap="truncate-end">
-              <Text dimColor>{name.padEnd(14).slice(0, 14)} </Text>
-              {numbers.length > 1 ? (
-                <Text color="suggestion">{sparkline(numbers, Math.max(8, cardWidth - 26))}</Text>
-              ) : points.length > 0 ? (
-                <Text>{[...new Set(points.map(String))].slice(-4).join(' → ')}</Text>
-              ) : (
-                <Text dimColor>…</Text>
-              )}
-              <Text dimColor> {formatState(live[row.entity]?.state ?? '')}</Text>
+              {name}
+              <Text dimColor>
+                {'  '}
+                {formatState(live[row.entity]?.state ?? '')}
+                {unit}
+                {numbers.length > 1 ? `  (${formatState(String(Math.min(...numbers)))}–${formatState(String(Math.max(...numbers)))})` : ''}
+              </Text>
             </Text>,
           )
+          if (numbers.length > 1) {
+            for (const line of brailleChart(numbers, Math.max(10, cardWidth - 4), 3)) {
+              body.push(<Text color="suggestion">{line}</Text>)
+            }
+          } else {
+            body.push(<Text dimColor>{points.length > 0 ? [...new Set(points.map(String))].slice(-4).join(' → ') : '…'}</Text>)
+          }
         }
       } else {
         card.rows.forEach((row, i) => {
@@ -340,7 +360,10 @@ export const register: Register = on => {
       )
     }
 
-    const open = (urlPath: string) => () => (urlPath === current.urlPath ? undefined : loadDashboard($, current.server, urlPath))
+    const open = (urlPath: string) => async () => {
+      await $.state.set(sidebarOpen, false)
+      if (urlPath !== current.urlPath) await loadDashboard($, current.server, urlPath)
+    }
     const sidebar = isSidebar ? (
       <Box flexDirection="column" width={SIDEBAR} borderStyle="round" borderColor="subtle" paddingX={1}>
         <Text dimColor>Dashboards</Text>
@@ -353,7 +376,7 @@ export const register: Register = on => {
     ) : null
     // Narrow, the same as a row along the top.
     const topRow =
-      !isSidebar && (picking?.length ?? 0) > 1 ? (
+      isMenuOpen && hasMenu && !isSidebar ? (
         <Box flexDirection="row" flexWrap="wrap" gap={1}>
           {(picking ?? []).map(choice => (
             <Button key={`side-${choice.urlPath}`} dimColor={choice.urlPath !== current.urlPath} onPress={open(choice.urlPath)}>
@@ -366,6 +389,11 @@ export const register: Register = on => {
     const main = (
       <Box flexDirection="column" width={mainWidth}>
         <Box flexDirection="row" flexWrap="wrap" gap={1}>
+          {hasMenu ? (
+            <Button key="menu" hotkey="m" dimColor={!isMenuOpen} onPress={() => $.state.set(sidebarOpen, !isMenuOpen)}>
+              ☰
+            </Button>
+          ) : null}
           <Text bold>{current.title}</Text>
           {views.length > 1
             ? views.map((v, i) => (
@@ -375,8 +403,12 @@ export const register: Register = on => {
               ))
             : null}
         </Box>
-        <Box flexDirection="row" flexWrap="wrap">
-          {(shown?.cards ?? []).map(card => drawCard(card, card.key))}
+        <Box flexDirection="row" gap={1}>
+          {masonry(shown?.cards ?? [], columns).map(column => (
+            <Box flexDirection="column" width={cardWidth}>
+              {column.map(card => drawCard(card, card.key))}
+            </Box>
+          ))}
         </Box>
         {message ? <Text color="warning" wrap="wrap">{message}</Text> : null}
         {help}
@@ -494,15 +526,21 @@ async function watchPresses($: EngineInterface) {
   const now = (await $.state.get(pending)).value ?? {}
   const keys = Object.keys(now)
   if (keys.length === 0) return
-  const waiting = keys.filter(key => now[key]!.phase === 'sent' || now[key]!.phase === 'sending')
+  const waiting = keys.filter(key => now[key]!.phase === 'sent')
   const current = (await $.state.get(dash)).value ?? null
-  const ids = [...new Set(waiting.map(key => now[key]!.entity).filter((id): id is string => !!id))]
+  // Look only at the moments set for each press (1, 2.5, 5 and 8 s after it), not every tick.
+  const due = waiting.filter(key => {
+    const age = Date.now() - now[key]!.at
+    return WATCH_AT_MS.some(at => age >= at && age < at + WATCH_EVERY_MS)
+  })
+  const ids = [...new Set(due.map(key => now[key]!.entity).filter((id): id is string => !!id))]
   if (current && ids.length > 0) await readStates($, current.server, ids)
   const live = (await $.state.get(states)).value ?? {}
   const next: Record<string, Pending> = {}
   for (const key of keys) {
     const p = now[key]!
     const age = Date.now() - p.at
+    void age
     if (p.phase === 'sent' && p.entity && lookOf(live[p.entity]) !== p.before) next[key] = { ...p, phase: 'done', at: Date.now() }
     else if (p.phase === 'sent' && age > WATCH_MS) next[key] = { ...p, phase: 'quiet', at: Date.now() }
     else if ((p.phase === 'done' || p.phase === 'quiet' || p.phase === 'failed') && age > OUTCOME_MS) continue
@@ -518,6 +556,9 @@ async function poll($: EngineInterface, isNow = false) {
   const current = (await $.state.get(dash)).value ?? null
   if (!current) return
   if ((await $.state.get(blocked)).value && !isNow) return
+  if (!isNow && Date.now() < pausedUntil) return
+  // Nobody is looking: read nothing. The tab behind another pane, or closed, costs no reads.
+  if (!isNow && !(await isShown($))) return
   isPolling = true
   try {
     const views = viewsOf(current.config)
@@ -543,6 +584,12 @@ async function readStates($: EngineInterface, server: string, ids: string[]) {
   const body = text ? parseJson(text) : null
   const rows = body && Array.isArray(body.entities) ? (body.entities as Record<string, unknown>[]) : []
   if (rows.length === 0) return
+  // Every one "not found" at once is the hourly limit talking, not a home with none of them: keep
+  // what was last seen, pause the reads, and say so.
+  if (rows.length > 2 && rows.every(row => row.found === false)) {
+    await pause($)
+    return
+  }
   const before = (await $.state.get(states)).value ?? {}
   const next = { ...before }
   let isChanged = false
@@ -615,10 +662,12 @@ async function callMcp($: EngineInterface, server: string, tool: string, args: R
     const result = await $.mcp.call(server, tool, args)
     const text = result.content.map(block => block.text ?? '').join('\n')
     if (result.isError) {
-      await $.state.set(note, firstLine(text) ?? `${tool} failed.`)
+      if (/\b429\b|rate.?limit|too many requests|exceeded/i.test(text)) await pause($)
+      else await $.state.set(note, firstLine(text) ?? `${tool} failed.`)
       return null
     }
-    if ((await $.state.get(note)).value) await $.state.set(note, null)
+    // A good answer clears an old note, but not the pause's while it lasts.
+    if (Date.now() >= pausedUntil && (await $.state.get(note)).value) await $.state.set(note, null)
     return text
   } catch (error) {
     if (/auto mode|classifier|permission|denied|not allowed/i.test(String(error))) {
@@ -628,6 +677,41 @@ async function callMcp($: EngineInterface, server: string, tool: string, args: R
     }
     return null
   }
+}
+
+/** Reads refused for the hourly limit: pause them, keep what was last seen, and say so. */
+async function pause($: EngineInterface) {
+  pausedUntil = Date.now() + BACKOFF_MS
+  await $.state.set(
+    note,
+    "Vome's hourly limit for reading this home's states was reached (500 an hour, shared with Claude's own reads). The pane shows the last states and reads again in five minutes.",
+  )
+}
+
+async function isShown($: EngineInterface): Promise<boolean> {
+  try {
+    return (await $.ui.panes()).some(pane => pane.id === PANE && pane.isShown && pane.isPlaced)
+  } catch {
+    return true
+  }
+}
+
+/** Cards into columns as Home Assistant's masonry does: each to the shortest column so far. */
+function masonry(cards: Card[], columns: number): Card[][] {
+  const out: Card[][] = Array.from({ length: columns }, () => [])
+  const heights = new Array<number>(columns).fill(0)
+  for (const card of cards) {
+    if (card.isForeign && card.rows.length === 0 && card.children.length === 0 && !card.title) continue
+    const shortest = heights.indexOf(Math.min(...heights))
+    out[shortest]!.push(card)
+    heights[shortest]! += heightOf(card)
+  }
+  return out.filter(column => column.length > 0)
+}
+
+function heightOf(card: Card): number {
+  const own = 2 + (card.title ? 1 : 0) + (card.markdown !== null ? Math.ceil(card.markdown.length / 50) + 1 : 0) + card.rows.length * (card.hours !== null ? 4 : 1)
+  return own + card.children.reduce((sum, child) => sum + heightOf(child), 0)
 }
 
 // ---------------------------------------------------------------- small things

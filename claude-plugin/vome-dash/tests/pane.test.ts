@@ -54,7 +54,11 @@ const reply = (body: unknown) => {
 const mount = ($: Engine) =>
   $.ui.mount({ plugin: 'vome-dash', surface: 'vscode', component: 'Pane', requestId: 'vome-dash', props: PANE_PROPS, viewport: { columns: 160, rows: 80 } })
 
+/** Vome's hourly limit hit: every state read answers "not found". */
+let LIMITED = false
+
 function setup(on: On) {
+  LIMITED = false
   const calls: Array<{ tool: string; args: Record<string, unknown> }> = []
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
   on('env.get', () => ({ value: undefined }))
@@ -66,6 +70,7 @@ function setup(on: On) {
     const text = (body: unknown) => ({ value: { content: [{ type: 'text', text: (typeof body === 'string' ? body : JSON.stringify(body)) + STAMP }], isError: false } })
     if (e.tool === 'ha_get_state') {
       const ids = e.args.entity_ids as string[]
+      if (LIMITED) return text({ entities: ids.map(id => ({ entity_id: id, found: false, state: null })) })
       // The real shape: the whole state object nested under `state`.
       return text({ entities: ids.map(id => ({ entity_id: id, found: true, state: { entity_id: id, ...(STATES[id] ?? { state: 'unknown', attributes: {} }) } })) })
     }
@@ -92,7 +97,8 @@ test('a dashboard Claude reads appears working: live states, Markdown rendered b
   expect((await ui.find({ text: /Lights — both flies may change these/ })) !== undefined).toBe(true)
   expect((await ui.find({ text: /^on 70%$/ })) !== undefined).toBe(true)
   expect((await ui.find({ text: /forage/ })) !== undefined).toBe(true)
-  expect((await ui.find({ text: /[▁▂▃▄▅▆▇█]{3,}/ })) !== undefined).toBe(true)
+  // A history graph is a chart in braille, three lines high, not a sparkline.
+  expect((await ui.find({ text: /[\u2801-\u28ff]{5,}/ })) !== undefined).toBe(true)
   expect((await ui.find({ text: /housefly-overlay · drawn by Home Assistant/ })) === undefined).toBe(true)
   expect((await ui.find({ text: /object Object/ })) === undefined).toBe(true)
 })
@@ -171,8 +177,23 @@ test("the home's dashboards are a sidebar, and one press opens another", async (
   await $.session.start({ source: 'startup', cwd: '/tmp' } as never)
   await $.tool.call({ tool: tool('mcp__vome__ha_get_dashboard'), url_path: 'lovelace' } as never)
   const ui = await mount($)
+  // Hidden until asked for, then gone again once one is picked.
+  expect((await ui.find({ text: 'Dashboards' })) === undefined).toBe(true)
+  await ui.press({ key: 'menu' })
   expect((await ui.find({ text: 'Dashboards' })) !== undefined).toBe(true)
   await ui.press({ key: 'side-claude-lights' })
+  expect((await ui.find({ text: 'Dashboards' })) === undefined).toBe(true)
   expect(calls.some(c => c.tool === 'ha_get_dashboard' && c.args.url_path === 'claude-lights')).toBe(true)
   expect((await ui.find({ text: 'Bulbs' })) !== undefined).toBe(true)
+})
+
+test("the hourly limit pauses the reads and says so, keeping the last states", async ($, on) => {
+  setup(on)
+  await $.session.start({ source: 'startup', cwd: '/tmp' } as never)
+  await $.tool.call({ tool: tool('mcp__vome__ha_get_dashboard'), url_path: 'lovelace' } as never)
+  const ui = await mount($)
+  LIMITED = true
+  await ui.press({ key: 'reload' })
+  expect((await ui.find({ text: /hourly limit/ })) !== undefined).toBe(true)
+  expect((await ui.find({ text: /not found/ })) === undefined).toBe(true)
 })

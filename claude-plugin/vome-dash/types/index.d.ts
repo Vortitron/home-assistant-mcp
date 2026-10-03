@@ -38,6 +38,8 @@ declare module 'claude-code' {
       choices: Array<{ urlPath: string; title: string }> | null
       /** Presses on their way, by control. */
       pending: Record<string, Pending>
+      /** The dashboards sidebar, shown until one is picked. */
+      sidebarOpen: boolean
       /** Auto mode refused one of the pane's calls: on which server, which tool. */
       blocked: { server: string; tool: string } | null
       note: string | null

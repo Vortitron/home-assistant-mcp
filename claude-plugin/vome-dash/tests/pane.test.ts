@@ -57,6 +57,9 @@ const STACK = {
   ] }] }],
 }
 
+/** The first refresh runs after Claude's call has answered: let it land before looking. */
+const settle = () => new Promise(resolve => (globalThis as unknown as { setTimeout: (f: () => void, ms: number) => void }).setTimeout(() => resolve(undefined), 120))
+
 const reply = (body: unknown) => {
   const text = JSON.stringify(body) + STAMP
   return { result: [{ type: 'text', text }], text }
@@ -66,9 +69,14 @@ const mount = ($: Engine) =>
 
 /** Vome's hourly limit hit: every state read answers "not found". */
 let LIMITED = false
+/** An MCP from before ha_view_snapshot. */
+let NO_SNAPSHOT = false
 
 function setup(on: On) {
+  // Every test starts in the same house: a press in one leaves no light off for the next.
+  STATES['light.kitchen_2'] = { state: 'on', attributes: { friendly_name: 'Kitchen', brightness: 178 } }
   LIMITED = false
+  NO_SNAPSHOT = false
   const calls: Array<{ tool: string; args: Record<string, unknown> }> = []
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
   on('env.get', () => ({ value: undefined }))
@@ -80,6 +88,16 @@ function setup(on: On) {
   on('mcp.call', (_$, e) => {
     calls.push({ tool: e.tool, args: e.args })
     const text = (body: unknown) => ({ value: { content: [{ type: 'text', text: (typeof body === 'string' ? body : JSON.stringify(body)) + STAMP }], isError: false } })
+    if (e.tool === 'ha_view_snapshot') {
+      if (NO_SNAPSHOT) return { value: { content: [{ type: 'text', text: 'Unknown tool: ha_view_snapshot' }], isError: true } }
+      const a = e.args as { entity_ids?: string[]; templates?: Record<string, string>; history?: Array<{ key: string; entity_ids: string[] }>; frames?: Array<{ key: string; entity_id: string }> }
+      const states = Object.fromEntries((a.entity_ids ?? []).map(id => [id, LIMITED ? null : (STATES[id] ?? { state: 'unknown', attributes: {} })]))
+      const templates = Object.fromEntries(Object.keys(a.templates ?? {}).map(k => [k, 'Right now: *forage*']))
+      const history = Object.fromEntries((a.history ?? []).map(h => [h.key, h.entity_ids.map(id => ({ entity_id: id, unit: null, points: [0.1, 0.4, 0.9, 0.3].map((v, i) => [`t${i}`, v]) }))]))
+      const rgb = btoa(String.fromCharCode(...[255, 0, 0, 255, 0, 0, 255, 0, 0, 255, 0, 0, 0, 0, 255, 0, 0, 255, 0, 0, 255, 0, 0, 255]))
+      const frames = Object.fromEntries((a.frames ?? []).map(f => [f.key, { width: 4, height: 2, rgb }]))
+      return text({ at: 'now', states, templates, history, frames })
+    }
     if (e.tool === 'ha_get_state') {
       const ids = e.args.entity_ids as string[]
       if (LIMITED) return text({ entities: ids.map(id => ({ entity_id: id, found: false, state: null })) })
@@ -111,6 +129,7 @@ test('a dashboard Claude reads appears working: live states, Markdown rendered b
   setup(on)
   await $.session.start({ source: 'startup', cwd: '/tmp' } as never)
   await $.tool.call({ tool: tool('mcp__vome__ha_get_dashboard'), url_path: 'lovelace' } as never)
+  await settle()
   const ui = await mount($)
   expect((await ui.find({ text: 'HouseFly' })) !== undefined).toBe(true)
   expect((await ui.find({ text: /Lights — both flies may change these/ })) !== undefined).toBe(true)
@@ -126,6 +145,7 @@ test('pressing a light turns it off through Home Assistant, and the pane reads i
   const calls = setup(on)
   await $.session.start({ source: 'startup', cwd: '/tmp' } as never)
   await $.tool.call({ tool: tool('mcp__vome__ha_get_dashboard'), url_path: 'lovelace' } as never)
+  await settle()
   const ui = await mount($)
   await ui.press({ key: 'v0/c2/r0/toggle' })
   const press = calls.find(c => c.tool === 'ha_call_service')
@@ -137,6 +157,7 @@ test('a button that asks first runs only on the second press', async ($, on) => 
   const calls = setup(on)
   await $.session.start({ source: 'startup', cwd: '/tmp' } as never)
   await $.tool.call({ tool: tool('mcp__vome__ha_get_dashboard'), url_path: 'lovelace' } as never)
+  await settle()
   const ui = await mount($)
   await ui.press({ key: 'v0/c4/r0' })
   expect(calls.some(c => c.tool === 'ha_call_service')).toBe(false)
@@ -153,6 +174,7 @@ test('a slider steps by a tenth of its range', async ($, on) => {
   const calls = setup(on)
   await $.session.start({ source: 'startup', cwd: '/tmp' } as never)
   await $.tool.call({ tool: tool('mcp__vome__ha_get_dashboard'), url_path: 'lovelace' } as never)
+  await settle()
   const ui = await mount($)
   await ui.press({ key: 'v0/c3/r0/down' })
   expect(calls.find(c => c.tool === 'ha_call_service')?.args).toEqual({
@@ -169,6 +191,7 @@ test("a save lights the card it changed", async ($, on) => {
   on('tool.call', { tool: tool('mcp__vome__ha_save_dashboard') }, () => reply({ saved: true }))
   await $.session.start({ source: 'startup', cwd: '/tmp' } as never)
   await $.tool.call({ tool: tool('mcp__vome__ha_get_dashboard'), url_path: 'lovelace' } as never)
+  await settle()
   const changed = JSON.parse(JSON.stringify(CONFIG))
   changed.views[0].cards[2].title = 'Lights'
   await $.tool.call({ tool: tool('mcp__vome__ha_save_dashboard'), url_path: 'lovelace', config: changed } as never)
@@ -183,6 +206,7 @@ test('a press shows it was taken, and the state it led to', async ($, on) => {
   STATES['light.kitchen_2'] = { state: 'on', attributes: { friendly_name: 'Kitchen', brightness: 178 } }
   await $.session.start({ source: 'startup', cwd: '/tmp' } as never)
   await $.tool.call({ tool: tool('mcp__vome__ha_get_dashboard'), url_path: 'lovelace' } as never)
+  await settle()
   const ui = await mount($)
   await ui.press({ key: 'v0/c2/r0/toggle' })
   expect((await ui.find({ text: '✓' })) !== undefined).toBe(true)
@@ -195,6 +219,7 @@ test("the home's dashboards are a sidebar, and one press opens another", async (
   const calls = setup(on)
   await $.session.start({ source: 'startup', cwd: '/tmp' } as never)
   await $.tool.call({ tool: tool('mcp__vome__ha_get_dashboard'), url_path: 'lovelace' } as never)
+  await settle()
   const ui = await mount($)
   // Hidden until asked for, then gone again once one is picked.
   expect((await ui.find({ text: 'Dashboards' })) === undefined).toBe(true)
@@ -210,6 +235,7 @@ test("the hourly limit pauses the reads and says so, keeping the last states", a
   setup(on)
   await $.session.start({ source: 'startup', cwd: '/tmp' } as never)
   await $.tool.call({ tool: tool('mcp__vome__ha_get_dashboard'), url_path: 'lovelace' } as never)
+  await settle()
   const ui = await mount($)
   LIMITED = true
   await ui.press({ key: 'reload' })
@@ -221,17 +247,21 @@ test('a camera card is the camera\'s picture, in half blocks, in the terminal', 
   const calls = setup(on)
   await $.session.start({ source: 'startup', cwd: '/tmp' } as never)
   await $.tool.call({ tool: tool('mcp__vome__ha_get_dashboard'), url_path: 'lovelace' } as never)
+  await settle()
   const terminal = await $.ui.mount({ plugin: 'vome-dash', surface: 'terminal', component: 'Pane', requestId: 'vome-dash', props: PANE_PROPS, viewport: { columns: 160, rows: 80 } })
-  expect(calls.some(c => c.tool === 'ha_camera_frame' && c.args.entity_id === 'camera.anasmotet_sydvast')).toBe(true)
+  // One call for the whole view: states, the template, the chart in a few points, the camera.
+  const snap = calls.find(c => c.tool === 'ha_view_snapshot')!
+  expect((snap.args.frames as Array<{ entity_id: string }>)[0]!.entity_id).toBe('camera.anasmotet_sydvast')
+  expect(typeof (snap.args.history as Array<{ max_points: number }>)[0]!.max_points).toBe('number')
+  expect(calls.some(c => c.tool === 'ha_get_state' || c.tool === 'ha_get_history')).toBe(false)
   expect((await terminal.find({ type: 'Raster', key: 'frame-v0/c6' })) !== undefined).toBe(true)
-  // Charts ask for a few points, not thousands of states.
-  expect(calls.some(c => c.tool === 'ha_get_history' && typeof c.args.max_points === 'number')).toBe(true)
 })
 
 test('a card inside a stack fits inside it, and a button card does not repeat its name', async ($, on) => {
   setup(on)
   await $.session.start({ source: 'startup', cwd: '/tmp' } as never)
   await $.tool.call({ tool: tool('mcp__vome__ha_get_dashboard'), url_path: 'vomehome' } as never)
+  await settle()
   const ui = await mount($)
   const boxes = (await ui.findAll({ type: 'Box' })).map(b => (b as unknown as { props: { width?: number; borderStyle?: string } }).props).filter(p => p.borderStyle === 'round' && typeof p.width === 'number')
   const widths = boxes.map(p => p.width!)
@@ -240,4 +270,15 @@ test('a card inside a stack fits inside it, and a button card does not repeat it
   // The button's label, but no title line of the same words above it.
   expect((await ui.find({ text: /▸ Reset to Home Assistant defaults/ })) !== undefined).toBe(true)
   expect((await ui.find({ text: /^Reset to Home Assistant defaults$/ })) === undefined).toBe(true)
+})
+
+test('an MCP from before the snapshot gets the separate calls', async ($, on) => {
+  const calls = setup(on)
+  NO_SNAPSHOT = true
+  await $.session.start({ source: 'startup', cwd: '/tmp' } as never)
+  await $.tool.call({ tool: tool('mcp__vome__ha_get_dashboard'), url_path: 'lovelace' } as never)
+  await settle()
+  const ui = await mount($)
+  expect(calls.some(c => c.tool === 'ha_get_state')).toBe(true)
+  expect((await ui.find({ text: /^on 70%$/ })) !== undefined).toBe(true)
 })

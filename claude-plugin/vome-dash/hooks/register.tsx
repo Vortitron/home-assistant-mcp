@@ -61,8 +61,11 @@ let lastFrames = 0
 /** The card width last drawn, for the size of camera frames and the points in a chart. */
 let lastCardWidth = 40
 /** The MCP has no ha_camera_frame, or no max_points on ha_get_history: ask the older way. */
-let hasFrames = true
 let hasMaxPoints = true
+/** A camera frame failed (an older MCP, a key without Cameras): ask again after this. */
+let framesRetryAt = 0
+/** The MCP has ha_view_snapshot: one call a refresh. False after it is found missing, until a reload. */
+let hasSnapshot = true
 let lastTemplates = 0
 let lastHistory = 0
 let settingsFile = '~/.claude/settings.json'
@@ -520,7 +523,17 @@ export const register: Register = on => {
         {message ? <Text color="warning" wrap="wrap">{message}</Text> : null}
         {help}
         <Box flexDirection="row" gap={2} marginTop={1}>
-          <Button key="reload" hotkey="r" dimColor onPress={() => loadDashboard($, current.server, current.urlPath)}>
+          <Button
+            key="reload"
+            hotkey="r"
+            dimColor
+            onPress={() => {
+              framesRetryAt = 0
+              hasSnapshot = true
+              hasMaxPoints = true
+              return loadDashboard($, current.server, current.urlPath)
+            }}
+          >
             Reload
           </Button>
         </Box>
@@ -672,6 +685,8 @@ async function poll($: EngineInterface, isNow = false) {
     const index = Math.min((await $.state.get(view)).value ?? 0, Math.max(0, views.length - 1))
     const cards = views[index]?.cards ?? []
     const ids = entitiesOf(cards).slice(0, MAX_ENTITIES)
+    // One call for everything due this time; the separate calls only for an MCP without it.
+    if (hasSnapshot && (await snapshot($, current.server, cards, ids, isNow))) return
     if (ids.length > 0) await readStates($, current.server, ids)
     if (isNow || Date.now() - lastTemplates > TEMPLATE_MS) {
       lastTemplates = Date.now()
@@ -685,15 +700,112 @@ async function poll($: EngineInterface, isNow = false) {
       lastFrames = Date.now()
       await readFrames($, current.server, cards)
     }
+  } catch (error) {
+    // Never silently: a refresh that broke says how.
+    await $.state.set(note, `The dashboard could not refresh: ${firstLine(String(error))}`)
   } finally {
     isPolling = false
   }
+}
+
+/** Every card of a view in one ha_view_snapshot: states always, templates, history and cameras when due. */
+async function snapshot($: EngineInterface, server: string, cards: Card[], ids: string[], isNow: boolean): Promise<boolean> {
+  const all: Card[] = []
+  const walk = (card: Card) => {
+    all.push(card)
+    card.children.forEach(walk)
+  }
+  cards.forEach(walk)
+  const wantTemplates = isNow || Date.now() - lastTemplates > TEMPLATE_MS
+  const wantHistory = isNow || Date.now() - lastHistory > HISTORY_MS
+  const wantFrames = (isNow || Date.now() - lastFrames > FRAME_EVERY_MS) && Date.now() >= framesRetryAt
+  const templates = wantTemplates
+    ? Object.fromEntries(all.filter(c => c.markdown !== null && /\{\{|\{%/.test(c.markdown)).slice(0, 10).map(c => [c.key, c.markdown!]))
+    : {}
+  const points = Math.max(20, Math.min(400, (lastCardWidth - 4) * 2))
+  const graphs = wantHistory
+    ? all
+        .filter(c => c.hours !== null)
+        .slice(0, 8)
+        .map(c => ({ key: c.key, entity_ids: c.rows.flatMap(r => (r.kind === 'entity' ? [r.entity] : [])).slice(0, 20), hours: c.hours ?? 24, max_points: points }))
+        .filter(h => h.entity_ids.length > 0)
+    : []
+  const width = Math.max(16, Math.min(160, lastCardWidth - 4))
+  const cameras = wantFrames ? all.filter(c => c.camera).slice(0, 4).map(c => ({ key: c.key, entity_id: c.camera!, width, height: width })) : []
+  const text = await callMcp($, server, 'ha_view_snapshot', {
+    ...(ids.length > 0 ? { entity_ids: ids } : {}),
+    ...(Object.keys(templates).length > 0 ? { templates } : {}),
+    ...(graphs.length > 0 ? { history: graphs } : {}),
+    ...(cameras.length > 0 ? { frames: cameras } : {}),
+  }, true)
+  const body = text ? parseJson(text) : null
+  if (!body) {
+    // No such tool (an older MCP): the separate calls from now on.
+    if (text === null && !(await $.state.get(blocked)).value && Date.now() >= pausedUntil) hasSnapshot = false
+    return !hasSnapshot ? false : true
+  }
+  if (wantTemplates) lastTemplates = Date.now()
+  if (wantHistory) lastHistory = Date.now()
+  if (wantFrames) lastFrames = Date.now()
+
+  const got = body.states && typeof body.states === 'object' ? (body.states as Record<string, { state?: unknown; attributes?: Record<string, unknown> } | null | { error: string }>) : {}
+  if ('error' in got && typeof got.error === 'string') {
+    if (/\b429\b|rate.?limit|too many requests|exceeded/i.test(got.error)) await pause($)
+  } else if (ids.length > 0) {
+    const rows = ids.map(id => {
+      const one = got[id] as { state?: unknown; attributes?: Record<string, unknown> } | null | undefined
+      return one ? { entity_id: id, found: true, state: { state: one.state, attributes: one.attributes ?? {} } } : { entity_id: id, found: false, state: null }
+    })
+    await applyStates($, rows)
+  }
+  if (body.templates && typeof body.templates === 'object') {
+    const before = (await $.state.get(rendered)).value ?? {}
+    const next = { ...before }
+    for (const [key, value] of Object.entries(body.templates as Record<string, unknown>)) if (typeof value === 'string') next[key] = value
+    await $.state.set(rendered, next)
+  }
+  if (body.history && typeof body.history === 'object') {
+    const before = (await $.state.get(history)).value ?? {}
+    const next = { ...before }
+    for (const [key, value] of Object.entries(body.history as Record<string, unknown>)) {
+      if (!Array.isArray(value)) continue
+      const byEntity: Record<string, Array<number | string>> = {}
+      for (const one of value as Array<{ entity_id?: string; points?: Array<[string, number | string]> }>) {
+        if (one.entity_id && Array.isArray(one.points)) byEntity[one.entity_id] = one.points.map(([, v]) => v)
+      }
+      next[key] = byEntity
+    }
+    await $.state.set(history, next)
+  }
+  if (body.frames && typeof body.frames === 'object') {
+    const before = (await $.state.get(frames)).value ?? {}
+    const next = { ...before }
+    let problem: string | null = null
+    for (const [key, value] of Object.entries(body.frames as Record<string, Record<string, unknown>>)) {
+      if (typeof value.rgb === 'string' && typeof value.width === 'number' && typeof value.height === 'number') {
+        next[key] = { width: value.width, height: value.height, rgb: value.rgb, at: Date.now() }
+      } else if (typeof value.error === 'string') {
+        problem = value.error
+      }
+    }
+    await $.state.set(frames, next)
+    if (problem) {
+      framesRetryAt = Date.now() + 60_000
+      await $.state.set(note, /403|camera|sensitive/i.test(problem) ? `Camera: ${problem}. Through Vome the key needs Cameras ticked under Sensitive devices.` : `Camera: ${problem}`)
+    }
+  }
+  return true
 }
 
 async function readStates($: EngineInterface, server: string, ids: string[]) {
   const text = await callMcp($, server, 'ha_get_state', { entity_ids: ids })
   const body = text ? parseJson(text) : null
   const rows = body && Array.isArray(body.entities) ? (body.entities as Record<string, unknown>[]) : []
+  await applyStates($, rows)
+}
+
+/** States as ha_get_state answers them ({entity_id, found, state: {state, attributes}}), into the pane. */
+async function applyStates($: EngineInterface, rows: Record<string, unknown>[]) {
   if (rows.length === 0) return
   // Every one "not found" at once is the hourly limit talking, not a home with none of them: keep
   // what was last seen, pause the reads, and say so.
@@ -803,7 +915,7 @@ async function callMcp($: EngineInterface, server: string, tool: string, args: R
 
 /** Camera stills for the picture cards on show, as small grids of pixels to draw in half blocks. */
 async function readFrames($: EngineInterface, server: string, cards: Card[]) {
-  if (!hasFrames) return
+  if (Date.now() < framesRetryAt) return
   const cameras: Card[] = []
   const walk = (card: Card) => {
     if (card.camera) cameras.push(card)
@@ -819,7 +931,8 @@ async function readFrames($: EngineInterface, server: string, cards: Card[]) {
     const text = await callMcp($, server, 'ha_camera_frame', { entity_id: card.camera, width, height: width }, true)
     const body = text ? parseJson(text) : null
     if (!body) {
-      hasFrames = !!text
+      // Not now (an older MCP, a key without Cameras): ask again in a minute, not never.
+      framesRetryAt = Date.now() + 60_000
       if (!text) await $.state.set(note, 'Pictures need the MCP with ha_camera_frame, and a key with Cameras ticked.')
       continue
     }

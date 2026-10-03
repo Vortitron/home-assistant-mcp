@@ -505,6 +505,19 @@ export const register: Register = on => {
             </Button>
           ) : null}
           <Text bold>{current.title}</Text>
+          <Button
+            key="reload"
+            hotkey="r"
+            dimColor
+            onPress={() => {
+              framesRetryAt = 0
+              hasSnapshot = true
+              hasMaxPoints = true
+              return loadDashboard($, current.server, current.urlPath)
+            }}
+          >
+            ⟳
+          </Button>
           {views.length > 1
             ? views.map((v, i) => (
                 <Button key={`view-${i}`} dimColor={i !== index} onPress={() => $.state.set(view, i)}>
@@ -522,21 +535,7 @@ export const register: Register = on => {
         </Box>
         {message ? <Text color="warning" wrap="wrap">{message}</Text> : null}
         {help}
-        <Box flexDirection="row" gap={2} marginTop={1}>
-          <Button
-            key="reload"
-            hotkey="r"
-            dimColor
-            onPress={() => {
-              framesRetryAt = 0
-              hasSnapshot = true
-              hasMaxPoints = true
-              return loadDashboard($, current.server, current.urlPath)
-            }}
-          >
-            Reload
-          </Button>
-        </Box>
+
       </Box>
     )
 

@@ -1,0 +1,14 @@
+{
+  "name": "vome-dash",
+  "version": "0.1.0",
+  "description": "A Home Assistant dashboard in a side pane of Claude Code, working: live states, and controls that toggle, step and run as the dashboard's own do. Shows the dashboard Claude reads or edits, with what a save changed lit up, or one picked with /dash. Needs @vortitron/home-assistant-mcp.",
+  "author": {
+    "name": "Vortitron",
+    "url": "https://vome.io"
+  },
+  "homepage": "https://github.com/Vortitron/home-assistant-mcp/tree/main/claude-plugin/vome-dash",
+  "repository": "https://github.com/Vortitron/home-assistant-mcp",
+  "license": "MIT",
+  "keywords": ["home-assistant", "dashboard", "lovelace", "vome", "mcp"],
+  "types": "./types/index.d.ts"
+}

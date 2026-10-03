@@ -75,9 +75,8 @@ export function downsample(
 	states: Array<{ state: string; last_changed?: string; last_updated?: string }>,
 	max: number
 ): Array<[string, number | string]> {
-	const points = states
-		.map((s) => ({ at: s.last_changed ?? s.last_updated ?? "", value: s.state }))
-		.filter((p) => p.at !== "");
+	// A state with no time is still a value: keep it, with an empty time.
+	const points = states.map((s) => ({ at: s.last_changed ?? s.last_updated ?? "", value: String(s.state ?? "") }));
 	if (points.length <= max) return points.map((p) => [p.at, toValue(p.value)]);
 	const out: Array<[string, number | string]> = [];
 	const size = points.length / max;

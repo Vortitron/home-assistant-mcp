@@ -40,6 +40,8 @@ let isPolling = false
 let lastTemplates = 0
 let lastHistory = 0
 let settingsFile = '~/.claude/settings.json'
+/** The last press, so Retry can make it again once it is allowed. */
+let lastCall: { server: string; call: ServiceCall } | null = null
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
@@ -88,6 +90,7 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Text, Button, Code, Markdown } = $.ui.resolve(e)
+    const settingsLink = <Markdown text={`[${settingsFile}](file://${settingsFile})`} />
     const current = (await $.state.get(dash)).value ?? null
     const shownView = (await $.state.get(view)).value ?? 0
     const live = (await $.state.get(states)).value ?? {}
@@ -114,6 +117,7 @@ export const register: Register = on => {
             Auto mode refused the pane's read of live states. Add these to permissions.allow in {settingsFile}; they only read:
           </Text>
         )}
+        {settingsLink}
         <Code source={refusal.tool === 'ha_call_service' ? `"mcp__${refusal.server}__ha_call_service"` : READS.map(t => `"mcp__${refusal.server}__${t}"`).join(',\n')} />
         <Box flexDirection="row" gap={2}>
           <Button
@@ -127,6 +131,17 @@ export const register: Register = on => {
             }
           >
             Copy
+          </Button>
+          <Button
+            key="retry"
+            hotkey="t"
+            onPress={async () => {
+              await $.state.set(blocked, null)
+              if (refusal.tool === 'ha_call_service' && lastCall) await callService($, lastCall.server, lastCall.call)
+              else void poll($, true)
+            }}
+          >
+            {refusal.tool === 'ha_call_service' ? 'Retry the press' : 'Retry'}
           </Button>
           <Button key="dismiss-rule" dimColor onPress={() => $.state.set(blocked, null)}>
             Dismiss
@@ -359,6 +374,7 @@ async function setChoices($: EngineInterface, text: string) {
 
 /** A press: the call, then a quick read of what it changed, so the pane answers at once. */
 async function callService($: EngineInterface, server: string, call: ServiceCall) {
+  lastCall = { server, call }
   const { confirm: _asked, ...args } = call
   void _asked
   const text = await callMcp($, server, 'ha_call_service', args)

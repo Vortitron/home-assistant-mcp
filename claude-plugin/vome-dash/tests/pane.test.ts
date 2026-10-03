@@ -76,6 +76,7 @@ function setup(on: On) {
     }
     if (e.tool === 'ha_render_template') return text('Right now: *forage*')
     if (e.tool === 'ha_list_dashboards') return text({ dashboards: [{ url_path: 'lovelace', title: 'Overview' }, { url_path: 'claude-lights', title: 'Lights' }] })
+    if (e.tool === 'ha_get_dashboard' && e.args.url_path === 'lovelace') return text({ url_path: 'lovelace', config: CONFIG })
     if (e.tool === 'ha_get_dashboard') return text({ url_path: e.args.url_path, config: { title: 'Lights', views: [{ title: 'Home', cards: [{ type: 'entities', title: 'Bulbs', entities: ['light.kitchen_2'] }] }] } })
     if (e.tool === 'ha_get_history') return text({ series: [[0.1, 0.4, 0.9, 0.3].map(v => ({ entity_id: 'sensor.housefly_arousal', state: String(v) }))] })
     if (e.tool === 'ha_call_service') {

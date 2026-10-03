@@ -7,6 +7,15 @@ export type Dash = {
   at: number
 }
 
+/** A press on its way: sent to Home Assistant, accepted, and then seen to change the device (or not). */
+export type Pending = {
+  phase: 'sending' | 'sent' | 'done' | 'quiet' | 'failed'
+  at: number
+  /** The entity the press is about, and how it looked before, to see it change. */
+  entity: string | null
+  before: string | null
+}
+
 /** One entity's live state, as the pane last read it. */
 export type Live = { state: string; attributes: Record<string, unknown>; at: number }
 
@@ -25,8 +34,10 @@ declare module 'claude-code' {
       history: Record<string, Record<string, Array<number | string>>>
       /** A press that asks first: which control, until when. */
       confirm: { key: string; until: number } | null
-      /** The home's dashboards, while the picker is open. */
+      /** The home's dashboards: the sidebar. */
       choices: Array<{ urlPath: string; title: string }> | null
+      /** Presses on their way, by control. */
+      pending: Record<string, Pending>
       /** Auto mode refused one of the pane's calls: on which server, which tool. */
       blocked: { server: string; tool: string } | null
       note: string | null

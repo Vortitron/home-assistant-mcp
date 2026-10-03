@@ -12,7 +12,7 @@
 
 import type { EngineInterface, Register, RenderChildren } from 'claude-code'
 
-import type { Dash, Live } from '../types'
+import type { Dash, Live, Pending } from '../types'
 import { changedCards, entitiesOf, iconFor, sparkline, stepFor, toggleFor, viewsOf } from './lovelace'
 import type { Card, Row, ServiceCall, View } from './lovelace'
 
@@ -33,6 +33,12 @@ const rendered = { plugin: 'vome-dash', key: 'rendered' } as const
 const history = { plugin: 'vome-dash', key: 'history' } as const
 const confirm = { plugin: 'vome-dash', key: 'confirm' } as const
 const choices = { plugin: 'vome-dash', key: 'choices' } as const
+const pending = { plugin: 'vome-dash', key: 'pending' } as const
+/** How long a press waits to see its device change, how often it looks, how long the outcome stays. */
+const WATCH_MS = 8_000
+const WATCH_EVERY_MS = 700
+const OUTCOME_MS = 3_000
+const SIDEBAR = 20
 const blocked = { plugin: 'vome-dash', key: 'blocked' } as const
 const note = { plugin: 'vome-dash', key: 'note' } as const
 
@@ -49,6 +55,7 @@ export const register: Register = on => {
     const configDir = (await $.env.get('CLAUDE_CONFIG_DIR')) ?? `${(await $.env.get('HOME')) ?? '~'}/.claude`
     settingsFile = `${configDir.replace(/\/+$/, '')}/settings.json`
     $.clock.every(STATE_MS, () => void poll($))
+    $.clock.every(WATCH_EVERY_MS, () => void watchPresses($))
     return next(e)
   })
 
@@ -101,6 +108,7 @@ export const register: Register = on => {
     const picking = (await $.state.get(choices)).value ?? null
     const refusal = (await $.state.get(blocked)).value ?? null
     const message = (await $.state.get(note)).value ?? null
+    const presses = (await $.state.get(pending)).value ?? {}
     const width = Math.max(30, e.props.bodyColumns)
     const isLit = (key: string) => lighting !== null && Date.now() - lighting.at < LIT_MS && lighting.keys.some(k => key === k || key.startsWith(`${k}/`))
 
@@ -186,8 +194,30 @@ export const register: Register = on => {
     const views = viewsOf(current.config)
     const index = Math.min(shownView, Math.max(0, views.length - 1))
     const shown: View | undefined = views[index]
-    const columns = width >= 96 ? 2 : 1
-    const cardWidth = columns === 2 ? Math.floor((width - 1) / 2) : width
+    // Wide enough, the home's dashboards down the left as Home Assistant's sidebar has them.
+    const isSidebar = width >= 70 && (picking?.length ?? 0) > 1
+    const mainWidth = isSidebar ? width - SIDEBAR - 1 : width
+    const columns = mainWidth >= 96 ? 2 : 1
+    const cardWidth = columns === 2 ? Math.floor((mainWidth - 1) / 2) : mainWidth
+    /** What a control's press is doing, for the row it is on. */
+    const pressOf = (prefix: string): Pending | undefined =>
+      Object.entries(presses)
+        .filter(([key]) => key === prefix || key.startsWith(`${prefix}/`))
+        .map(([, p]) => p)
+        .sort((a, b) => b.at - a.at)[0]
+    const spinner = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏'[Math.floor(Date.now() / 120) % 10]
+    const pressNote = (p: Pending | undefined) =>
+      !p ? null : p.phase === 'sending' ? (
+        <Text color="warning">{spinner} sending</Text>
+      ) : p.phase === 'sent' ? (
+        <Text color="suggestion">{spinner} sent, waiting</Text>
+      ) : p.phase === 'done' ? (
+        <Text color="success">✓</Text>
+      ) : p.phase === 'quiet' ? (
+        <Text color="warning">no change seen</Text>
+      ) : (
+        <Text color="error">✗ failed</Text>
+      )
 
     const press = async (key: string, call: ServiceCall) => {
       if (call.confirm && !(asking && asking.key === key && asking.until > Date.now())) {
@@ -195,7 +225,7 @@ export const register: Register = on => {
         return
       }
       await $.state.set(confirm, null)
-      await callService($, current.server, call)
+      await pressAndWatch($, current.server, key, call)
     }
 
     const entityRow = (row: Extract<Row, { kind: 'entity' }>, key: string) => {
@@ -209,13 +239,16 @@ export const register: Register = on => {
       const up = now ? stepFor(row.entity, attributes, state, 1) : null
       const isOn = state === 'on'
       const shownState = row.entity.startsWith('light.') && isOn && typeof attributes.brightness === 'number' ? `on ${Math.round((attributes.brightness / 255) * 100)}%` : `${formatState(state)}${unit}`
+      const going = pressOf(key)
+      const isFresh = going?.phase === 'done'
       return (
         <Box flexDirection="row" justifyContent="space-between">
           <Text wrap="truncate-end">
             <Text color={isOn ? 'warning' : undefined}>{iconFor(row.entity, state)}</Text> {name}
           </Text>
           <Box flexDirection="row" gap={1}>
-            <Text color={state === 'unavailable' ? 'error' : isOn ? 'warning' : undefined} dimColor={state === 'off'}>
+            {pressNote(going)}
+            <Text color={isFresh ? 'success' : state === 'unavailable' ? 'error' : isOn ? 'warning' : undefined} bold={isFresh} dimColor={state === 'off' && !isFresh}>
               {shownState}
             </Text>
             {down ? (
@@ -279,11 +312,14 @@ export const register: Register = on => {
             body.push(
               <Box flexDirection="row" justifyContent="space-between">
                 <Text wrap="truncate-end">{isAsking ? <Text color="warning">{row.call?.confirm} Press again.</Text> : <Text>▸ {row.name}</Text>}</Text>
-                {row.call ? (
-                  <Button key={key} onPress={() => press(key, row.call!)}>
-                    {isAsking ? 'Yes' : 'Run'}
-                  </Button>
-                ) : null}
+                <Box flexDirection="row" gap={1}>
+                  {pressNote(pressOf(key))}
+                  {row.call ? (
+                    <Button key={key} onPress={() => press(key, row.call!)}>
+                      {isAsking ? 'Yes' : 'Run'}
+                    </Button>
+                  ) : null}
+                </Box>
               </Box>,
             )
           }
@@ -304,30 +340,65 @@ export const register: Register = on => {
       )
     }
 
-    return (
-      <Box flexDirection="column">
+    const open = (urlPath: string) => () => (urlPath === current.urlPath ? undefined : loadDashboard($, current.server, urlPath))
+    const sidebar = isSidebar ? (
+      <Box flexDirection="column" width={SIDEBAR} borderStyle="round" borderColor="subtle" paddingX={1}>
+        <Text dimColor>Dashboards</Text>
+        {(picking ?? []).map(choice => (
+          <Button key={`side-${choice.urlPath}`} dimColor={choice.urlPath !== current.urlPath} onPress={open(choice.urlPath)}>
+            {`${choice.urlPath === current.urlPath ? '▸ ' : '  '}${choice.title}`}
+          </Button>
+        ))}
+      </Box>
+    ) : null
+    // Narrow, the same as a row along the top.
+    const topRow =
+      !isSidebar && (picking?.length ?? 0) > 1 ? (
         <Box flexDirection="row" flexWrap="wrap" gap={1}>
-          <Text bold>{current.title}</Text>
-          {views.map((v, i) => (
-            <Button key={`view-${i}`} dimColor={i !== index} onPress={() => $.state.set(view, i)}>
-              {v.title}
+          {(picking ?? []).map(choice => (
+            <Button key={`side-${choice.urlPath}`} dimColor={choice.urlPath !== current.urlPath} onPress={open(choice.urlPath)}>
+              {choice.title}
             </Button>
           ))}
+        </Box>
+      ) : null
+
+    const main = (
+      <Box flexDirection="column" width={mainWidth}>
+        <Box flexDirection="row" flexWrap="wrap" gap={1}>
+          <Text bold>{current.title}</Text>
+          {views.length > 1
+            ? views.map((v, i) => (
+                <Button key={`view-${i}`} dimColor={i !== index} onPress={() => $.state.set(view, i)}>
+                  {v.title}
+                </Button>
+              ))
+            : null}
         </Box>
         <Box flexDirection="row" flexWrap="wrap">
           {(shown?.cards ?? []).map(card => drawCard(card, card.key))}
         </Box>
         {message ? <Text color="warning" wrap="wrap">{message}</Text> : null}
         {help}
-        {picker}
         <Box flexDirection="row" gap={2} marginTop={1}>
-          <Button key="other" hotkey="o" dimColor onPress={() => listDashboards($, current.server)}>
-            Other dashboard
-          </Button>
           <Button key="reload" hotkey="r" dimColor onPress={() => loadDashboard($, current.server, current.urlPath)}>
             Reload
           </Button>
         </Box>
+      </Box>
+    )
+
+    return (
+      <Box flexDirection="column">
+        {topRow}
+        {isSidebar ? (
+          <Box flexDirection="row" gap={1}>
+            {sidebar}
+            {main}
+          </Box>
+        ) : (
+          main
+        )}
       </Box>
     )
   })
@@ -347,9 +418,11 @@ async function showDashboard($: EngineInterface, server: string, urlPath: string
     lastHistory = 0
   }
   await $.state.set(dash, next)
-  await $.state.set(choices, null)
   await $.ui.open({ id: PANE, title: 'Dashboard' }).catch(() => undefined)
   void poll($, true)
+  // The sidebar: the home's dashboards, read once per home.
+  const listed = (await $.state.get(choices)).value ?? null
+  if (!listed || !before || before.server !== server) void listDashboards($, server)
 }
 
 async function loadDashboard($: EngineInterface, server: string, urlPath: string) {
@@ -373,15 +446,70 @@ async function setChoices($: EngineInterface, text: string) {
 }
 
 /** A press: the call, then a quick read of what it changed, so the pane answers at once. */
-async function callService($: EngineInterface, server: string, call: ServiceCall) {
+async function callService($: EngineInterface, server: string, call: ServiceCall): Promise<boolean> {
   lastCall = { server, call }
   const { confirm: _asked, ...args } = call
   void _asked
   const text = await callMcp($, server, 'ha_call_service', args)
-  if (text === null) return
-  const target = call.target?.entity_id
-  const ids = Array.isArray(target) ? target : target ? [target] : []
+  if (text === null) return false
+  const ids = targetsOf(call)
   if (ids.length > 0) await readStates($, server, ids)
+  return true
+}
+
+function targetsOf(call: ServiceCall): string[] {
+  const target = call.target?.entity_id
+  return Array.isArray(target) ? target : target ? [target] : []
+}
+
+/** How an entity looks, to tell that a press changed it: its state and the attributes a press moves. */
+function lookOf(live: Live | undefined): string | null {
+  if (!live) return null
+  const a = live.attributes
+  return [live.state, a.brightness, a.temperature, a.current_position, a.percentage].map(v => String(v ?? '')).join('|')
+}
+
+/**
+ * A press with its outcome shown: sending, then sent once Home Assistant takes the call, then done
+ * when the device is seen to change (the state flashes), or "no change seen" if it has not within a
+ * few seconds. A slow device or a refused command no longer looks like a press that did nothing.
+ */
+async function pressAndWatch($: EngineInterface, server: string, key: string, call: ServiceCall) {
+  const entity = targetsOf(call)[0] ?? null
+  const before = entity ? lookOf(((await $.state.get(states)).value ?? {})[entity]) : null
+  const set = async (phase: Pending['phase']) => {
+    const now = (await $.state.get(pending)).value ?? {}
+    await $.state.set(pending, { ...now, [key]: { phase, at: Date.now(), entity, before } })
+  }
+  await set('sending')
+  const isSent = await callService($, server, call)
+  if (!isSent) return set('failed')
+  // Already changed by the read straight after the call? Done; else watch for it.
+  const after = entity ? lookOf(((await $.state.get(states)).value ?? {})[entity]) : null
+  await set(!entity || (after !== null && after !== before) ? 'done' : 'sent')
+}
+
+/** Presses waiting on their device: look again, settle them, and clear old outcomes. */
+async function watchPresses($: EngineInterface) {
+  const now = (await $.state.get(pending)).value ?? {}
+  const keys = Object.keys(now)
+  if (keys.length === 0) return
+  const waiting = keys.filter(key => now[key]!.phase === 'sent' || now[key]!.phase === 'sending')
+  const current = (await $.state.get(dash)).value ?? null
+  const ids = [...new Set(waiting.map(key => now[key]!.entity).filter((id): id is string => !!id))]
+  if (current && ids.length > 0) await readStates($, current.server, ids)
+  const live = (await $.state.get(states)).value ?? {}
+  const next: Record<string, Pending> = {}
+  for (const key of keys) {
+    const p = now[key]!
+    const age = Date.now() - p.at
+    if (p.phase === 'sent' && p.entity && lookOf(live[p.entity]) !== p.before) next[key] = { ...p, phase: 'done', at: Date.now() }
+    else if (p.phase === 'sent' && age > WATCH_MS) next[key] = { ...p, phase: 'quiet', at: Date.now() }
+    else if ((p.phase === 'done' || p.phase === 'quiet' || p.phase === 'failed') && age > OUTCOME_MS) continue
+    else next[key] = p
+  }
+  await $.state.set(pending, next)
+  $.ui.invalidate('ui.render')
 }
 
 /** States every few seconds for the view on show; templates and history less often. */

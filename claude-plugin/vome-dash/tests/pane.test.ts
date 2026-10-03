@@ -70,9 +70,12 @@ function setup(on: On) {
       return text({ entities: ids.map(id => ({ entity_id: id, found: true, state: { entity_id: id, ...(STATES[id] ?? { state: 'unknown', attributes: {} }) } })) })
     }
     if (e.tool === 'ha_render_template') return text('Right now: *forage*')
+    if (e.tool === 'ha_list_dashboards') return text({ dashboards: [{ url_path: 'lovelace', title: 'Overview' }, { url_path: 'claude-lights', title: 'Lights' }] })
+    if (e.tool === 'ha_get_dashboard') return text({ url_path: e.args.url_path, config: { title: 'Lights', views: [{ title: 'Home', cards: [{ type: 'entities', title: 'Bulbs', entities: ['light.kitchen_2'] }] }] } })
     if (e.tool === 'ha_get_history') return text({ series: [[0.1, 0.4, 0.9, 0.3].map(v => ({ entity_id: 'sensor.housefly_arousal', state: String(v) }))] })
     if (e.tool === 'ha_call_service') {
       if (e.args.domain === 'light') STATES['light.kitchen_2'] = { state: 'off', attributes: { friendly_name: 'Kitchen' } }
+      // A socket whose device is slow: Home Assistant takes the call, nothing has changed yet.
       return text({ changed: [] })
     }
     return text({})
@@ -148,4 +151,28 @@ test("a save lights the card it changed", async ($, on) => {
   const ui = await mount($)
   const title = await ui.find({ text: 'Lights' })
   expect(title !== undefined).toBe(true)
+})
+
+test('a press shows it was taken, and the state it led to', async ($, on) => {
+  setup(on)
+  STATES['light.kitchen_2'] = { state: 'on', attributes: { friendly_name: 'Kitchen', brightness: 178 } }
+  await $.session.start({ source: 'startup', cwd: '/tmp' } as never)
+  await $.tool.call({ tool: tool('mcp__vome__ha_get_dashboard'), url_path: 'lovelace' } as never)
+  const ui = await mount($)
+  await ui.press({ key: 'v0/c2/r0/toggle' })
+  expect((await ui.find({ text: '✓' })) !== undefined).toBe(true)
+  // The socket's device has not changed yet: the press is taken, and the pane says it is waiting.
+  await ui.press({ key: 'v0/c2/r1/toggle' })
+  expect((await ui.find({ text: /sent, waiting/ })) !== undefined).toBe(true)
+})
+
+test("the home's dashboards are a sidebar, and one press opens another", async ($, on) => {
+  const calls = setup(on)
+  await $.session.start({ source: 'startup', cwd: '/tmp' } as never)
+  await $.tool.call({ tool: tool('mcp__vome__ha_get_dashboard'), url_path: 'lovelace' } as never)
+  const ui = await mount($)
+  expect((await ui.find({ text: 'Dashboards' })) !== undefined).toBe(true)
+  await ui.press({ key: 'side-claude-lights' })
+  expect(calls.some(c => c.tool === 'ha_get_dashboard' && c.args.url_path === 'claude-lights')).toBe(true)
+  expect((await ui.find({ text: 'Bulbs' })) !== undefined).toBe(true)
 })

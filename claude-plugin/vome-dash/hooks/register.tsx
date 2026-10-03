@@ -66,6 +66,12 @@ let hasMaxPoints = true
 let framesRetryAt = 0
 /** The MCP has ha_view_snapshot: one call a refresh. False after it is found missing, until a reload. */
 let hasSnapshot = true
+/** Live states: one waiting read at a time while the pane is on show (ha_watch_states). */
+let isWatching = false
+/** The watch has answered at least once: states come by it, so the snapshot need not read them. */
+let isWatchLive = false
+/** The MCP or the home cannot watch (no tool, no component link): poll, and try again after this. */
+let watchRetryAt = 0
 let lastTemplates = 0
 let lastHistory = 0
 let settingsFile = '~/.claude/settings.json'
@@ -653,7 +659,8 @@ async function watchPresses($: EngineInterface) {
     return WATCH_AT_MS.some(at => age >= at && age < at + WATCH_EVERY_MS)
   })
   const ids = [...new Set(due.map(key => now[key]!.entity).filter((id): id is string => !!id))]
-  if (current && ids.length > 0) await readStates($, current.server, ids)
+  // While a watch runs the change arrives by itself: only look when polling.
+  if (current && ids.length > 0 && !isWatchLive) await readStates($, current.server, ids)
   const live = (await $.state.get(states)).value ?? {}
   const next: Record<string, Pending> = {}
   for (const key of keys) {
@@ -684,8 +691,11 @@ async function poll($: EngineInterface, isNow = false) {
     const index = Math.min((await $.state.get(view)).value ?? 0, Math.max(0, views.length - 1))
     const cards = views[index]?.cards ?? []
     const ids = entitiesOf(cards).slice(0, MAX_ENTITIES)
+    // States arrive by themselves while a watch runs; start one if none is.
+    if (!isWatching && Date.now() >= watchRetryAt && ids.length > 0) void watchLoop($, current.server, current.urlPath, ids)
+    const statesWatched = isWatchLive
     // One call for everything due this time; the separate calls only for an MCP without it.
-    if (hasSnapshot && (await snapshot($, current.server, cards, ids, isNow))) return
+    if (hasSnapshot && (await snapshot($, current.server, cards, statesWatched ? [] : ids, isNow))) return
     if (ids.length > 0) await readStates($, current.server, ids)
     if (isNow || Date.now() - lastTemplates > TEMPLATE_MS) {
       lastTemplates = Date.now()
@@ -704,6 +714,44 @@ async function poll($: EngineInterface, isNow = false) {
     await $.state.set(note, `The dashboard could not refresh: ${firstLine(String(error))}`)
   } finally {
     isPolling = false
+  }
+}
+
+/**
+ * Live states while the pane is on show: wait for the next change (ha_watch_states holds the read
+ * open at the sync backend, up to 20 s), apply it, wait again. Nothing is polled while it runs.
+ * It ends when the pane is hidden, the dashboard or view changes, or the watch cannot run (an MCP
+ * without the tool, a home without its component linked), and then the pane polls as before.
+ */
+async function watchLoop($: EngineInterface, server: string, urlPath: string, ids: string[]) {
+  isWatching = true
+  let cursor = 0
+  const key = ids.join(',')
+  try {
+    while (true) {
+      const current = (await $.state.get(dash)).value ?? null
+      if (!current || current.urlPath !== urlPath || current.server !== server) return
+      const views = viewsOf(current.config)
+      const index = Math.min((await $.state.get(view)).value ?? 0, Math.max(0, views.length - 1))
+      if (entitiesOf(views[index]?.cards ?? []).slice(0, MAX_ENTITIES).join(',') !== key) return
+      if (!(await isShown($)) || (await $.state.get(blocked)).value) return
+      const text = await callMcp($, server, 'ha_watch_states', { entity_ids: ids, wait_seconds: 20, cursor }, true)
+      const body = text ? parseJson(text) : null
+      if (!body || !Array.isArray(body.states)) {
+        watchRetryAt = Date.now() + 5 * 60_000
+        return
+      }
+      cursor = typeof body.cursor === 'number' ? body.cursor : cursor
+      isWatchLive = true
+      const rows = (body.states as Array<{ entity_id?: string; state?: unknown; attributes?: Record<string, unknown> }>)
+        .filter(one => typeof one.entity_id === 'string')
+        .map(one => (one.state === null ? { entity_id: one.entity_id, found: false, state: null } : { entity_id: one.entity_id, found: true, state: { state: one.state, attributes: one.attributes ?? {} } }))
+      if (rows.length > 0) await applyStates($, rows)
+      if (body.done === true) return
+    }
+  } finally {
+    isWatching = false
+    isWatchLive = false
   }
 }
 

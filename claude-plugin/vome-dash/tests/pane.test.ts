@@ -71,12 +71,17 @@ const mount = ($: Engine) =>
 let LIMITED = false
 /** An MCP from before ha_view_snapshot. */
 let NO_SNAPSHOT = false
+/** The MCP can watch live states, and how many waits the pane has made. */
+let WATCH = false
+let WATCH_READS = 0
 
 function setup(on: On) {
   // Every test starts in the same house: a press in one leaves no light off for the next.
   STATES['light.kitchen_2'] = { state: 'on', attributes: { friendly_name: 'Kitchen', brightness: 178 } }
   LIMITED = false
   NO_SNAPSHOT = false
+  WATCH = false
+  WATCH_READS = 0
   const calls: Array<{ tool: string; args: Record<string, unknown> }> = []
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
   on('env.get', () => ({ value: undefined }))
@@ -88,6 +93,14 @@ function setup(on: On) {
   on('mcp.call', (_$, e) => {
     calls.push({ tool: e.tool, args: e.args })
     const text = (body: unknown) => ({ value: { content: [{ type: 'text', text: (typeof body === 'string' ? body : JSON.stringify(body)) + STAMP }], isError: false } })
+    if (e.tool === 'ha_watch_states') {
+      // A live watch: the whole picture, then one change, then the watch ends.
+      if (!WATCH) return { value: { content: [{ type: 'text', text: 'Unknown tool: ha_watch_states' }], isError: true } }
+      WATCH_READS += 1
+      if (WATCH_READS === 1) return text({ cursor: 1, full: true, states: [{ entity_id: 'light.kitchen_2', state: 'on', attributes: { brightness: 178 } }], done: false, error: null })
+      if (WATCH_READS === 2) return text({ cursor: 2, full: false, states: [{ entity_id: 'light.kitchen_2', state: 'off', attributes: {} }], done: false, error: null })
+      return text({ cursor: 2, full: false, states: [], done: true, error: 'closed' })
+    }
     if (e.tool === 'ha_view_snapshot') {
       if (NO_SNAPSHOT) return { value: { content: [{ type: 'text', text: 'Unknown tool: ha_view_snapshot' }], isError: true } }
       const a = e.args as { entity_ids?: string[]; templates?: Record<string, string>; history?: Array<{ key: string; entity_ids: string[] }>; frames?: Array<{ key: string; entity_id: string }> }
@@ -281,4 +294,17 @@ test('an MCP from before the snapshot gets the separate calls', async ($, on) =>
   const ui = await mount($)
   expect(calls.some(c => c.tool === 'ha_get_state')).toBe(true)
   expect((await ui.find({ text: /^on 70%$/ })) !== undefined).toBe(true)
+})
+
+test('a live watch brings changes by itself, and the snapshot stops asking for states', async ($, on) => {
+  const calls = setup(on)
+  WATCH = true
+  await $.session.start({ source: 'startup', cwd: '/tmp' } as never)
+  await $.tool.call({ tool: tool('mcp__vome__ha_get_dashboard'), url_path: 'lovelace' } as never)
+  await settle()
+  const ui = await mount($)
+  expect(WATCH_READS).toBeGreaterThanOrEqual(2)
+  expect((await ui.find({ text: /^off$/ })) !== undefined).toBe(true)
+  const watched = calls.find(c => c.tool === 'ha_watch_states')!
+  expect((watched.args.entity_ids as string[]).includes('light.kitchen_2')).toBe(true)
 })

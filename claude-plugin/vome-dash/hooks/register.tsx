@@ -13,7 +13,7 @@
 import type { EngineInterface, Register, RenderChildren } from 'claude-code'
 
 import type { Dash, Live, Pending } from '../types'
-import { READS, brailleChart, changedCards, entitiesOf, fromBase64, glowFor, glyphFor, halfBlocks, lightColour, stepFor, toggleFor, viewsOf } from './lovelace'
+import { READS, brailleChart, changedCards, entitiesOf, fromBase64, glowFor, glyphFor, halfBlocks, lightColour, steady, stepFor, toggleFor, viewsOf } from './lovelace'
 import type { Card, Row, ServiceCall, View } from './lovelace'
 
 const PANE = 'vome-dash'
@@ -275,7 +275,7 @@ export const register: Register = on => {
       const now: Live | undefined = live[row.entity]
       const state = now?.state ?? '…'
       const attributes = now?.attributes ?? {}
-      const name = row.name ?? (typeof attributes.friendly_name === 'string' ? attributes.friendly_name : row.entity)
+      const name = row.name ?? (typeof attributes.friendly_name === 'string' ? steady(attributes.friendly_name) : row.entity)
       const unit = typeof attributes.unit_of_measurement === 'string' ? ` ${attributes.unit_of_measurement}` : ''
       const toggle = toggleFor(row.entity)
       const down = now ? stepFor(row.entity, attributes, state, -1) : null
@@ -293,7 +293,7 @@ export const register: Register = on => {
       const isSlider = /^(input_number|number)\./.test(row.entity) && min !== null && max !== null && max > min
       const slider = isSlider ? sliderBar((Number(state) - min!) / (max! - min!), 8) : null
       return (
-        <Box flexDirection="row" backgroundColor={glow ?? undefined}>
+        <Box flexDirection="row" gap={1} backgroundColor={glow ?? undefined}>
           <Box flexGrow={1} flexShrink={1} minWidth={4} overflow="hidden">
             <Text wrap="truncate-end" backgroundColor={glow ?? undefined}>
               {glyphFor(row.entity, attributes, row.icon)} <Text bold={isLight}>{name}</Text>
@@ -413,7 +413,7 @@ export const register: Register = on => {
               const now = live[row.entity]
               const attributes = now?.attributes ?? {}
               const state = now?.state ?? '…'
-              const name = row.name ?? (typeof attributes.friendly_name === 'string' ? attributes.friendly_name : row.entity)
+              const name = row.name ?? (typeof attributes.friendly_name === 'string' ? steady(attributes.friendly_name) : row.entity)
               const toggle = toggleFor(row.entity)
               const key = `${cardKey}/r${i}`
               const isOn = state === 'on'
@@ -515,7 +515,8 @@ export const register: Register = on => {
       <Box flexDirection="column" width={mainWidth}>
         {/* A fixed header: menu, the title in its own room (cut short, never wrapped), Reload. Symbols
             whose width terminals disagree on (☰, ⟳) left letters behind when the title changed. */}
-        <Box flexDirection="row" gap={1}>
+        {/* paddingRight: the pane's own close cross sits on the top row's last cells. */}
+        <Box flexDirection="row" gap={1} paddingRight={2}>
           {hasMenu ? (
             <Button key="menu" hotkey="m" dimColor={!isMenuOpen} onPress={() => $.state.set(sidebarOpen, !isMenuOpen)}>
               {isMenuOpen ? 'Close' : 'Dashboards'}

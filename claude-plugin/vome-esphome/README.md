@@ -53,6 +53,10 @@ It asks for the key from step 1. Then:
 /reload-plugins
 ```
 
+
+Or all four Vome panes at once (automations, ESPHome, health and a working dashboard):
+`/plugin install vome-panes --marketplace Vortitron/home-assistant-mcp`.
+
 **3. Ask Claude about a device**, for example *"Add a temperature sensor on
 GPIO4 to the hallway node and flash it"*. The pane opens beside the
 conversation with the device's map, and the build when it starts.

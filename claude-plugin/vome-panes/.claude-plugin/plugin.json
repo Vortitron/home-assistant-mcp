@@ -1,0 +1,14 @@
+{
+  "name": "vome-panes",
+  "version": "0.1.0",
+  "description": "All four Vome side panes for Claude Code in one install: automations, ESPHome builds, your home's health score, and a working dashboard with live states. Connect first with vome-connect.",
+  "author": {
+    "name": "Vortitron",
+    "url": "https://vome.io"
+  },
+  "homepage": "https://github.com/Vortitron/home-assistant-mcp/tree/main/claude-plugin/vome-panes",
+  "repository": "https://github.com/Vortitron/home-assistant-mcp",
+  "license": "MIT",
+  "keywords": ["home-assistant", "vome", "mcp", "dashboard", "esphome", "automations"],
+  "dependencies": ["vome-automation", "vome-esphome", "vome-health", "vome-dash"]
+}

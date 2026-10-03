@@ -3,6 +3,8 @@
 A side pane in Claude Code that shows the Home Assistant automation Claude is
 working on, kept up to date as Claude reads it, edits it and runs it.
 
+![Claude explaining a home's automations, with the automation pane beside it: the automation as a WHEN/THEN map, each step marked by whether its latest run reached it.](../../docs/images/vome-automation.png)
+
 ## Quickstart
 
 **1. Add the Vome app to Home Assistant**, then get a key from it. No sign-up needed.
@@ -25,6 +27,10 @@ It asks for the key from step 1. Then:
 /plugin install vome-automation --marketplace Vortitron/home-assistant-mcp
 /reload-plugins
 ```
+
+
+Or all four Vome panes at once (automations, ESPHome, health and a working dashboard):
+`/plugin install vome-panes --marketplace Vortitron/home-assistant-mcp`.
 
 **3. Ask Claude about an automation**, for example *"Why didn't my hallway
 lights turn off?"*. The pane opens beside the conversation.

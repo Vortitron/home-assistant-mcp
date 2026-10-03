@@ -318,3 +318,13 @@ test('the permission box names every read the pane makes', async () => {
     expect(READS.includes(tool)).toBe(true)
   }
 })
+
+test('titles drop the pictographs terminals draw at different widths, and keep true emoji', async () => {
+  const { steady } = await import('../hooks/lovelace')
+  expect(steady('🌡 Temperatures')).toBe('Temperatures')
+  expect(steady('🎛️ Play')).toBe('Play')
+  expect(steady('💡 Lights')).toBe('💡 Lights')
+  expect(steady('Ånäsmotet')).toBe('Ånäsmotet')
+  // Nothing but a symbol: kept, rather than an empty title.
+  expect(steady('☀')).toBe('☀')
+})

@@ -9,6 +9,12 @@
   },
   "plugins": [
     {
+      "name": "vome-panes",
+      "source": "./claude-plugin/vome-panes",
+      "description": "All four Vome side panes in one install: automations, ESPHome, health score, and a working dashboard.",
+      "category": "productivity"
+    },
+    {
       "name": "vome-automation",
       "source": "./claude-plugin/vome-automation",
       "description": "A side pane for the Home Assistant automation Claude is working on, with what a save changed and which steps the latest run took.",

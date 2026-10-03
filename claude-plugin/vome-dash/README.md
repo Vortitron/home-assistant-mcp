@@ -3,6 +3,8 @@
 A side pane with a Home Assistant dashboard in it: the one Claude is working
 on, or any of yours. Not a picture of one: it works.
 
+![Claude Code asked to set two lights to 40% and switch a socket on; the dashboard pane beside it lights them up as the home reports the change.](../../docs/images/vome-dash.gif)
+
 - **Live states.** Through Vome the home sends each change the moment it
   happens, so a light switched in Home Assistant changes here within a
   second, with nothing polled.
@@ -42,6 +44,11 @@ It asks for the key from step 1. Then:
 /plugin install vome-dash --marketplace Vortitron/home-assistant-mcp
 /reload-plugins
 ```
+
+Or all four Vome panes at once (automations, ESPHome, health and this one):
+`/plugin install vome-panes --marketplace Vortitron/home-assistant-mcp`.
+
+![The dashboard pane: lights, sockets, a camera in half blocks, occupancy, temperatures and their graphs, in two columns.](../../docs/images/vome-dash.png)
 
 **3. Run `/dash`**, pick a dashboard, or ask Claude to build one: *"Make me a
 dashboard for the lights and the temperatures"*.

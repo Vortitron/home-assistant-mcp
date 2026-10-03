@@ -44,13 +44,27 @@ type Obj = Record<string, unknown>
 const isObj = (value: unknown): value is Obj => !!value && typeof value === 'object' && !Array.isArray(value)
 const str = (value: unknown): string | null => (typeof value === 'string' && value.trim() ? value : null)
 
+/**
+ * A title or name without the pictographs terminals disagree about the width of: those that
+ * default to text presentation (🌡, 🎛, ☀, ❄…), which one terminal draws in one cell and another
+ * in two, so everything after them on the row shifts and leaves stray borders. Emoji that are
+ * always emoji (💡, 🔥) are kept.
+ */
+export function steady(text: string): string {
+  return text.replace(/(?![\p{Emoji_Presentation}])\p{Extended_Pictographic}\uFE0F?\s*/gu, '').replace(/\uFE0F/g, '').trim() || text
+}
+const label = (value: unknown): string | null => {
+  const s = str(value)
+  return s ? steady(s) : null
+}
+
 export function viewsOf(config: unknown): View[] {
   if (!isObj(config) || !Array.isArray(config.views)) return []
   return config.views.filter(isObj).map((view, v) => {
     const sections = Array.isArray(view.sections) ? view.sections.filter(isObj).flatMap(section => (Array.isArray(section.cards) ? section.cards : [])) : []
     const cards = [...(Array.isArray(view.cards) ? view.cards : []), ...sections]
     return {
-      title: str(view.title) ?? str(view.path) ?? `View ${v + 1}`,
+      title: label(view.title) ?? str(view.path) ?? `View ${v + 1}`,
       path: str(view.path),
       cards: cards.filter(isObj).map((card, c) => cardOf(card, `v${v}/c${c}`)),
     }
@@ -62,7 +76,7 @@ function cardOf(card: Obj, key: string): Card {
   const base: Card = {
     key,
     type,
-    title: str(card.title) ?? str(card.name),
+    title: label(card.title) ?? label(card.name),
     rows: [],
     markdown: null,
     hours: null,
@@ -99,7 +113,7 @@ function cardOf(card: Obj, key: string): Card {
       const entity = str(card.entity)
       const call = actionOf(card.tap_action, entity)
       // Its name is the button's label: not a title over it as well.
-      return { ...base, title: null, rows: [{ kind: 'button', name: str(card.name) ?? entity ?? 'Button', icon: str(card.icon), call, entity }] }
+      return { ...base, title: null, rows: [{ kind: 'button', name: label(card.name) ?? entity ?? 'Button', icon: str(card.icon), call, entity }] }
     }
     case 'tile':
     case 'light':
@@ -341,7 +355,8 @@ const MDI: Array<[RegExp, string]> = [
   [/weather-sunny|sun/, '🌞'],
   [/moon|night|sleep/, '🌙'],
   [/robot|auto/, '🤖'],
-  [/thermometer|temperature/, '🌡️'],
+  // A thermometer emoji is text-presentation: terminals draw it one cell or two, and the row shifts.
+  [/thermometer|temperature/, '🔥'],
 ]
 
 /** The picture an entity is drawn with: its own mdi icon, else what kind of thing it is. */
@@ -383,11 +398,11 @@ export function glyphFor(entity: string, attributes: Record<string, unknown>, ic
       return '🔘'
     case 'input_number':
     case 'number':
-      return '🎚️'
+      return '🔢'
     case 'binary_sensor':
       return /occupancy|motion|presence/.test(kind) ? '🚶' : /door|garage/.test(kind) ? '🚪' : /window/.test(kind) ? '🪟' : /smoke|heat/.test(kind) ? '🔥' : /moisture/.test(kind) ? '💧' : '🔵'
     case 'sensor':
-      return /temperature/.test(kind) ? '🌡️' : /humidity|moisture/.test(kind) ? '💧' : /battery/.test(kind) ? '🔋' : /power|energy|current|voltage/.test(kind) ? '⚡' : /illuminance/.test(kind) ? '🌞' : /distance/.test(kind) ? '📏' : '📊'
+      return /temperature/.test(kind) ? '🔥' : /humidity|moisture/.test(kind) ? '💧' : /battery/.test(kind) ? '🔋' : /power|energy|current|voltage/.test(kind) ? '⚡' : /illuminance/.test(kind) ? '🌞' : /distance/.test(kind) ? '📏' : '📊'
     default:
       return '🔵'
   }

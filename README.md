@@ -11,6 +11,13 @@ edit automations itself — and iterate until the code actually works.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](./LICENSE)
 
+![Claude Code asked to set two lights to 40% and switch a socket on; the dashboard pane beside it lights them up as the home reports the change.](docs/images/vome-dash.gif)
+
+In Claude Code, four side panes show what Claude is doing to your home as it
+happens: the automation it is working on, the ESPHome device it is building,
+the home's health score and a dashboard that works. One command installs all
+four ([below](#claude-code-the-side-panes)).
+
 > Part of the [Vome](https://vome.io) family and an open-source companion to
 > **VomeHome** (managed Home Assistant). It is useful stand-alone for any Home
 > Assistant user.
@@ -403,13 +410,25 @@ VS Code can prompt for the token so it is not stored in the file:
 
 Add the same block under `mcpServers` in `claude_desktop_config.json`.
 
-### Claude Code: the automation pane
+### Claude Code: the side panes
 
 Claude Code takes the same block in `.mcp.json`, or one server at a time with
-`claude mcp add-json <name> '<entry>'`. With it connected, the
-[**vome-automation**](claude-plugin/vome-automation/README.md) plugin adds a
-side pane in the terminal. It shows the automation Claude is working on, what
-a save changed and which steps the latest run took:
+`claude mcp add-json <name> '<entry>'`. Through Vome it is two commands, with a
+key from the Vome app's **Agent** tab:
+
+```
+/plugin install vome-connect --marketplace Vortitron/home-assistant-mcp
+/plugin install vome-panes --marketplace Vortitron/home-assistant-mcp
+```
+
+The first connects your home (it asks for the key), the second installs all
+four panes. Or pick them one at a time:
+
+![The automation pane: the automation as a WHEN/THEN map, each step marked by whether its latest run reached it.](docs/images/vome-automation.png)
+
+The [**vome-automation**](claude-plugin/vome-automation/README.md) pane shows
+the automation Claude is working on, what a save changed and which steps the
+latest run took:
 
 ```
 /plugin install vome-automation --marketplace Vortitron/home-assistant-mcp
@@ -418,6 +437,8 @@ a save changed and which steps the latest run took:
 That needs Claude Code 2.1.275 or newer; its README has the two-command form
 for older versions, how to turn on updates, and the read-only tools to allow in
 auto mode.
+
+<img src="docs/images/vome-health.png" alt="The health pane: 72 out of 100, the findings to fix with a Fix button each, and what is fine." width="49%"> <img src="docs/images/vome-dash.png" alt="The dashboard pane: lights, sockets, a camera in half blocks, occupancy, temperatures and their graphs, in two columns." width="49%">
 
 For the home's health, [**vome-health**](claude-plugin/vome-health/README.md)
 shows Vome's score and what its check found, marked as Claude fixes each, and

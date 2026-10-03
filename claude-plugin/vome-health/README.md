@@ -4,6 +4,8 @@ A side pane with Vome's health score for your Home Assistant, out of 100, and
 everything its check found, kept beside the conversation while Claude works
 through it.
 
+![The health pane: 72 out of 100, the findings to fix with a Fix button each, and what is fine.](../../docs/images/vome-health.png)
+
 - **The score**, big, in the terminal, with a heart beating beside it,
   coloured by how the home is doing, and when it was checked.
 - **What the check found, by severity**: *To fix*, *Worth doing*, *Fine*, each
@@ -42,6 +44,10 @@ It asks for the key from step 1. Then:
 /plugin install vome-health --marketplace Vortitron/home-assistant-mcp
 /reload-plugins
 ```
+
+
+Or all four Vome panes at once (automations, ESPHome, health and a working dashboard):
+`/plugin install vome-panes --marketplace Vortitron/home-assistant-mcp`.
 
 **3. Ask Claude** *"How healthy is my Home Assistant? Fix what you can."* The
 pane opens with the score. No score yet? Claude runs the first check, which

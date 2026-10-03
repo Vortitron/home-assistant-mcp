@@ -40,6 +40,10 @@ const blocked = { plugin: 'vome-esphome', key: 'blocked' } as const
 const fxOn = { plugin: 'vome-esphome', key: 'fxOn' } as const
 const config = { plugin: 'vome-esphome', key: 'config' } as const
 const showLog = { plugin: 'vome-esphome', key: 'showLog' } as const
+const sibling = { plugin: 'vome-esphome', key: 'sibling' } as const
+const AUTOMATION_INSTALL = '/plugin install vome-automation --marketplace Vortitron/home-assistant-mcp'
+/** vome-automation joined the chain after this plugin, so its hint is not needed (it cannot see one loaded before it). */
+let hasSibling = false
 /** How long a save's changes stay lit in the map. */
 const CHANGE_MS = 8_000
 const LOG_LINES = 2
@@ -62,6 +66,11 @@ let shownTitle = 'ESPHome'
 let configAsked: string | null = null
 
 export const register: Register = on => {
+  on('plugin.register', ($, e, next) => {
+    if (e.name === 'vome-automation') hasSibling = true
+    return next(e)
+  })
+
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: 'esphome', description: 'Show the ESPHome build pane' })
     const configDir = (await $.env.get('CLAUDE_CONFIG_DIR')) ?? `${(await $.env.get('HOME')) ?? '~'}/.claude`
@@ -82,6 +91,10 @@ export const register: Register = on => {
   // The MCP's ESPHome tools, on whatever its server is called (tool matchers must be literals).
   on('tool.call', async ($, e, next) => {
     const match = /^mcp__(.+)__(esphome_[a-z_]+)$/.exec(e.tool)
+    // Claude is on an automation: say once that the automation pane shows it, unless it is here or was waved off.
+    if (!match && !hasSibling && /^mcp__.+__ha_(get|set|list|trigger)_automations?$|^mcp__.+__ha_(get|list)_traces?$/.test(e.tool)) {
+      if (!(await $.state.get(sibling)).value && !(await isHintOff($))) await $.state.set(sibling, true)
+    }
     if (!match?.[1] || !match[2]) return next(e)
     const server = match[1]
     const name = match[2]
@@ -177,6 +190,24 @@ export const register: Register = on => {
     const isFxEnabled = (await $.state.get(fxOn)).value ?? true
     const view = (await $.state.get(config)).value ?? null
     const isFullLog = (await $.state.get(showLog)).value ?? false
+    const siblingHint =
+      !hasSibling && ((await $.state.get(sibling)).value ?? false) ? (
+        <Box flexDirection="row" gap={2} marginTop={1}>
+          <Text dimColor wrap="wrap">
+            Working on automations too? The automation pane shows them, and their runs: <Text color="suggestion">{AUTOMATION_INSTALL}</Text>
+          </Text>
+          <Button
+            key="hide-sibling"
+            dimColor
+            onPress={async () => {
+              await $.store.set('siblingHintOff', true).catch(() => undefined)
+              await $.state.set(sibling, false)
+            }}
+          >
+            Hide
+          </Button>
+        </Box>
+      ) : null
     const width = Math.max(20, e.props.bodyColumns)
     const rows = Math.max(6, (e.viewport?.rows ?? 30) - 14)
 
@@ -247,11 +278,13 @@ export const register: Register = on => {
           )}
           {deviceRows}
           {help}
+          {siblingHint}
         </Box>
       )
     }
 
-    const progress = progressOf(current.lines, current.command)
+    const parsed = progressOf(current.lines, current.command)
+    const progress = { ...parsed, uploadPercent: uploadShown(parsed, current) }
     const took = elapsed((current.finishedAt ?? Date.now()) - current.startedAt)
     const verb = { validate: 'Checking', compile: 'Compiling', upload: 'Flashing', logs: 'Logs from' }[current.command] ?? current.command
     const done = { validate: 'Valid', compile: 'Compiled', upload: 'Flashed', logs: 'Read the logs' }[current.command] ?? 'Done'
@@ -336,6 +369,7 @@ export const register: Register = on => {
         {isFullLog ? null : map}
         {deviceRows}
         {help}
+        {siblingHint}
         <Box marginTop={1} gap={2}>
           <Button key="log" hotkey="l" dimColor onPress={() => $.state.set(showLog, !isFullLog)}>
             {isFullLog ? 'Map and latest lines' : 'Full log'}
@@ -497,7 +531,8 @@ function stripStamp(text: string): string {
 
 /** The pane's tab says how the build is going, since another pane may be in front of it. */
 async function retitle($: EngineInterface, current: Build) {
-  const progress = progressOf(current.lines, current.command)
+  const parsed = progressOf(current.lines, current.command)
+    const progress = { ...parsed, uploadPercent: uploadShown(parsed, current) }
   const percent = progress.uploadPercent ?? progress.compilePercent
   const title =
     current.outcome === 'ok'
@@ -583,9 +618,11 @@ async function poll($: EngineInterface) {
       return
     }
     await retitle($, { ...latest, lines: [...latest.lines, ...fresh] })
-    if (fresh.length > 0 || seq !== latest.seq) {
+    const isUploadStage = !latest.uploadSeenAt && progressOf([...latest.lines, ...fresh], latest.command).phase === 'uploading'
+    if (fresh.length > 0 || seq !== latest.seq || isUploadStage) {
       await $.state.set(build, {
         ...latest,
+        uploadSeenAt: latest.uploadSeenAt ?? (isUploadStage ? Date.now() : null),
         lines: [...latest.lines, ...fresh].slice(-KEEP_LINES),
         seq,
         isLive: latest.isLive || fresh.length > 0,
@@ -603,6 +640,22 @@ async function poll($: EngineInterface) {
 async function giveUp($: EngineInterface) {
   const latest = (await $.state.get(build)).value ?? null
   if (latest?.outcome === 'running' && latest.error) await $.state.set(build, { ...latest, finishedAt: Date.now(), outcome: 'failed' })
+}
+
+/**
+ * The upload's percentage as shown. ESPHome's OTA redraws its bar with carriage returns and the
+ * stream delivers only the last state, "100% Done", at the end, so the chip used to fill in one
+ * jump. A real 1-99% wins; otherwise pace it from the firmware's size at about 90 KB/s (GamlaBio's
+ * LoftC3: 1.37 MB in 14.9 s), holding at 97% until the device says it is done.
+ */
+function uploadShown(progress: ReturnType<typeof progressOf>, current: Build): number | null {
+  if (progress.phase !== 'uploading' && progress.uploadPercent === null) return null
+  const real = progress.uploadPercent
+  if (real !== null && (real >= 100 || real > 0)) return real
+  if (current.outcome !== 'running') return current.outcome === 'ok' ? 100 : real
+  const since = current.uploadSeenAt ? Date.now() - current.uploadSeenAt : 0
+  const expected = progress.uploadBytes ? (progress.uploadBytes / 90_000) * 1000 + 1500 : 15_000
+  return Math.min(97, Math.round((since / expected) * 100))
 }
 
 // ---------------------------------------------------------------- small things
@@ -650,4 +703,13 @@ function parseDevices(text: string): Device[] | null {
       deployed: typeof row.deployed_version === 'string' ? row.deployed_version : null,
       current: typeof row.current_version === 'string' ? row.current_version : null,
     }))
+}
+
+/** Whether the person waved the other pane's hint off; a store that cannot answer means no. */
+async function isHintOff($: EngineInterface): Promise<boolean> {
+  try {
+    return (await $.store.get('siblingHintOff')) === true
+  } catch {
+    return false
+  }
 }

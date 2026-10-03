@@ -349,3 +349,40 @@ test('an edit in place redraws the map from the file, lighting what changed', as
   const ui = await mount($)
   expect((await ui.find({ text: /^\+.*Loft hatch/ })) !== undefined).toBe(true)
 })
+
+test('an OTA that reports only its end is paced from the firmware size, not left at the compile', async ($, on) => {
+  const clock = mock.clock(on)
+  base(on)
+  let finish: (value: ReturnType<typeof reply>) => void = () => undefined
+  on('tool.call', { tool: tool('mcp__vome__esphome_upload') }, () => new Promise(resolve => (finish = resolve)))
+  on('mcp.call', (_$, e) => {
+    if (e.tool === 'esphome_get_config') return { value: { content: [{ type: 'text', text: 'Not found' }], isError: true } }
+    // As GamlaBio's LoftC3 streamed it, 2 Oct 2026: no percentage until "100% Done".
+    const lines = [
+      'INFO Successfully compiled program.\n',
+      'INFO Connecting to 192.168.1.118 port 3232...\n',
+      'INFO Uploading /data/build/loftc3/build/loftc3.bin (1368768 bytes)\n',
+      'INFO Handshake complete\n',
+    ]
+    const job = { job_id: 'u', command: 'upload', configuration: 'loft.yaml', started: new Date().toISOString(), done: false, lines }
+    return { value: { content: [{ type: 'text', text: JSON.stringify({ seq: 4, jobs: [job] }) + STAMP }], isError: false } }
+  })
+  await $.session.start({ source: 'startup', cwd: '/tmp' } as never)
+  const call = $.tool.call({ tool: tool('mcp__vome__esphome_upload'), configuration: 'loft.yaml' } as never)
+  await clock.advance(1_600)
+  const ui = await mount($)
+  expect((await ui.find({ text: /^Uploading \d+% · / })) !== undefined).toBe(true)
+  finish(reply({ command: 'upload', configuration: 'loft.yaml', exit_code: 0, success: true, stopped: 'completed', output: 'INFO OTA successful\n' }))
+  await call
+  expect((await ui.find({ text: /✓ Flashed in/ })) !== undefined).toBe(true)
+})
+
+test('Claude on an automation: the pane offers the automation pane once, and Hide puts it away', async ($, on) => {
+  base(on)
+  on('tool.call', { tool: tool('mcp__vome__ha_get_automation') }, () => reply({ id: 'a', config: {} }))
+  await $.tool.call({ tool: tool('mcp__vome__ha_get_automation'), automation: 'a' } as never)
+  const ui = await mount($)
+  expect((await ui.find({ text: /\/plugin install vome-automation/ })) !== undefined).toBe(true)
+  await ui.press({ key: 'hide-sibling' })
+  expect((await ui.find({ text: /\/plugin install vome-automation/ })) === undefined).toBe(true)
+})

@@ -19,6 +19,8 @@ export type Progress = {
   compilePercent: number | null
   /** Upload progress, 0 to 100, once uploading. */
   uploadPercent: number | null
+  /** The firmware's size, from "Uploading <file> (N bytes)": paces the bar when OTA reports only its end. */
+  uploadBytes: number | null
   ram: string | null
   flash: string | null
   errors: string[]
@@ -51,7 +53,7 @@ export function kindOf(line: string): LineKind {
 /** Where a build is, from all its lines so far. */
 export function progressOf(lines: string[], command: string): Progress {
   let mainTotal = 0
-  const p: Progress = { phase: 'starting', compiled: 0, compilePercent: null, uploadPercent: null, ram: null, flash: null, errors: [], warnings: 0 }
+  const p: Progress = { phase: 'starting', compiled: 0, compilePercent: null, uploadPercent: null, uploadBytes: null, ram: null, flash: null, errors: [], warnings: 0 }
   for (const line of lines) {
     const kind = kindOf(line)
     if (kind === 'error') p.errors.push(line)
@@ -86,6 +88,10 @@ export function progressOf(lines: string[], command: string): Progress {
       p.uploadPercent = Number(upload[1])
       p.phase = higher(p.phase, 'uploading')
     }
+    // The OTA has begun before any percentage: ESPHome connects, says what it sends, shakes hands.
+    if (command === 'upload' && /Connecting to .* port \d+|^INFO Uploading \/|^Uploading \/|Handshake complete/.test(line)) p.phase = higher(p.phase, 'uploading')
+    const size = /Uploading \S+ \((\d+) bytes\)/.exec(line)
+    if (size) p.uploadBytes = Number(size[1])
     if (/OTA successful|Successfully uploaded program/i.test(line)) p.uploadPercent = 100
   }
   if (command === 'validate' && p.phase === 'starting' && lines.length > 0) p.phase = 'config'

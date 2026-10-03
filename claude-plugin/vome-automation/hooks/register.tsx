@@ -51,6 +51,10 @@ const haUrls = { plugin: 'vome-automation', key: 'haUrls' } as const
 const flash = { plugin: 'vome-automation', key: 'flash' } as const
 const fxOn = { plugin: 'vome-automation', key: 'fxOn' } as const
 const fx = { plugin: 'vome-automation', key: 'fx' } as const
+const sibling = { plugin: 'vome-automation', key: 'sibling' } as const
+const ESPHOME_INSTALL = '/plugin install vome-esphome --marketplace Vortitron/home-assistant-mcp'
+/** vome-esphome joined the chain after this plugin, so its hint is not needed (it cannot see one loaded before it). */
+let hasSibling = false
 const building = { plugin: 'vome-automation', key: 'building' } as const
 const blocked = { plugin: 'vome-automation', key: 'blocked' } as const
 const servers = { plugin: 'vome-automation', key: 'servers' } as const
@@ -97,6 +101,11 @@ type Stamp = { instance: string | null; home: string | null }
 type Reply = { body: ReturnType<typeof parseReply>; stamp: Stamp; isError: boolean; text: string }
 
 export const register: Register = on => {
+  on('plugin.register', ($, e, next) => {
+    if (e.name === 'vome-esphome') hasSibling = true
+    return next(e)
+  })
+
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'automation',
@@ -144,6 +153,10 @@ export const register: Register = on => {
   // from the README, a relay's own name. Tool matchers must be literals, so match here instead.
   on('tool.call', async ($, e, next) => {
     const ours = ourTool(e.tool)
+    // Claude is on an ESPHome device: say once that the ESPHome pane shows it, unless it is here or was waved off.
+    if (!ours && !hasSibling && /^mcp__.+__esphome_[a-z_]+$/.test(e.tool) && !(await $.state.get(sibling)).value) {
+      if (!(await isHintOff($))) await $.state.set(sibling, true)
+    }
     if (!ours) return next(e)
     const { server, name } = ours
     const args = e as unknown as Record<string, unknown>
@@ -254,6 +267,24 @@ export const register: Register = on => {
     const isBuilding = (await $.state.get(building)).value ?? false
     const refusal = (await $.state.get(blocked)).value ?? null
     const picking = (await $.state.get(choices)).value ?? null
+    const isSiblingHint = !hasSibling && ((await $.state.get(sibling)).value ?? false)
+    const siblingHint = isSiblingHint ? (
+      <Box flexDirection="row" gap={2} marginTop={1}>
+        <Text dimColor wrap="wrap">
+          Working on ESPHome too? The ESPHome pane shows the device and its builds: <Text color="suggestion">{ESPHOME_INSTALL}</Text>
+        </Text>
+        <Button
+          key="hide-sibling"
+          dimColor
+          onPress={async () => {
+            await $.store.set('siblingHintOff', true).catch(() => undefined)
+            await $.state.set(sibling, false)
+          }}
+        >
+          Hide
+        </Button>
+      </Box>
+    ) : null
 
     // The home's automations to pick one from (/automation with nothing shown, or o). The phone app
     // has no Select, so there they are buttons, the first dozen.
@@ -422,6 +453,7 @@ export const register: Register = on => {
           {message ? <Text color="warning">{message}</Text> : null}
           {picker}
           {showHelp}
+          {siblingHint}
         </Box>
       )
     }
@@ -530,6 +562,7 @@ export const register: Register = on => {
         </Box>
         <Text dimColor>● ran  ✗ false or error  ○ not reached  + added  ~ changed  − removed</Text>
         {picker}
+        {siblingHint}
       </Box>
     )
   })
@@ -963,4 +996,13 @@ function clock(iso: string): string {
   const at = new Date(toMs(iso))
   const pad = (n: number) => String(n).padStart(2, '0')
   return `${pad(at.getHours())}:${pad(at.getMinutes())}:${pad(at.getSeconds())}`
+}
+
+/** Whether the person waved the other pane's hint off; a store that cannot answer means no. */
+async function isHintOff($: EngineInterface): Promise<boolean> {
+  try {
+    return (await $.store.get('siblingHintOff')) === true
+  } catch {
+    return false
+  }
 }

@@ -1,6 +1,6 @@
 {
   "name": "vome-automation",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "A side pane for the Home Assistant automation Claude is working on: triggers, conditions and actions as HA's editor nests them, what a save changed, which steps the latest run took, and a car-stereo dot-matrix display that acts it out. Works with @vortitron/home-assistant-mcp, hosted on Vome, linked through the Vome relay, or pointed at your own Home Assistant.",
   "author": {
     "name": "Vortitron",

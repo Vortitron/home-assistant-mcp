@@ -84,6 +84,8 @@ declare module 'claude-code' {
       blocked: { server: string; tool: string; error: string; isDismissed: boolean } | null
       /** Connected MCP servers that carry our tools; empty means nothing to follow yet. */
       servers: string[]
+      /** Claude used ESPHome tools and the ESPHome pane does not seem to be here: offer it, once. */
+      sibling: boolean
       /** The picker's list, while it is open. */
       choices: Choices | null
       /** Whether the bulb strip plays; kept across sessions in $.store as well. */

@@ -14,6 +14,8 @@ export type Build = {
   isLive: boolean
   outcome: 'running' | 'ok' | 'failed'
   error: string | null
+  /** When the upload stage was first seen, to pace its bar: OTA prints its percentage only at the end. */
+  uploadSeenAt?: number | null
 }
 
 /** A device the dashboard knows, from esphome_list_devices. */
@@ -59,6 +61,8 @@ declare module 'claude-code' {
       config: ConfigView | null
       /** The whole build log instead of its last lines and the map. */
       showLog: boolean
+      /** Claude used automation tools and the automation pane does not seem to be here: offer it, once. */
+      sibling: boolean
     }
   }
 }

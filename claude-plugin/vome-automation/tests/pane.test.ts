@@ -50,3 +50,14 @@ for (const placed of [true, false]) {
     }
   })
 }
+
+test('Claude on an ESPHome device: the pane offers the ESPHome pane once, and Hide puts it away', async ($, on) => {
+  on('tool.call', { tool: 'mcp__vome__esphome_compile' }, () => ({ result: [{ type: 'text', text: '{}' }], text: '{}' }))
+  on('ui.log', () => ({ value: undefined }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  await $.tool.call({ tool: 'mcp__vome__esphome_compile', configuration: 'loft.yaml' } as never)
+  const ui = await $.ui.mount({ plugin: 'vome-automation', surface: 'vscode', component: 'Pane', requestId: 'vome-automation', props: PANE_PROPS, viewport: { columns: 160, rows: 40 } })
+  expect((await ui.find({ text: /\/plugin install vome-esphome/ })) !== undefined).toBe(true)
+  await ui.press({ key: 'hide-sibling' })
+  expect((await ui.find({ text: /\/plugin install vome-esphome/ })) === undefined).toBe(true)
+})

@@ -1889,3 +1889,46 @@ describe("ha_view_snapshot", () => {
 		expect(body.frames.cam.error).toMatch(/Cameras/);
 	});
 });
+
+describe("ha_watch_states", () => {
+	afterEach(() => vi.unstubAllGlobals());
+
+	it("starts a watch through the portal, then waits on it: the whole picture first, then changes", async () => {
+		const grants: Array<{ ids: string[]; jobId?: string }> = [];
+		const rest = {
+			startStateWatch: async (ids: string[], jobId?: string) => {
+				grants.push({ ids, jobId });
+				return { job_id: "job-1", token: "tok", read_url: "https://sync.vome.io/api/watch/job-1", expires_at: Math.floor(Date.now() / 1000) + 600, entity_ids: ids };
+			}
+		} as never;
+		const reads: string[] = [];
+		vi.stubGlobal("fetch", async (url: string, init: { headers: Record<string, string> }) => {
+			reads.push(`${url} ${init.headers.Authorization}`);
+			const cursor = Number(new URL(url).searchParams.get("cursor"));
+			const body = cursor === 0
+				? { cursor: 2, full: true, states: [{ entity_id: "light.kitchen_2", state: "on" }], done: false, error: null }
+				: { cursor: 3, full: false, states: [{ entity_id: "light.kitchen_2", state: "off" }], done: false, error: null };
+			return new Response(JSON.stringify(body), { status: 200 });
+		});
+		const server = buildHarness({ rest });
+		const first = jsonOf(await server.call("ha_watch_states", { entity_ids: ["light.kitchen_2"], wait_seconds: 0 }));
+		const second = jsonOf(await server.call("ha_watch_states", { entity_ids: ["light.kitchen_2"], wait_seconds: 5 }));
+		expect(first.full).toBe(true);
+		expect(second.states[0].state).toBe("off");
+		expect(grants.length).toBe(1);
+		expect(reads[1]).toBe("https://sync.vome.io/api/watch/job-1?cursor=2&wait=5 Bearer tok");
+	});
+
+	it("starts afresh when the watch has ended", async () => {
+		let n = 0;
+		const rest = {
+			startStateWatch: async (ids: string[]) => ({ job_id: `job-${++n}`, token: "tok", read_url: `https://sync.vome.io/api/watch/job-${n}`, expires_at: Math.floor(Date.now() / 1000) + 600, entity_ids: ids })
+		} as never;
+		vi.stubGlobal("fetch", async (url: string) =>
+			url.includes("job-1") ? new Response("{}", { status: 404 }) : new Response(JSON.stringify({ cursor: 1, full: true, states: [], done: false, error: null }), { status: 200 })
+		);
+		const body = jsonOf(await buildHarness({ rest }).call("ha_watch_states", { entity_ids: ["light.a"], wait_seconds: 0 }));
+		expect(n).toBe(2);
+		expect(body.full).toBe(true);
+	});
+});

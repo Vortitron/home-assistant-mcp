@@ -28,6 +28,15 @@ export class HaApiError extends Error {
 }
 
 /** A binary body, base64-encoded, and what kind of file it is. */
+/** A running watch of some entities' states, and the token a reader follows it with (VomeHome only). */
+export interface StateWatchGrant {
+	job_id: string;
+	token: string;
+	read_url: string;
+	expires_at: number;
+	entity_ids: string[];
+}
+
 export interface HaImage {
 	data: string;
 	mimeType: string;
@@ -76,6 +85,8 @@ export interface HaRestClient {
 	getSupervisorLog(target: string, addonSlug?: string): Promise<string>;
 	/** A camera's current still, scaled by HA to ``width`` pixels wide. */
 	getCameraImage(entityId: string, width?: number): Promise<HaImage>;
+	/** Start a live watch of these entities, or renew the token for a running one (VomeHome only). */
+	startStateWatch(entityIds: string[], jobId?: string): Promise<StateWatchGrant>;
 	getLogbook(params: LogbookParams): Promise<HaLogbookEntry[]>;
 	getHistory(params: HistoryParams): Promise<HaState[][]>;
 	fireEvent(eventType: string, data?: Record<string, unknown>): Promise<{ message: string }>;
@@ -241,6 +252,10 @@ export function createHaRestClient(
 		checkConfig: () =>
 			request<HaCheckConfigResult>("/api/config/core/check_config", { method: "POST" }),
 		getErrorLog: () => request<string>("/api/error_log", { expect: "text" }),
+		startStateWatch: () =>
+			Promise.reject(
+				new HaApiError("Live state watches go through Vome; on a direct connection, read states instead.", 501, "")
+			),
 		getCameraImage: (entityId, width) =>
 			request<HaImage>(`/api/camera_proxy/${encodeURIComponent(entityId)}`, {
 				expect: "binary",

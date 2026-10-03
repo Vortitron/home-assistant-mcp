@@ -201,6 +201,7 @@ export function createInstanceManager(
 		getErrorLog: () => currentRest().getErrorLog(),
 		getSupervisorLog: (target, addonSlug) => currentRest().getSupervisorLog(target, addonSlug),
 		getCameraImage: (entityId, width) => currentRest().getCameraImage(entityId, width),
+		startStateWatch: (entityIds, jobId) => currentRest().startStateWatch(entityIds, jobId),
 		getLogbook: (params) => currentRest().getLogbook(params),
 		getHistory: (params) => currentRest().getHistory(params),
 		fireEvent: (eventType, data) => currentRest().fireEvent(eventType, data),

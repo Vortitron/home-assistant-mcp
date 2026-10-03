@@ -1,6 +1,6 @@
 import type { Config } from "../config.js";
 import type { Logger } from "../logger.js";
-import { HaApiError, binaryResult } from "./restClient.js";
+import { HaApiError, binaryResult, type StateWatchGrant } from "./restClient.js";
 import type { HaImage, HaRestClient, HistoryParams, LogbookParams } from "./restClient.js";
 import type { HaWsClient } from "./wsClient.js";
 import type {
@@ -161,6 +161,8 @@ export function createBrokeredHaRestClient(
 		renderTemplate,
 		checkConfig: () => broker<HaCheckConfigResult>("/check_config", { method: "POST" }),
 		getErrorLog: () => broker<string>("/error_log", { expect: "text" }),
+		startStateWatch: (entityIds, jobId) =>
+			broker<StateWatchGrant>("/watch", { method: "POST", body: { entity_ids: entityIds, ...(jobId ? { job_id: jobId } : {}) } }),
 		getCameraImage: (entityId, width) =>
 			broker<HaImage>(
 				`/camera_proxy/${encodeURIComponent(entityId)}${buildQuery({ width: width === undefined ? undefined : String(width) })}`,

@@ -108,7 +108,7 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Text, Button, Code, Link } = $.ui.resolve(e)
+    const { Box, Text, Button, Code, Link, Markdown } = $.ui.resolve(e)
     const current = (await $.state.get(report)).value ?? null
     const latest = (await $.state.get(change)).value ?? null
     const running = (await $.state.get(checking)).value ?? null
@@ -153,10 +153,24 @@ export const register: Register = on => {
           Auto mode refused the pane's {refusal.tool === 'vome_health_check' ? 're-check' : 'read of the report'}. Add this to
           permissions.allow in {settingsFile}, or ask Claude to {refusal.tool === 'vome_health_check' ? 're-check the health score' : 'read the health report'}:
         </Text>
+        <Markdown text={`[${settingsFile}](file://${settingsFile})`} />
         <Code source={`"mcp__${refusal.server}__${refusal.tool}"`} />
-        <Button key="copy-rule" hotkey="c" onPress={press => $.ui.copy({ text: `"mcp__${refusal.server}__${refusal.tool}"`, surface: press.surface })}>
-          Copy the line
-        </Button>
+        <Box flexDirection="row" gap={2}>
+          <Button key="copy-rule" hotkey="c" onPress={press => $.ui.copy({ text: `"mcp__${refusal.server}__${refusal.tool}"`, surface: press.surface })}>
+            Copy the line
+          </Button>
+          <Button
+            key="retry"
+            hotkey="t"
+            onPress={async () => {
+              await $.state.set(blocked, null)
+              if (refusal.tool === 'vome_health_check') await requestCheck($, refusal.server)
+              else await fetchReport($, refusal.server)
+            }}
+          >
+            Retry
+          </Button>
+        </Box>
       </Box>
     ) : null
 

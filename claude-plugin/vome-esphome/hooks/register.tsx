@@ -183,7 +183,7 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Text, Button, Code } = $.ui.resolve(e)
+    const { Box, Text, Button, Code, Markdown } = $.ui.resolve(e)
     const current = (await $.state.get(build)).value ?? null
     const known = (await $.state.get(devices)).value ?? null
     const refusal = (await $.state.get(blocked)).value ?? null
@@ -239,10 +239,28 @@ export const register: Register = on => {
           Auto mode refused the pane's read of the build's progress or the device's YAML. Add these to permissions.allow
           in {settingsFile}, then the next build shows live:
         </Text>
+        <Markdown text={`[${settingsFile}](file://${settingsFile})`} />
         <Code source={allowLines(refusal.server)} />
-        <Button key="copy-rule" hotkey="c" onPress={press => $.ui.copy({ text: allowLines(refusal.server), surface: press.surface })}>
-          Copy the lines
-        </Button>
+        <Box flexDirection="row" gap={2}>
+          <Button key="copy-rule" hotkey="c" onPress={press => $.ui.copy({ text: allowLines(refusal.server), surface: press.surface })}>
+            Copy the lines
+          </Button>
+          <Button
+            key="retry"
+            hotkey="r"
+            onPress={async () => {
+              // Allowed since? Try the reads again now rather than at the next build.
+              await $.state.set(blocked, null)
+              isUnsupported = false
+              configAsked = null
+              const running = (await $.state.get(build)).value ?? null
+              if (running && running.command !== 'logs') void loadConfig($, refusal.server, running.configuration)
+              void poll($)
+            }}
+          >
+            Retry
+          </Button>
+        </Box>
       </Box>
     ) : null
 

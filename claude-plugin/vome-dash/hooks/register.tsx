@@ -49,7 +49,9 @@ const WATCH_MS = 8_000
 const WATCH_AT_MS = [1_000, 2_500, 5_000, 8_000]
 const WATCH_EVERY_MS = 500
 const OUTCOME_MS = 3_000
-const SIDEBAR = 20
+/** The sidebar's narrowest and widest: it sizes itself to the longest title between them. */
+const SIDEBAR_MIN = 16
+const SIDEBAR_MAX = 30
 const blocked = { plugin: 'vome-dash', key: 'blocked' } as const
 const note = { plugin: 'vome-dash', key: 'note' } as const
 
@@ -232,7 +234,10 @@ export const register: Register = on => {
     // The home's dashboards down the left, as Home Assistant's sidebar has them, until one is picked.
     const hasMenu = (picking?.length ?? 0) > 1
     const isSidebar = isMenuOpen && hasMenu && width >= 70
-    const mainWidth = isSidebar ? width - SIDEBAR - 1 : width
+    // Wide enough for the longest title, its marker and a button's brackets, inside the border.
+    const longest = Math.max(10, ...(picking ?? []).map(choice => choice.title.length))
+    const sidebarWidth = Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, longest + 2 + 4 + 4))
+    const mainWidth = isSidebar ? width - sidebarWidth - 1 : width
     // Columns as Home Assistant's desktop layout has them: as many as fit, cards stacked in each.
     const columns = mainWidth >= 120 ? 3 : mainWidth >= 72 ? 2 : 1
     const cardWidth = columns > 1 ? Math.floor((mainWidth - (columns - 1)) / columns) : mainWidth
@@ -485,11 +490,11 @@ export const register: Register = on => {
       if (urlPath !== current.urlPath) await loadDashboard($, current.server, urlPath)
     }
     const sidebar = isSidebar ? (
-      <Box flexDirection="column" width={SIDEBAR} borderStyle="round" borderColor="subtle" paddingX={1}>
+      <Box flexDirection="column" width={sidebarWidth} borderStyle="round" borderColor="subtle" paddingX={1}>
         <Text dimColor>Dashboards</Text>
         {(picking ?? []).map(choice => (
           <Button key={`side-${choice.urlPath}`} dimColor={choice.urlPath !== current.urlPath} onPress={open(choice.urlPath)}>
-            {`${choice.urlPath === current.urlPath ? '▸ ' : '  '}${choice.title}`}
+            {fit(`${choice.urlPath === current.urlPath ? '▸ ' : ''}${choice.title}`, sidebarWidth - 8)}
           </Button>
         ))}
       </Box>
@@ -508,13 +513,19 @@ export const register: Register = on => {
 
     const main = (
       <Box flexDirection="column" width={mainWidth}>
-        <Box flexDirection="row" flexWrap="wrap" gap={1}>
+        {/* A fixed header: menu, the title in its own room (cut short, never wrapped), Reload. Symbols
+            whose width terminals disagree on (☰, ⟳) left letters behind when the title changed. */}
+        <Box flexDirection="row" gap={1}>
           {hasMenu ? (
             <Button key="menu" hotkey="m" dimColor={!isMenuOpen} onPress={() => $.state.set(sidebarOpen, !isMenuOpen)}>
-              ☰
+              {isMenuOpen ? 'Close' : 'Dashboards'}
             </Button>
           ) : null}
-          <Text bold>{current.title}</Text>
+          <Box flexGrow={1} flexShrink={1} minWidth={4} overflow="hidden">
+            <Text bold wrap="truncate-end">
+              {current.title}
+            </Text>
+          </Box>
           <Button
             key="reload"
             hotkey="r"
@@ -527,16 +538,18 @@ export const register: Register = on => {
               return loadDashboard($, current.server, current.urlPath)
             }}
           >
-            ⟳
+            Reload
           </Button>
-          {views.length > 1
-            ? views.map((v, i) => (
-                <Button key={`view-${i}`} dimColor={i !== index} onPress={() => $.state.set(view, i)}>
-                  {v.title}
-                </Button>
-              ))
-            : null}
         </Box>
+        {views.length > 1 ? (
+          <Box flexDirection="row" flexWrap="wrap" gap={1}>
+            {views.map((v, i) => (
+              <Button key={`view-${i}`} dimColor={i !== index} onPress={() => $.state.set(view, i)}>
+                {v.title}
+              </Button>
+            ))}
+          </Box>
+        ) : null}
         <Box flexDirection="row" gap={1}>
           {masonry(shown?.cards ?? [], columns).map(column => (
             <Box flexDirection="column" width={cardWidth}>
@@ -1047,6 +1060,11 @@ function sliderBar(fraction: number, width: number): string {
 function since(at: number): string {
   const s = Math.max(0, Math.round((Date.now() - at) / 1000))
   return s < 90 ? `${s} s ago` : `${Math.round(s / 60)} min ago`
+}
+
+/** A label cut to `width` characters with an ellipsis, so a button never wraps its bracket. */
+function fit(text: string, width: number): string {
+  return text.length <= width ? text : `${text.slice(0, Math.max(1, width - 1))}…`
 }
 
 function formatState(state: string): string {

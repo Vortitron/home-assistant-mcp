@@ -239,5 +239,5 @@ test('a card inside a stack fits inside it, and a button card does not repeat it
   expect(Math.max(...widths) - Math.min(...widths)).toBe(4)
   // The button's label, but no title line of the same words above it.
   expect((await ui.find({ text: /▸ Reset to Home Assistant defaults/ })) !== undefined).toBe(true)
-  expect((await ui.find({ text: 'Reset to Home Assistant defaults' })) === undefined).toBe(true)
+  expect((await ui.find({ text: /^Reset to Home Assistant defaults$/ })) === undefined).toBe(true)
 })

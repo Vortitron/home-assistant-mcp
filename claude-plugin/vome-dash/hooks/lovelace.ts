@@ -98,7 +98,8 @@ function cardOf(card: Obj, key: string): Card {
     case 'button': {
       const entity = str(card.entity)
       const call = actionOf(card.tap_action, entity)
-      return { ...base, rows: [{ kind: 'button', name: str(card.name) ?? entity ?? 'Button', icon: str(card.icon), call, entity }] }
+      // Its name is the button's label: not a title over it as well.
+      return { ...base, title: null, rows: [{ kind: 'button', name: str(card.name) ?? entity ?? 'Button', icon: str(card.icon), call, entity }] }
     }
     case 'tile':
     case 'light':

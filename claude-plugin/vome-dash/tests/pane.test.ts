@@ -48,6 +48,15 @@ const STATES: Record<string, { state: string; attributes: Record<string, unknown
   'sensor.housefly_arousal': { state: '0.42', attributes: {} },
 }
 
+// VomeHome's dashboard, trimmed: button cards in a stack.
+const STACK = {
+  title: 'VomeHome',
+  views: [{ title: 'Home', cards: [{ type: 'vertical-stack', cards: [
+    { type: 'button', name: 'Reset to Home Assistant defaults', tap_action: { action: 'perform-action', perform_action: 'vomesync.reset' } },
+    { type: 'button', name: 'Make HA Overview default', tap_action: { action: 'perform-action', perform_action: 'vomesync.default' } },
+  ] }] }],
+}
+
 const reply = (body: unknown) => {
   const text = JSON.stringify(body) + STAMP
   return { result: [{ type: 'text', text }], text }
@@ -65,7 +74,9 @@ function setup(on: On) {
   on('env.get', () => ({ value: undefined }))
   on('command.register', (_$, e) => ({ value: { command: e.name } }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
-  on('tool.call', { tool: tool('mcp__vome__ha_get_dashboard') }, () => reply({ url_path: 'lovelace', config: CONFIG }))
+  on('tool.call', { tool: tool('mcp__vome__ha_get_dashboard') }, (_$, e) =>
+    (e as unknown as { url_path?: string }).url_path === 'vomehome' ? reply({ url_path: 'vomehome', config: STACK }) : reply({ url_path: 'lovelace', config: CONFIG }),
+  )
   on('mcp.call', (_$, e) => {
     calls.push({ tool: e.tool, args: e.args })
     const text = (body: unknown) => ({ value: { content: [{ type: 'text', text: (typeof body === 'string' ? body : JSON.stringify(body)) + STAMP }], isError: false } })
@@ -215,4 +226,18 @@ test('a camera card is the camera\'s picture, in half blocks, in the terminal', 
   expect((await terminal.find({ type: 'Raster', key: 'frame-v0/c6' })) !== undefined).toBe(true)
   // Charts ask for a few points, not thousands of states.
   expect(calls.some(c => c.tool === 'ha_get_history' && typeof c.args.max_points === 'number')).toBe(true)
+})
+
+test('a card inside a stack fits inside it, and a button card does not repeat its name', async ($, on) => {
+  setup(on)
+  await $.session.start({ source: 'startup', cwd: '/tmp' } as never)
+  await $.tool.call({ tool: tool('mcp__vome__ha_get_dashboard'), url_path: 'vomehome' } as never)
+  const ui = await mount($)
+  const boxes = (await ui.findAll({ type: 'Box' })).map(b => (b as unknown as { props: { width?: number; borderStyle?: string } }).props).filter(p => p.borderStyle === 'round' && typeof p.width === 'number')
+  const widths = boxes.map(p => p.width!)
+  expect(widths.length).toBe(3)
+  expect(Math.max(...widths) - Math.min(...widths)).toBe(4)
+  // The button's label, but no title line of the same words above it.
+  expect((await ui.find({ text: /▸ Reset to Home Assistant defaults/ })) !== undefined).toBe(true)
+  expect((await ui.find({ text: 'Reset to Home Assistant defaults' })) === undefined).toBe(true)
 })

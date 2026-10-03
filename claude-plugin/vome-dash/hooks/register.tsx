@@ -337,7 +337,10 @@ export const register: Register = on => {
       )
     }
 
-    const drawCard = (card: Card, cardKey: string): RenderChildren => {
+    // A card is as wide as the room it is given; one inside a stack gets what is left inside its
+    // parent's border and padding (four cells), or it spills out over the edge.
+    const drawCard = (card: Card, cardKey: string, room = cardWidth): RenderChildren => {
+      const inner = Math.max(8, room - 4)
       const titleColour = isLit(card.key) ? 'suggestion' : undefined
       const body: RenderChildren[] = []
       if (card.markdown !== null) {
@@ -376,7 +379,7 @@ export const register: Register = on => {
             </Text>,
           )
           if (numbers.length > 1) {
-            for (const line of brailleChart(numbers, Math.max(10, cardWidth - 4), 3)) {
+            for (const line of brailleChart(numbers, Math.max(10, inner), 3)) {
               body.push(<Text color="suggestion">{line}</Text>)
             }
           } else {
@@ -440,10 +443,15 @@ export const register: Register = on => {
         })
       }
       if (card.isForeign) body.unshift(<Text dimColor>{card.type.replace(/^custom:/, '')} · drawn by Home Assistant</Text>)
-      card.children.forEach((child, i) => body.push(drawCard(child, `${cardKey}/c${i}`)))
+      // A horizontal stack splits its room between its cards; the others stack them at full width.
+      const across = card.type === 'horizontal-stack' || card.type === 'grid' ? Math.max(1, Math.min(card.children.length, Math.floor(inner / 24))) : 1
+      const childRoom = across > 1 ? Math.floor((inner - (across - 1)) / across) : inner
+      const children = card.children.map((child, i) => drawCard(child, `${cardKey}/c${i}`, childRoom))
+      if (across > 1) body.push(<Box flexDirection="row" flexWrap="wrap" columnGap={1}>{children}</Box>)
+      else body.push(...children)
       if (card.isForeign && card.rows.length === 0 && card.children.length === 0 && !card.title) return null
       return (
-        <Box flexDirection="column" borderStyle="round" borderColor={titleColour ?? 'subtle'} paddingX={1} width={cardWidth}>
+        <Box flexDirection="column" borderStyle="round" borderColor={titleColour ?? 'subtle'} paddingX={1} width={room}>
           {card.title ? (
             <Box flexDirection="row">
               <Box flexGrow={1} flexShrink={1} overflow="hidden">

@@ -427,6 +427,14 @@ re-scored with a roll and fireworks:
 /plugin install vome-health --marketplace Vortitron/home-assistant-mcp
 ```
 
+For a dashboard that works, [**vome-dash**](claude-plugin/vome-dash/README.md)
+puts one of yours in a pane: live states, controls that switch and dim,
+cameras in half blocks, and the cards Claude changes lit up:
+
+```
+/plugin install vome-dash --marketplace Vortitron/home-assistant-mcp
+```
+
 For ESPHome, [**vome-esphome**](claude-plugin/vome-esphome/README.md) adds a
 pane with a map of the device Claude is working on, drawn from its YAML, and
 the build it runs as it happens:

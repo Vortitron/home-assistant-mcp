@@ -33,6 +33,12 @@
       "category": "productivity"
     },
     {
+      "name": "vome-dash",
+      "source": "./claude-plugin/vome-dash",
+      "description": "A Home Assistant dashboard in a side pane, working: live states, controls that switch and dim, cameras in half blocks, what Claude changes lit up.",
+      "category": "productivity"
+    },
+    {
       "name": "dont-panic",
       "source": {
         "source": "github",

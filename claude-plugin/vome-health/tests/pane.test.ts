@@ -112,3 +112,21 @@ test('a home with no score has a button to run the first check', async ($, on) =
   expect(asked).toEqual(['vome_health_check'])
   expect((await ui.find({ text: /^Checking… the score lands here/ })) !== undefined).toBe(true)
 })
+
+test('Fix hands the finding to Claude, with what the check found and how to go about it', async ($, on) => {
+  base(on)
+  on('tool.call', { tool: tool('mcp__vome__vome_health_report') }, () => reply(report(75, [FLOODING, OFF], '2026-09-14T10:05:57.000Z')))
+  const sent: string[] = []
+  on('prompt.submit', (_$, e) => {
+    sent.push(e.text)
+    return { text: e.text }
+  })
+  await $.tool.call({ tool: tool('mcp__vome__vome_health_report') } as never)
+  const ui = await mount($)
+  await ui.press({ key: 'fix-d9e72640' })
+  expect(sent.length).toBe(1)
+  expect(sent[0]).toMatch(/7 entities are flooding the recorder/)
+  expect(sent[0]).toMatch(/sensor\.allrum_motion_motion_gate_2_energy/)
+  expect(sent[0]).toMatch(/vome_health_check/)
+  expect((await ui.find({ text: /Claude is on it/ })) !== undefined).toBe(true)
+})

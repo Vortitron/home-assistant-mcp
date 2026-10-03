@@ -35,6 +35,7 @@ const details = { plugin: 'vome-health', key: 'details' } as const
 const fxOn = { plugin: 'vome-health', key: 'fxOn' } as const
 const blocked = { plugin: 'vome-health', key: 'blocked' } as const
 const note = { plugin: 'vome-health', key: 'note' } as const
+const asked = { plugin: 'vome-health', key: 'asked' } as const
 
 // Module variables reset on a reload, which is all these need.
 let isPolling = false
@@ -115,6 +116,13 @@ export const register: Register = on => {
     const latest = (await $.state.get(change)).value ?? null
     const running = (await $.state.get(checking)).value ?? null
     const worked = (await $.state.get(touched)).value ?? {}
+    const handed = (await $.state.get(asked)).value ?? {}
+    /** Hand findings to Claude: it fixes them with its own tools, which the person approves as usual. */
+    const fix = async (findings: Finding[]) => {
+      if (findings.length === 0) return
+      await $.prompt.submit({ text: fixPrompt(findings, current ? homeName(current) : 'the home') })
+      await $.state.set(asked, { ...handed, ...Object.fromEntries(findings.map(f => [f.id, Date.now()])) })
+    }
     const isDetailed = (await $.state.get(details)).value ?? false
     const isFxEnabled = (await $.state.get(fxOn)).value ?? true
     const refusal = (await $.state.get(blocked)).value ?? null
@@ -265,11 +273,18 @@ export const register: Register = on => {
               const isOpen = isDetailed || (finding.severity === 'warn' && !isWorked)
               return (
                 <Box flexDirection="column">
-                  <Text wrap="truncate-end" color={isWorked ? 'suggestion' : undefined}>
-                    <Text color={severityColour(finding.severity)}>{isWorked ? '✎' : severityIcon(finding.severity)}</Text> {isNew ? '+ ' : ''}
-                    {finding.title}
-                    {isWorked ? <Text dimColor>  changed; re-check to confirm</Text> : null}
-                  </Text>
+                  <Box flexDirection="row" justifyContent="space-between">
+                    <Text wrap="truncate-end" color={isWorked ? 'suggestion' : undefined}>
+                      <Text color={severityColour(finding.severity)}>{isWorked ? '✎' : severityIcon(finding.severity)}</Text> {isNew ? '+ ' : ''}
+                      {finding.title}
+                      {isWorked ? <Text dimColor>  changed; re-check to confirm</Text> : handed[finding.id] ? <Text dimColor>  Claude is on it</Text> : null}
+                    </Text>
+                    {isFixable(finding) && !isWorked ? (
+                      <Button key={`fix-${finding.id}`} dimColor={handed[finding.id] !== undefined} onPress={() => fix([finding])}>
+                        {handed[finding.id] ? 'Ask again' : 'Fix'}
+                      </Button>
+                    ) : null}
+                  </Box>
                   {isOpen && finding.recommendation ? (
                     <Text dimColor wrap="wrap">
                       {'   '}
@@ -290,6 +305,11 @@ export const register: Register = on => {
         {message ? <Text color="warning" wrap="wrap">{message}</Text> : null}
         {help}
         <Box flexDirection="row" gap={2} marginTop={1}>
+          {current.findings.some(f => isFixable(f) && worked[f.id] === undefined) ? (
+            <Button key="fix-all" hotkey="f" onPress={() => fix(current.findings.filter(f => isFixable(f) && worked[f.id] === undefined))}>
+              Fix what you can
+            </Button>
+          ) : null}
           <Button key="recheck" hotkey="r" onPress={() => requestCheck($, current.server)}>
             {running ? 'Checking…' : 'Re-check'}
           </Button>
@@ -461,6 +481,33 @@ export function touches(finding: Finding, tool: string, text: string): boolean {
     default:
       return false
   }
+}
+
+/** A finding there is something to do about: to fix or worth doing, and one the check could run. */
+function isFixable(finding: Finding): boolean {
+  return (finding.severity === 'warn' || finding.severity === 'advice') && !/could not be checked/i.test(finding.title)
+}
+
+/** What Fix sends Claude: the finding as the check wrote it, and how to go about it. */
+export function fixPrompt(findings: Finding[], home: string): string {
+  const one = (f: Finding) =>
+    [
+      `- **${f.title}**`,
+      f.evidence ? `  Evidence: ${f.evidence}` : null,
+      f.recommendation ? `  Recommendation: ${f.recommendation}` : null,
+      f.entities?.length ? `  Entities: ${f.entities.join(', ')}` : null,
+    ]
+      .filter(Boolean)
+      .join('\n')
+  return [
+    findings.length === 1
+      ? `Please fix this finding from Vome's health check of ${home} (sent from the health pane's Fix button):`
+      : `Please fix what you can of these ${findings.length} findings from Vome's health check of ${home} (sent from the health pane):`,
+    '',
+    ...findings.map(one),
+    '',
+    "Use the Home Assistant tools to make the changes. Look before you change anything, explain what you'll do, and ask me before anything that cannot be undone (deleting entities, integrations or automations). When you're done, run vome_health_check so the score catches up.",
+  ].join('\n')
 }
 
 // ---------------------------------------------------------------- small things

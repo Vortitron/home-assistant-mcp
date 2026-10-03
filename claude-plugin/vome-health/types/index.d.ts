@@ -49,6 +49,8 @@ declare module 'claude-code' {
       checking: Checking | null
       /** Finding ids Claude has changed something for since the report, and when. */
       touched: Record<string, number>
+      /** Findings handed to Claude with Fix, and when. */
+      asked: Record<string, number>
       /** Each finding's evidence and recommendation, not just its title. */
       details: boolean
       fxOn: boolean

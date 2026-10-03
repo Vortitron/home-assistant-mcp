@@ -61,7 +61,13 @@ export const register: Register = on => {
     const known = (await $.state.get(report)).value ?? null
     const server = known?.server ?? (await healthServers($))[0]
     if (!server) {
-      return { text: 'No connected MCP server has vome_health_report yet: connect Home Assistant through Vome first (vome-connect).' }
+      // Connected, but to a server that predates the tool: Claude Code keeps the tool list it read at connect.
+      const older = (await $.tool.list()).map(tool => /^mcp__(.+)__ha_get_state$/.exec(tool.name)?.[1]).find(Boolean)
+      return {
+        text: older
+          ? `${older} has no vome_health_report in the tool list Claude Code read when it connected. If the server was updated since, run /mcp, choose ${older}, then Reconnect.`
+          : 'No connected MCP server has vome_health_report yet: connect Home Assistant through Vome first (vome-connect).',
+      }
     }
     void fetchReport($, server)
     return { text: opened.isPlaced ? "Reading the home's health report into the pane." : `The health pane is not drawn here: ${opened.reason}.` }

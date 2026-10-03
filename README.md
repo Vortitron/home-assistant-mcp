@@ -237,6 +237,7 @@ Assistant if it's a new integration or add-on domain.
 | `ha_set_user_credentials` | Give a user with no login yet a username/password. Needs `HA_ALLOW_CONFIG_WRITE`. |
 | `ha_change_user_password` | Reset the password for a user that already has a login. Needs `HA_ALLOW_CONFIG_WRITE`. |
 | `ha_remove_user_credentials` | Remove a login without deleting the user. Needs `HA_ALLOW_CONFIG_WRITE`. |
+| `ha_provision_service_login` | Give a program (an MQTT client, a Zigbee bridge, an ESPHome device) its own non-admin login and write the password straight into its add-on options or a secrets file. The password is generated here and never returned. Needs `HA_ALLOW_CONFIG_WRITE`, plus `ha:files` for secrets files. |
 
 **A user + password these tools create is a standing Home Assistant login,
 independent of any VomeHome API key.** Revoking the key that created it does
@@ -246,6 +247,20 @@ granting `ha:config` on an instance as equivalent to trusting the holder with
 permanent account creation on that home. `role` has no default on
 `ha_create_user`; it must be chosen explicitly rather than silently landing
 on `admin`.
+
+**Logins for programs: `ha_provision_service_login`.** Wiring a device into a
+home usually stops at one step: someone invents a password and types it into
+two places. `ha_set_user_credentials` makes the caller choose it, which an
+agent should not be doing. This tool generates it instead (128 bits), writes it
+into the consumer's add-on options (e.g. `mqtt.user` / `mqtt.password`) and/or a
+secrets file, and replies with where it went, never what it is. The Mosquitto
+add-on accepts Home Assistant logins, so one call wires an MQTT client. It
+checks every target before creating anything, deletes a new login that could
+be delivered nowhere, never makes an admin, is local-only by default, and with
+`rotate=true` re-issues only logins it created itself (marked
+`(service login)` in the user's name), never a person's account. Programs
+outside Home Assistant, with neither add-on options nor a secrets file, are out
+of its reach.
 
 `ha_config_entry_options` reaches settings that exist nowhere else in the API.
 The one people ask for is ESPHome's **"allow the device to perform Home

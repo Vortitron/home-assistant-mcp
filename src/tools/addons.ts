@@ -17,7 +17,7 @@ interface SupervisorApiResult {
 	[key: string]: unknown;
 }
 
-async function supervisorApi(
+export async function supervisorApi(
 	ctx: ToolContext,
 	endpoint: string,
 	method: string,
@@ -34,7 +34,7 @@ async function supervisorApi(
 	return ctx.ws.sendCommand(command);
 }
 
-function unwrap(result: unknown): unknown {
+export function unwrap(result: unknown): unknown {
 	if (result && typeof result === "object") {
 		const obj = result as SupervisorApiResult;
 		if (obj.data !== undefined) return obj.data;

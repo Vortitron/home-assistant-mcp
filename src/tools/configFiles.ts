@@ -28,7 +28,7 @@ const NEEDS_RELAY =
 	"needs a VomeHome relay-connected Home Assistant. A hosted instance without the " +
 	"Vome add-on has no route to its own files.";
 
-type FileEncoding = "utf8" | "base64";
+export type FileEncoding = "utf8" | "base64";
 
 async function filesRequest<T>(
 	ctx: ToolContext,
@@ -58,7 +58,7 @@ async function filesRequest<T>(
 }
 
 /** Current contents of a file, or null when it does not exist yet. */
-async function readIfExists(
+export async function readIfExists(
 	ctx: ToolContext,
 	path: string,
 	encoding: FileEncoding
@@ -77,7 +77,7 @@ async function readIfExists(
 	}
 }
 
-function write(
+export function writeConfigFile(
 	ctx: ToolContext,
 	path: string,
 	content: string,
@@ -253,7 +253,7 @@ export function registerConfigFileTools(server: McpServer, ctx: ToolContext): vo
 				// to — see below.
 				const previous = shouldVerify ? await readIfExists(ctx, path, fileEncoding) : null;
 
-				const result = await write(ctx, path, content, fileEncoding);
+				const result = await writeConfigFile(ctx, path, content, fileEncoding);
 				if (!shouldVerify) {
 					return jsonResult({
 						...result,
@@ -287,7 +287,7 @@ export function registerConfigFileTools(server: McpServer, ctx: ToolContext): vo
 					});
 				}
 
-				await write(ctx, path, previous, fileEncoding);
+				await writeConfigFile(ctx, path, previous, fileEncoding);
 				const after = await ctx.rest.checkConfig();
 				return jsonResult({
 					path,

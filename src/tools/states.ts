@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { downsample } from "../ha/pixels.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { HaState } from "../ha/types.js";
 import { getFriendlyName, jsonResult, runTool, truncate, type ToolContext } from "./helpers.js";
@@ -138,11 +139,21 @@ export function registerStateTools(server: McpServer, ctx: ToolContext): void {
 				minimal: z
 					.boolean()
 					.optional()
-					.describe("Return minimal response (state + last_changed only) to reduce size.")
+					.describe("Return minimal response (state + last_changed only) to reduce size."),
+				max_points: z
+					.number()
+					.int()
+					.min(2)
+					.max(2000)
+					.optional()
+					.describe(
+						"Return each series as at most this many [time, value] points: numbers averaged per time bucket, " +
+							"other states as each bucket's last. For charts: a day of a sensor can be thousands of states."
+					)
 			},
 			annotations: { readOnlyHint: true, openWorldHint: true }
 		},
-		async ({ entity_ids, start_time, end_time, minimal }) =>
+		async ({ entity_ids, start_time, end_time, minimal, max_points }) =>
 			runTool(ctx.logger, "ha_get_history", async () => {
 				const history = await ctx.rest.getHistory({
 					entityIds: entity_ids,
@@ -151,6 +162,16 @@ export function registerStateTools(server: McpServer, ctx: ToolContext): void {
 					minimalResponse: minimal ?? true,
 					significantChangesOnly: false
 				});
+				if (max_points) {
+					// Compact: per entity, its unit and its points; the first state of a series carries the entity id.
+					return jsonResult({
+						series: history.map((states, i) => ({
+							entity_id: states[0]?.entity_id ?? entity_ids[i] ?? null,
+							unit: (states[0]?.attributes?.unit_of_measurement as string | undefined) ?? null,
+							points: downsample(states, max_points)
+						}))
+					});
+				}
 				return jsonResult({ series: history });
 			})
 	);

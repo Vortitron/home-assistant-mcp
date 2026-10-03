@@ -1833,3 +1833,25 @@ describe("ha_get_state", () => {
 		expect(single).toBe(1);
 	});
 });
+
+describe("ha_camera_frame", () => {
+	it("returns a camera still as a small grid of RGB pixels", async () => {
+		const data = Buffer.alloc(640 * 360 * 4, 128);
+		const jpg = (await import("jpeg-js")).default.encode({ data, width: 640, height: 360 }, 90).data.toString("base64");
+		const rest = { getCameraImage: async () => ({ data: jpg, mimeType: "image/jpeg" }) } as never;
+		const body = jsonOf(await buildHarness({ rest }).call("ha_camera_frame", { entity_id: "camera.anasmotet_sydvast", width: 72, height: 48 }));
+		expect([body.width, body.height]).toEqual([72, 41]);
+		expect(Buffer.from(body.rgb, "base64").length).toBe(72 * 41 * 3);
+	});
+});
+
+describe("ha_get_history max_points", () => {
+	it("answers a chart with a few points per entity, not thousands of states", async () => {
+		const states = Array.from({ length: 4000 }, (_, i) => ({ entity_id: i === 0 ? "sensor.kitchen_temperature" : undefined, state: String(20 + (i % 10) / 10), last_changed: `2026-10-03T${String(i).padStart(6, "0")}`, attributes: i === 0 ? { unit_of_measurement: "°C" } : undefined }));
+		const rest = { getHistory: async () => [states] } as never;
+		const body = jsonOf(await buildHarness({ rest }).call("ha_get_history", { entity_ids: ["sensor.kitchen_temperature"], max_points: 120 }));
+		expect(body.series[0].entity_id).toBe("sensor.kitchen_temperature");
+		expect(body.series[0].unit).toBe("°C");
+		expect(body.series[0].points.length).toBe(120);
+	});
+});

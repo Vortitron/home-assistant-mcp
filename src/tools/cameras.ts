@@ -1,7 +1,8 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { HaApiError } from "../ha/restClient.js";
-import { errorResult, getFriendlyName, runTool, type ToolContext } from "./helpers.js";
+import { errorResult, getFriendlyName, jsonResult, runTool, type ToolContext } from "./helpers.js";
+import { decodeImage, shrink } from "../ha/pixels.js";
 
 /**
  * Looking through a camera. An agent could take a snapshot with
@@ -15,6 +16,8 @@ import { errorResult, getFriendlyName, runTool, type ToolContext } from "./helpe
  */
 
 const DEFAULT_WIDTH = 1024;
+/** A frame for a text client stays small: a pane is at most a few hundred cells. */
+const MAX_FRAME_PIXELS = 160;
 
 export function registerCameraTools(server: McpServer, ctx: ToolContext): void {
 	server.registerTool(
@@ -67,6 +70,34 @@ export function registerCameraTools(server: McpServer, ctx: ToolContext): void {
 						{ type: "text" as const, text: caption }
 					]
 				};
+			})
+	);
+
+	server.registerTool(
+		"ha_camera_frame",
+		{
+			title: "A camera still as pixels",
+			description:
+				"A camera's current still decoded and shrunk to at most width x height pixels, returned as RGB " +
+				"bytes (base64, 3 a pixel, row by row): for a client that draws pictures in text, such as a " +
+				"dashboard pane in a terminal (two pixels a character cell with half blocks). To look at a camera " +
+				"yourself, use ha_camera_image. Through VomeHome the API key needs Cameras ticked under Sensitive devices.",
+			inputSchema: {
+				entity_id: z.string().describe("The camera entity, e.g. 'camera.front_door'."),
+				width: z.number().int().min(4).max(MAX_FRAME_PIXELS).describe("Most pixels across."),
+				height: z.number().int().min(4).max(MAX_FRAME_PIXELS).describe("Most pixels down.")
+			},
+			annotations: { readOnlyHint: true, openWorldHint: true }
+		},
+		async ({ entity_id, width, height }) =>
+			runTool(ctx.logger, "ha_camera_frame", async () => {
+				if (!/^camera\.[a-z0-9_]+$/.test(entity_id)) {
+					return errorResult(`'${entity_id}' is not a camera entity (camera.something).`);
+				}
+				// Ask Home Assistant for a modest still: it may ignore the width, and decoding stays cheap either way.
+				const image = await ctx.rest.getCameraImage(entity_id, Math.max(320, width * 4));
+				const frame = shrink(decodeImage(image.data, image.mimeType), width, height);
+				return jsonResult({ entity_id, width: frame.width, height: frame.height, rgb: frame.rgb.toString("base64") });
 			})
 	);
 }

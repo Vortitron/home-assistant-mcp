@@ -60,6 +60,10 @@ function automationConfigPath(automationId: string): string {
 	return `/config/automation/config/${encodeURIComponent(automationId)}`;
 }
 
+function scriptConfigPath(scriptId: string): string {
+	return `/config/script/config/${encodeURIComponent(scriptId)}`;
+}
+
 /** Reject (rather than throw synchronously) so callers using the Promise API
  * get a normal rejection. */
 function rejectUnsupported<T>(feature: string): Promise<T> {
@@ -215,6 +219,14 @@ export function createBrokeredHaRestClient(
 		},
 		deleteAutomationConfig: (automationId) =>
 			broker<{ result: string }>(automationConfigPath(automationId), { method: "DELETE" }),
+		getScriptConfig: (scriptId) => broker<Record<string, unknown>>(scriptConfigPath(scriptId)),
+		upsertScriptConfig: (scriptId, scriptConfig) => {
+			if (!isPlainObject(scriptConfig)) {
+				return Promise.reject(new HaApiError("Script config must be a JSON object.", 0, ""));
+			}
+			return broker<{ result: string }>(scriptConfigPath(scriptId), { method: "POST", body: scriptConfig });
+		},
+		deleteScriptConfig: (scriptId) => broker<{ result: string }>(scriptConfigPath(scriptId), { method: "DELETE" }),
 		sendWsCommand: <T = unknown>(command: Record<string, unknown>) => {
 			if (!isPlainObject(command) || typeof command.type !== "string") {
 				return Promise.reject(

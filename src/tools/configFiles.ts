@@ -1,3 +1,4 @@
+import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { evaluateConfigWrite } from "../safety.js";
@@ -93,6 +94,72 @@ export function writeConfigFile(
 /** Home Assistant reports `result: "valid"` when the configuration checks out. */
 function isValid(check: { result?: string; errors?: string | null }): boolean {
 	return check?.result === "valid" && !check?.errors;
+}
+
+/**
+ * Write, then check the configuration and put the old contents back if the
+ * write broke it. Shared by the whole-file write and the in-place edit.
+ */
+async function writeAndVerify(
+	ctx: ToolContext,
+	path: string,
+	content: string,
+	fileEncoding: FileEncoding,
+	previous: string | null,
+	shouldVerify: boolean
+): Promise<CallToolResult> {
+	const result = await writeConfigFile(ctx, path, content, fileEncoding);
+	if (!shouldVerify) {
+		return jsonResult({
+			...result,
+			verified: false,
+			next: "Run ha_check_config when the set of files is complete."
+		});
+	}
+
+	const check = await ctx.rest.checkConfig();
+	if (isValid(check)) {
+		return jsonResult({
+			...result,
+			verified: true,
+			next: "Restart Home Assistant, or reload the relevant domain, to apply it."
+		});
+	}
+
+	if (previous === null) {
+		// Nothing to restore to. A brand-new file usually cannot break the
+		// configuration unless something !includes it, so leaving it is
+		// less surprising than deleting a file the caller just asked for.
+		return jsonResult({
+			...result,
+			verified: false,
+			rolled_back: false,
+			errors: check.errors,
+			note:
+				"The configuration does not check out, and this file was new so there was " +
+				"nothing to restore. It is left in place. If something !includes it, fix or " +
+				"remove it before restarting Home Assistant."
+		});
+	}
+
+	await writeConfigFile(ctx, path, previous, fileEncoding);
+	const after = await ctx.rest.checkConfig();
+	return jsonResult({
+		path,
+		written: false,
+		verified: false,
+		rolled_back: true,
+		errors: check.errors,
+		// Distinguishing these two matters: rolling back an edit that was
+		// *fixing* a pre-existing fault, and blaming the caller for it,
+		// would send an agent hunting for a mistake it did not make.
+		already_invalid_before_this_edit: !isValid(after),
+		note: isValid(after)
+			? "The change broke the configuration, so the file was put back as it was."
+			: "The configuration was already failing this check before this edit. The " +
+				"file was still put back. If you are fixing it in stages, write again " +
+				"with verify=false and check at the end."
+	});
 }
 
 export function registerConfigFileTools(server: McpServer, ctx: ToolContext): void {
@@ -253,58 +320,82 @@ export function registerConfigFileTools(server: McpServer, ctx: ToolContext): vo
 				// to — see below.
 				const previous = shouldVerify ? await readIfExists(ctx, path, fileEncoding) : null;
 
-				const result = await writeConfigFile(ctx, path, content, fileEncoding);
-				if (!shouldVerify) {
-					return jsonResult({
-						...result,
-						verified: false,
-						next: "Run ha_check_config when the set of files is complete."
-					});
-				}
+				return writeAndVerify(ctx, path, content, fileEncoding, previous, shouldVerify);
+			})
+	);
 
-				const check = await ctx.rest.checkConfig();
-				if (isValid(check)) {
-					return jsonResult({
-						...result,
-						verified: true,
-						next: "Restart Home Assistant, or reload the relevant domain, to apply it."
-					});
+	server.registerTool(
+		"ha_edit_config_file",
+		{
+			title: "Edit part of a config file in place",
+			description:
+				"Change part of a text file under the config directory: each edit replaces one exact piece of " +
+				"text with another, and must match exactly once. Prefer this to ha_write_config_file for any " +
+				"change to an existing file: resending a 70 KB file to change three lines is slow and risks a " +
+				"slip anywhere in it. Nothing is written unless every edit applies. Afterwards the " +
+				"configuration is checked and the file put back if the edit broke it, as with " +
+				"ha_write_config_file. Requires the ha:files scope.",
+			inputSchema: {
+				instance_id: z
+					.string()
+					.describe(
+						"The instance this edit is meant for (as listed by vomehome_list_instances). Required, and " +
+							"checked against the one this session is targeting; refused if they differ."
+					),
+				path: z.string().describe("File relative to the config root, e.g. 'automations.yaml'."),
+				edits: z
+					.array(
+						z.object({
+							old_text: z.string().min(1).describe("Text in the file now, exactly, including indentation. Must occur once."),
+							new_text: z.string().describe("What it becomes.")
+						})
+					)
+					.min(1)
+					.describe("Applied in order, each to the result of the one before."),
+				verify: z
+					.boolean()
+					.optional()
+					.describe("Check the configuration afterwards and restore the file if it fails (default true).")
+			},
+			annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true }
+		},
+		async ({ instance_id, path, edits, verify }) =>
+			runTool(ctx.logger, "ha_edit_config_file", async () => {
+				const meant = (instance_id ?? "").trim();
+				const targeting = ctx.instances.activeId();
+				if (ctx.config.brokered && meant !== targeting) {
+					return errorResult(
+						`Refused: this session is targeting "${targeting}", but the edit names ` +
+							`"${meant}". Nothing was written. Select it with vomehome_use_instance first ` +
+							`if "${meant}" is the home you mean.`
+					);
 				}
-
-				if (previous === null) {
-					// Nothing to restore to. A brand-new file usually cannot break the
-					// configuration unless something !includes it, so leaving it is
-					// less surprising than deleting a file the caller just asked for.
-					return jsonResult({
-						...result,
-						verified: false,
-						rolled_back: false,
-						errors: check.errors,
-						note:
-							"The configuration does not check out, and this file was new so there was " +
-							"nothing to restore. It is left in place. If something !includes it, fix or " +
-							"remove it before restarting Home Assistant."
-					});
+				const decision = evaluateConfigWrite(ctx.instances.currentSafety());
+				if (!decision.allowed) {
+					return errorResult(`Refused: ${decision.reason}`);
 				}
-
-				await writeConfigFile(ctx, path, previous, fileEncoding);
-				const after = await ctx.rest.checkConfig();
-				return jsonResult({
-					path,
-					written: false,
-					verified: false,
-					rolled_back: true,
-					errors: check.errors,
-					// Distinguishing these two matters: rolling back an edit that was
-					// *fixing* a pre-existing fault, and blaming the caller for it,
-					// would send an agent hunting for a mistake it did not make.
-					already_invalid_before_this_edit: !isValid(after),
-					note: isValid(after)
-						? "The change broke the configuration, so the file was put back as it was."
-						: "The configuration was already failing this check before this edit. The " +
-							"file was still put back. If you are fixing it in stages, write again " +
-							"with verify=false and check at the end."
-				});
+				const before = await readIfExists(ctx, path, "utf8");
+				if (before === null) {
+					return errorResult(
+						`Nothing written: ${path} does not exist or is not UTF-8 text. Create it with ha_write_config_file.`
+					);
+				}
+				let content = before;
+				for (const [index, edit] of edits.entries()) {
+					const at = content.indexOf(edit.old_text);
+					const again = at < 0 ? -1 : content.indexOf(edit.old_text, at + 1);
+					if (at < 0 || again >= 0) {
+						return errorResult(
+							`Nothing written: edit ${index + 1} of ${edits.length} ${at < 0 ? "matches nothing" : "matches more than once"} ` +
+								`in ${path}. Quote more of the surrounding text so it matches exactly once.`
+						);
+					}
+					content = content.slice(0, at) + edit.new_text + content.slice(at + edit.old_text.length);
+				}
+				if (content === before) {
+					return jsonResult({ path, written: false, note: "The edits leave the file unchanged." });
+				}
+				return writeAndVerify(ctx, path, content, "utf8", before, verify ?? true);
 			})
 	);
 

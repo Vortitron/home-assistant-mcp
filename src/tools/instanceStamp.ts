@@ -1,3 +1,4 @@
+import { z } from "zod";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ToolContext } from "./helpers.js";
@@ -95,6 +96,61 @@ export function createIdentityReader(ctx: ToolContext): () => Promise<Identity> 
 	};
 }
 
+const INSTANCE_ARG = "instance_id";
+
+/**
+ * The tool's config with an optional ``instance_id`` added, or null when the
+ * tool should not get one.
+ *
+ * The stamp tells an agent where a reply came from, but only after the
+ * fact, and agents rarely read it: three times a read answered from the
+ * wrong house ("entity not found", an empty history) because another window
+ * of the same client had moved the shared starting choice. Naming the home on
+ * a read turns that into a refusal, as it already is for writes. Optional,
+ * so existing callers are unaffected; skipped for the vomehome_* tools, where
+ * ``instance_id`` names the home to act on, and for tools that declare their
+ * own (where it is required and checked by the tool itself).
+ */
+function guardableSchema(name: string, config: unknown): Record<string, unknown> | null {
+	if (name.startsWith("vomehome_") || !config || typeof config !== "object") return null;
+	const shape = (config as { inputSchema?: unknown }).inputSchema;
+	// No input schema means the handler is called without an arguments object.
+	if (!shape || typeof shape !== "object" || INSTANCE_ARG in shape) return null;
+	return {
+		...(config as Record<string, unknown>),
+		inputSchema: {
+			...(shape as Record<string, unknown>),
+			[INSTANCE_ARG]: z
+				.string()
+				.optional()
+				.describe(
+					"Optional: the instance you mean (as listed by vomehome_list_instances). When given, the call is " +
+						"refused if this session is targeting a different home, instead of answering from it."
+				)
+		}
+	};
+}
+
+/** A refusal when the caller named a home other than the one targeted, else null. */
+function wrongHome(ctx: ToolContext, named: unknown): CallToolResult | null {
+	if (!ctx.config.brokered || typeof named !== "string" || !named.trim()) return null;
+	const meant = named.trim();
+	const targeting = ctx.instances.activeId();
+	if (meant === targeting) return null;
+	return {
+		isError: true,
+		content: [
+			{
+				type: "text",
+				text:
+					`Refused: this session is targeting "${targeting}", but the call names "${meant}". ` +
+					`Nothing was read or changed. Select "${meant}" with vomehome_use_instance first if it is ` +
+					`the home you mean — the session may have resumed on another window's choice.`
+			}
+		]
+	};
+}
+
 /** Appends the stamp to a tool result as its own trailing text block. */
 export function appendStamp(result: CallToolResult, identity: Identity): CallToolResult {
 	const stamp = renderStamp(identity);
@@ -120,7 +176,17 @@ export function withInstanceStamp(server: McpServer, ctx: ToolContext): McpServe
 	const original = server.registerTool.bind(server);
 
 	const wrapped = ((name: string, config: unknown, handler: unknown) => {
+		const guarded = guardableSchema(name, config);
 		const stampedHandler = async (...args: unknown[]): Promise<CallToolResult> => {
+			if (guarded) {
+				const params = (args[0] ?? {}) as Record<string, unknown>;
+				const refusal = wrongHome(ctx, params[INSTANCE_ARG]);
+				if (refusal) {
+					return appendStamp(refusal, await identity().catch(() => ({ id: ctx.instances.activeId() })));
+				}
+				const { [INSTANCE_ARG]: _named, ...rest } = params;
+				args[0] = rest;
+			}
 			const result = (await (handler as (...a: unknown[]) => Promise<CallToolResult>)(
 				...args
 			)) as CallToolResult;
@@ -132,7 +198,7 @@ export function withInstanceStamp(server: McpServer, ctx: ToolContext): McpServe
 		};
 		return (original as (n: string, c: unknown, h: unknown) => unknown)(
 			name,
-			config,
+			guarded ?? config,
 			stampedHandler
 		);
 	}) as unknown as McpServer["registerTool"];

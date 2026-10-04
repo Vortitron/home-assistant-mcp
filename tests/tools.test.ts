@@ -1987,3 +1987,159 @@ describe("ha_delete_config_file", () => {
 		vi.unstubAllGlobals();
 	});
 });
+
+describe("open-ended history and logbook windows", () => {
+	/* "Since Monday" came back as Monday only: given a start and no end, Home
+	   Assistant stops 24 hours after the start, and nothing said so. */
+	it("ends a window that has a start at now, and leaves an explicit end alone", async () => {
+		const getHistory = vi.fn(async () => []);
+		const getLogbook = vi.fn(async () => []);
+		const server = buildHarness({ rest: { getHistory, getLogbook } as any });
+		const before = Date.now();
+
+		await server.call("ha_get_history", { entity_ids: ["sensor.x"], start_time: "2026-09-28T00:00:00Z" });
+		const end = Date.parse((getHistory.mock.calls[0] as any)[0].endTime);
+		expect(end).toBeGreaterThanOrEqual(before - 1000);
+
+		await server.call("ha_get_logbook", { start_time: "2026-09-28T00:00:00Z" });
+		expect(Date.parse((getLogbook.mock.calls[0] as any)[0].endTime)).toBeGreaterThanOrEqual(before - 1000);
+
+		await server.call("ha_get_history", { entity_ids: ["sensor.x"], start_time: "2026-09-28T00:00:00Z", end_time: "2026-09-29T00:00:00Z" });
+		expect((getHistory.mock.calls[1] as any)[0].endTime).toBe("2026-09-29T00:00:00Z");
+
+		await server.call("ha_get_history", { entity_ids: ["sensor.x"] });
+		expect((getHistory.mock.calls[2] as any)[0].endTime).toBeUndefined();
+	});
+});
+
+describe("scripts", () => {
+	const WRITE = { HA_ALLOW_WRITE: "true", HA_ALLOW_CONFIG_WRITE: "true" };
+
+	it("reads, saves and deletes by id, accepting script.<id>", async () => {
+		const rest = {
+			getScriptConfig: vi.fn(async () => ({ alias: "Raise heat", sequence: [] })),
+			upsertScriptConfig: vi.fn(async () => ({ result: "ok" })),
+			deleteScriptConfig: vi.fn(async () => ({ result: "ok" }))
+		};
+		const server = buildHarness({ env: WRITE, rest: rest as any });
+		expect(jsonOf(await server.call("ha_get_script", { script: "script.raise_heat" }))).toMatchObject({ id: "raise_heat" });
+		await server.call("ha_set_script", { script_id: "raise_heat", config: { alias: "Raise heat", sequence: [] } });
+		expect(rest.upsertScriptConfig).toHaveBeenCalledWith("raise_heat", { alias: "Raise heat", sequence: [] });
+		await server.call("ha_delete_script", { script_id: "script.raise_heat" });
+		expect(rest.deleteScriptConfig).toHaveBeenCalledWith("raise_heat");
+	});
+
+	it("refuses writes without config-write, and ids that are not slugs", async () => {
+		const upsertScriptConfig = vi.fn();
+		const readOnly = buildHarness({ rest: { upsertScriptConfig } as any });
+		expect((await readOnly.call("ha_set_script", { script_id: "x", config: {} })).isError).toBe(true);
+		const writer = buildHarness({ env: WRITE, rest: { upsertScriptConfig } as any });
+		expect((await writer.call("ha_set_script", { script_id: "Raise-Heat", config: {} })).isError).toBe(true);
+		expect(upsertScriptConfig).not.toHaveBeenCalled();
+	});
+});
+
+describe("entity registry edits and Matter re-interview", () => {
+	const WRITE = { HA_ALLOW_WRITE: "true", HA_ALLOW_CONFIG_WRITE: "true" };
+
+	it("sends only the fields given, mapping disabled/hidden to 'user'", async () => {
+		const sendCommand = vi.fn(async () => ({ entity_entry: { entity_id: "sensor.kitchen" } }));
+		const server = buildHarness({ env: WRITE, ws: { sendCommand } });
+		await server.call("ha_update_entity", { entity_id: "sensor.kitchen_temp", name: null, disabled: true, area_id: "kitchen" });
+		expect(sendCommand).toHaveBeenCalledWith({
+			type: "config/entity_registry/update",
+			entity_id: "sensor.kitchen_temp",
+			name: null,
+			area_id: "kitchen",
+			disabled_by: "user"
+		});
+		await server.call("ha_update_entity", { entity_id: "sensor.kitchen_temp", hidden: false });
+		expect(sendCommand).toHaveBeenLastCalledWith({ type: "config/entity_registry/update", entity_id: "sensor.kitchen_temp", hidden_by: null });
+	});
+
+	it("refuses a rename across domains, an empty change, and anything without config-write", async () => {
+		const sendCommand = vi.fn();
+		const server = buildHarness({ env: WRITE, ws: { sendCommand } });
+		expect((await server.call("ha_update_entity", { entity_id: "sensor.a", new_entity_id: "switch.a" })).isError).toBe(true);
+		expect((await server.call("ha_update_entity", { entity_id: "sensor.a" })).isError).toBe(true);
+		const readOnly = buildHarness({ ws: { sendCommand } });
+		expect((await readOnly.call("ha_remove_entity", { entity_id: "sensor.a" })).isError).toBe(true);
+		expect((await readOnly.call("ha_matter_reinterview", { device_id: "d1" })).isError).toBe(true);
+		expect(sendCommand).not.toHaveBeenCalled();
+	});
+
+	it("removes an entry and re-interviews a Matter device by HA device id", async () => {
+		const sendCommand = vi.fn(async () => ({}));
+		const server = buildHarness({ env: WRITE, ws: { sendCommand } });
+		await server.call("ha_remove_entity", { entity_id: "automation.old_one" });
+		expect(sendCommand).toHaveBeenCalledWith({ type: "config/entity_registry/remove", entity_id: "automation.old_one" });
+		await server.call("ha_matter_reinterview", { device_id: "abc123" });
+		expect(sendCommand).toHaveBeenLastCalledWith({ type: "matter/interview_node", device_id: "abc123" });
+	});
+});
+
+describe("ha_edit_config_file", () => {
+	const BROKERED = {
+		HA_TOKEN: "",
+		VOMEHOME_TOKEN: "vh_test",
+		VOMEHOME_INSTANCE_ID: "rly-1",
+		HA_ALLOW_WRITE: "true",
+		HA_ALLOW_CONFIG_WRITE: "true"
+	};
+	const FILE = "- id: a\n  alias: Morning\n- id: b\n  alias: Evening\n";
+
+	function relay(onWrite: (content: string) => void) {
+		return vi.fn(async (input: unknown, init?: any) => {
+			const url = String(input);
+			if (url.includes("/files/read")) return new Response(JSON.stringify({ content: FILE }), { status: 200 });
+			onWrite(JSON.parse(init.body).content);
+			return new Response(JSON.stringify({ written: true }), { status: 200 });
+		});
+	}
+
+	it("applies exact edits and writes the result once", async () => {
+		const writes: string[] = [];
+		vi.stubGlobal("fetch", relay((c) => writes.push(c)));
+		const server = buildHarness({ env: BROKERED, rest: { checkConfig: async () => ({ result: "valid" }) } as any });
+		const result = await server.call("ha_edit_config_file", {
+			instance_id: "rly-1",
+			path: "automations.yaml",
+			edits: [{ old_text: "alias: Evening", new_text: "alias: Night" }]
+		});
+		expect(result.isError).toBeFalsy();
+		expect(writes).toEqual([FILE.replace("alias: Evening", "alias: Night")]);
+		vi.unstubAllGlobals();
+	});
+
+	it("writes nothing when an edit matches nothing or more than once", async () => {
+		const writes: string[] = [];
+		vi.stubGlobal("fetch", relay((c) => writes.push(c)));
+		const server = buildHarness({ env: BROKERED });
+		for (const old_text of ["alias: Noon", "  alias: "]) {
+			const result = await server.call("ha_edit_config_file", {
+				instance_id: "rly-1", path: "automations.yaml",
+				edits: [{ old_text: "alias: Morning", new_text: "alias: Dawn" }, { old_text, new_text: "x" }]
+			});
+			expect(result.isError).toBe(true);
+		}
+		expect(writes).toEqual([]);
+		vi.unstubAllGlobals();
+	});
+
+	it("puts the file back when the edit breaks the configuration", async () => {
+		const writes: string[] = [];
+		vi.stubGlobal("fetch", relay((c) => writes.push(c)));
+		let checks = 0;
+		const server = buildHarness({
+			env: BROKERED,
+			rest: { checkConfig: async () => (checks++ === 0 ? { result: "invalid", errors: "bad" } : { result: "valid" }) } as any
+		});
+		const result = await server.call("ha_edit_config_file", {
+			instance_id: "rly-1", path: "automations.yaml",
+			edits: [{ old_text: "alias: Evening", new_text: "alias: [broken" }]
+		});
+		expect(jsonOf(result)).toMatchObject({ rolled_back: true });
+		expect(writes.at(-1)).toBe(FILE);
+		vi.unstubAllGlobals();
+	});
+});

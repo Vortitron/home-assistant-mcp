@@ -51,7 +51,7 @@ policy (see [Safety](#safety)).
 | `ha_get_config` | Core config: version, location, time zone, loaded components. |
 | `ha_list_entities` | List entities (filter by domain, free-text search, area). |
 | `ha_get_state` | Full state + attributes for one or more entities. |
-| `ha_get_history` | Historical state changes over a time window. |
+| `ha_get_history` | Historical state changes over a time window. Given only a start time, it runs up to now (Home Assistant alone stops 24 hours after the start); `ha_get_logbook` does the same. |
 | `ha_list_services` | Available services (and their fields for a given domain). |
 | `ha_list_areas` | Areas (rooms/zones). |
 | `ha_list_devices` | Device registry (filter by area / search). |
@@ -89,9 +89,14 @@ policy (see [Safety](#safety)).
 | `ha_read_config_file` | Read a file under the config directory — text by default, or `encoding: 'base64'` for a binary asset (needs `ha:files`). |
 | `ha_write_config_file` | Replace a file under the config directory — text by default, or `encoding: 'base64'` for a binary asset; checks the config and restores the file if it fails (needs `ha:files`). |
 | `ha_delete_config_file` | Delete one file under the config directory. Never a directory, and never `configuration.yaml`, `secrets.yaml` or Home Assistant's database. Names its target home like a write (needs `ha:files`, and Vome add-on 0.3.55 / integration 0.9.39 on the home). |
+| `ha_edit_config_file` | Change part of a text file in place: exact find-and-replace edits that must each match once, then the same check-and-restore as a write. For a three-line change to a large file (needs `ha:files`). |
 | `ha_list_config_files` | List a directory under the config directory (needs `ha:files`). |
 | `ha_delete_helper` | Delete a stored helper. Refuses when the id looks shared with a `configuration.yaml` helper, because Home Assistant would take that entity down with it. |
 | `ha_delete_automation` | Delete an automation (also needs `HA_ALLOW_CONFIG_WRITE`). |
+| `ha_get_script` / `ha_set_script` / `ha_delete_script` | Scripts by id, the same way as automations: put a step several automations share in one script. Writes need `HA_ALLOW_CONFIG_WRITE`. |
+| `ha_update_entity` | Rename, re-id, move, re-icon, disable or hide an entity in the registry (needs `HA_ALLOW_CONFIG_WRITE`). |
+| `ha_remove_entity` | Remove an orphaned registry entry (needs `HA_ALLOW_CONFIG_WRITE`). |
+| `ha_matter_reinterview` | The Matter device page's Re-interview, for a device whose endpoints changed after a firmware update (needs `HA_ALLOW_CONFIG_WRITE`). |
 | `ha_trigger_automation` | Manually run an automation now. |
 | `ha_reload_automations` | Reload automations without restarting. |
 
@@ -536,6 +541,13 @@ flags — a read-only token for the family home, writes enabled for the test
 bench.
 
 ### Several instances from one token
+
+**Name the home on any call.** Every tool except the `vomehome_*` ones accepts
+an optional `instance_id`. When given, the call is refused if this session is
+targeting a different home, instead of answering from it. Writes to files and
+logins already require it. Reads need it too: a session that reconnects can
+resume on another window's choice, and "entity not found" or an empty history
+from the wrong house look like real answers.
 
 The multi-process layout above is one process per token. When several instances
 live on the **same** VomeHome account (same token), you can instead drive them

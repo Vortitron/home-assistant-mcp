@@ -22,6 +22,8 @@ import { registerConfigFileTools } from "./configFiles.js";
 import { registerHacsTools } from "./hacs.js";
 import { registerUserTools } from "./users.js";
 import { registerServiceLoginTools } from "./serviceLogins.js";
+import { registerScriptTools } from "./scripts.js";
+import { registerRegistryEditTools } from "./registryEdits.js";
 import { registerHealthTools } from "./health.js";
 import { registerSnapshotTools } from "./snapshot.js";
 import { registerWatchTools } from "./watch.js";
@@ -57,6 +59,8 @@ export function registerAllTools(rawServer: McpServer, ctx: ToolContext): void {
 	registerHacsTools(server, ctx);
 	registerUserTools(server, ctx);
 	registerServiceLoginTools(server, ctx);
+	registerScriptTools(server, ctx);
+	registerRegistryEditTools(server, ctx);
 	registerHealthTools(server, ctx);
 	registerSnapshotTools(server, ctx);
 	registerWatchTools(server, ctx);

@@ -159,3 +159,62 @@ describe("every registered tool is stamped", () => {
 		expect((await identity()).home).toBe("GamlaBio");
 	});
 });
+
+describe("naming the home on any call", () => {
+	/* Reads answered from the wrong house three times: another window of the
+	   same client had moved the shared starting choice, and "entity not found"
+	   or an empty history looked like real answers. Every tool can now be told
+	   which home is meant, and refuses instead of answering from another. */
+	function harness(brokered: boolean) {
+		const registered = new Map<string, { config: any; handler: (...a: any[]) => Promise<CallToolResult> }>();
+		const fake = {
+			registerTool: (name: string, config: unknown, handler: any) => registered.set(name, { config, handler })
+		} as unknown as McpServer;
+		const ctx = {
+			config: { brokered },
+			instances: { activeId: () => "rly-1" },
+			rest: { getConfig: async () => ({ location_name: "Home" }) }
+		} as unknown as ToolContext;
+		const server = withInstanceStamp(fake, ctx);
+		const seen: unknown[] = [];
+		const handler = vi.fn(async (args: unknown) => {
+			seen.push(args);
+			return { content: [{ type: "text" as const, text: "ok" }] };
+		});
+		return { server, registered, handler, seen };
+	}
+
+	it("refuses a read that names another home, without running it", async () => {
+		const { server, registered, handler } = harness(true);
+		server.registerTool("ha_get_history", { inputSchema: { entity_ids: {} } } as any, handler as any);
+		const result = await registered.get("ha_get_history")!.handler({ entity_ids: ["x"], instance_id: "rly-2" }, {});
+		expect(result.isError).toBe(true);
+		expect(result.content[0]).toMatchObject({ type: "text" });
+		expect((result.content[0] as any).text).toContain('targeting "rly-1"');
+		expect(handler).not.toHaveBeenCalled();
+	});
+
+	it("runs when the named home is the target, and the tool never sees the extra argument", async () => {
+		const { server, registered, handler, seen } = harness(true);
+		server.registerTool("ha_get_history", { inputSchema: { entity_ids: {} } } as any, handler as any);
+		const result = await registered.get("ha_get_history")!.handler({ entity_ids: ["x"], instance_id: "rly-1" }, {});
+		expect(result.isError).toBeFalsy();
+		expect(seen[0]).toEqual({ entity_ids: ["x"] });
+	});
+
+	it("leaves direct mode, omitted ids, and tools that own the argument alone", async () => {
+		const direct = harness(false);
+		direct.server.registerTool("ha_list_entities", { inputSchema: {} } as any, direct.handler as any);
+		expect((await direct.registered.get("ha_list_entities")!.handler({ instance_id: "other" }, {})).isError).toBeFalsy();
+
+		const { server, registered, handler } = harness(true);
+		server.registerTool("ha_list_entities", { inputSchema: {} } as any, handler as any);
+		expect((await registered.get("ha_list_entities")!.handler({}, {})).isError).toBeFalsy();
+		expect(registered.get("ha_list_entities")!.config.inputSchema).toHaveProperty("instance_id");
+
+		server.registerTool("vomehome_use_instance", { inputSchema: { instance_id: {} } } as any, handler as any);
+		expect(registered.get("vomehome_use_instance")!.config.inputSchema.instance_id).toEqual({});
+		server.registerTool("vomehome_list_instances", { inputSchema: {} } as any, handler as any);
+		expect(registered.get("vomehome_list_instances")!.config.inputSchema).not.toHaveProperty("instance_id");
+	});
+});

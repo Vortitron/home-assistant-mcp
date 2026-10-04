@@ -131,7 +131,7 @@ export function registerStateTools(server: McpServer, ctx: ToolContext): void {
 		{
 			title: "Get entity history",
 			description:
-				"Get historical state changes for one or more entities over a time window. Times are ISO 8601 (e.g. 2026-06-05T06:00:00+00:00). Defaults to the last day if no start_time is given.",
+				"Get historical state changes for one or more entities over a time window. Times are ISO 8601 (e.g. 2026-06-05T06:00:00+00:00). Defaults to the last day if no start_time is given; with a start_time and no end_time it runs up to now (Home Assistant on its own would stop 24 hours after the start).",
 			inputSchema: {
 				entity_ids: z.array(z.string()).min(1).describe("Entities to fetch history for."),
 				start_time: z.string().optional().describe("ISO 8601 start timestamp."),
@@ -158,7 +158,9 @@ export function registerStateTools(server: McpServer, ctx: ToolContext): void {
 				const history = await ctx.rest.getHistory({
 					entityIds: entity_ids,
 					startTime: start_time,
-					endTime: end_time,
+					// Home Assistant ends an open window 24 hours after its start,
+					// so "since Monday" quietly came back as Monday only.
+					endTime: end_time ?? (start_time ? new Date().toISOString() : undefined),
 					minimalResponse: minimal ?? true,
 					significantChangesOnly: false
 				});

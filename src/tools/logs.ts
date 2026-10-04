@@ -385,7 +385,8 @@ export function registerLogTools(server: McpServer, ctx: ToolContext): void {
 		{
 			title: "Get logbook",
 			description:
-				"Return human-readable logbook entries (what happened and when), optionally filtered to a single entity and time window. Times are ISO 8601.",
+				"Return human-readable logbook entries (what happened and when), optionally filtered to a single entity and time window. " +
+				"Times are ISO 8601; with a start_time and no end_time it runs up to now (Home Assistant on its own would stop 24 hours after the start).",
 			inputSchema: {
 				entity_id: z.string().optional().describe("Restrict to a single entity_id."),
 				start_time: z.string().optional().describe("ISO 8601 start timestamp."),
@@ -398,7 +399,8 @@ export function registerLogTools(server: McpServer, ctx: ToolContext): void {
 				const entries = await ctx.rest.getLogbook({
 					entityId: entity_id,
 					startTime: start_time,
-					endTime: end_time
+					// Same 24-hour default as history; see ha_get_history.
+					endTime: end_time ?? (start_time ? new Date().toISOString() : undefined)
 				});
 				return jsonResult({ count: entries.length, entries });
 			})

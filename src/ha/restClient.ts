@@ -96,6 +96,9 @@ export interface HaRestClient {
 		config: Record<string, unknown>
 	): Promise<{ result: string }>;
 	deleteAutomationConfig(automationId: string): Promise<{ result: string }>;
+	getScriptConfig(scriptId: string): Promise<Record<string, unknown>>;
+	upsertScriptConfig(scriptId: string, config: Record<string, unknown>): Promise<{ result: string }>;
+	deleteScriptConfig(scriptId: string): Promise<{ result: string }>;
 	/** Run one Home Assistant WebSocket command (brokered: allowlisted Lovelace subset). */
 	sendWsCommand<T = unknown>(command: Record<string, unknown>): Promise<T>;
 }
@@ -293,6 +296,21 @@ export function createHaRestClient(
 				`/api/config/automation/config/${encodeURIComponent(automationId)}`,
 				{ method: "DELETE" }
 			),
+		getScriptConfig: (scriptId) =>
+			request<Record<string, unknown>>(`/api/config/script/config/${encodeURIComponent(scriptId)}`),
+		upsertScriptConfig: (scriptId, scriptConfig) => {
+			if (!isPlainObject(scriptConfig)) {
+				throw new HaApiError("Script config must be a JSON object.", 0, "");
+			}
+			return request<{ result: string }>(`/api/config/script/config/${encodeURIComponent(scriptId)}`, {
+				method: "POST",
+				body: scriptConfig
+			});
+		},
+		deleteScriptConfig: (scriptId) =>
+			request<{ result: string }>(`/api/config/script/config/${encodeURIComponent(scriptId)}`, {
+				method: "DELETE"
+			}),
 		sendWsCommand: (command) => {
 			if (!wsClient) {
 				return Promise.reject(

@@ -1932,3 +1932,58 @@ describe("ha_watch_states", () => {
 		expect(body.full).toBe(true);
 	});
 });
+
+describe("ha_delete_config_file", () => {
+	const BROKERED = {
+		HA_TOKEN: "",
+		VOMEHOME_TOKEN: "vh_test",
+		VOMEHOME_INSTANCE_ID: "rly-1",
+		HA_ALLOW_WRITE: "true",
+		HA_ALLOW_CONFIG_WRITE: "true"
+	};
+
+	it("refuses, without deleting, when the named home is not the one selected", async () => {
+		const fetchMock = vi.fn();
+		vi.stubGlobal("fetch", fetchMock);
+		const server = buildHarness({ env: BROKERED });
+		const result = await server.call("ha_delete_config_file", { instance_id: "the-demo-vm", path: "x.yaml" });
+		expect(result.isError).toBe(true);
+		expect(textOf(result)).toContain("Nothing was deleted");
+		expect(fetchMock).not.toHaveBeenCalled();
+		vi.unstubAllGlobals();
+	});
+
+	it("refuses without config-write, before reaching the network", async () => {
+		const fetchMock = vi.fn();
+		vi.stubGlobal("fetch", fetchMock);
+		const server = buildHarness({ env: { ...BROKERED, HA_ALLOW_CONFIG_WRITE: "false" } });
+		const result = await server.call("ha_delete_config_file", { instance_id: "rly-1", path: "x.yaml" });
+		expect(result.isError).toBe(true);
+		expect(fetchMock).not.toHaveBeenCalled();
+		vi.unstubAllGlobals();
+	});
+
+	it("posts the delete for the named file", async () => {
+		const fetchMock = vi.fn(async () => new Response(JSON.stringify({ path: "packages/old.yaml", deleted: true }), { status: 200 }));
+		vi.stubGlobal("fetch", fetchMock);
+		const server = buildHarness({ env: BROKERED });
+		const result = await server.call("ha_delete_config_file", { instance_id: "rly-1", path: "packages/old.yaml" });
+		expect(result.isError).toBeFalsy();
+		const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+		expect(url).toContain("/instances/rly-1/ha/files/delete?path=packages%2Fold.yaml");
+		expect(init.method).toBe("POST");
+		expect(jsonOf(result)).toMatchObject({ deleted: true });
+		vi.unstubAllGlobals();
+	});
+
+	it("says to update the add-on when the home's component predates deletion", async () => {
+		vi.stubGlobal("fetch", vi.fn(async () =>
+			new Response(JSON.stringify({ error: "Refusing a non-allowlisted file operation." }), { status: 502 })
+		));
+		const server = buildHarness({ env: BROKERED });
+		const result = await server.call("ha_delete_config_file", { instance_id: "rly-1", path: "x.yaml" });
+		expect(result.isError).toBe(true);
+		expect(textOf(result)).toContain("0.3.55");
+		vi.unstubAllGlobals();
+	});
+});

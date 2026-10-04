@@ -307,4 +307,67 @@ export function registerConfigFileTools(server: McpServer, ctx: ToolContext): vo
 				});
 			})
 	);
+
+	server.registerTool(
+		"ha_delete_config_file",
+		{
+			title: "Delete a file in Home Assistant's config directory",
+			description:
+				"Delete one file under the config directory — a throwaway test file, a superseded " +
+				"package, something you wrote and no longer need. It deletes a single file only, " +
+				"never a directory. The Vome component on the home refuses configuration.yaml, " +
+				"secrets.yaml and Home Assistant's database (also through a link with another name), " +
+				"anything outside the config directory, and .storage.\n\n" +
+				"There is no undo, so read the file first if its contents might be wanted, and ask the " +
+				"owner before deleting anything you did not create. If something !includes the file, " +
+				"remove that reference first or Home Assistant will fail its configuration check. " +
+				"Requires the ha:files scope.",
+			inputSchema: {
+				instance_id: z
+					.string()
+					.describe(
+						"The instance this delete is meant for (as listed by vomehome_list_instances). " +
+							"Required, and checked against the one this session is targeting: if they " +
+							"differ nothing is deleted."
+					),
+				path: z.string().describe("File relative to the config root, e.g. 'packages/old.yaml'.")
+			},
+			annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true }
+		},
+		async ({ instance_id, path }) =>
+			runTool(ctx.logger, "ha_delete_config_file", async () => {
+				// Same rule as writes: a delete on the wrong house cannot be undone.
+				const meant = (instance_id ?? "").trim();
+				const targeting = ctx.instances.activeId();
+				if (ctx.config.brokered && meant !== targeting) {
+					return errorResult(
+						`Refused: this session is targeting "${targeting}", but the delete names ` +
+							`"${meant}". Nothing was deleted. Select it with vomehome_use_instance first ` +
+							`if "${meant}" is the home you mean.`
+					);
+				}
+				const decision = evaluateConfigWrite(ctx.instances.currentSafety());
+				if (!decision.allowed) {
+					return errorResult(`Refused: ${decision.reason}`);
+				}
+				try {
+					const result = await filesRequest<Record<string, unknown>>(
+						ctx,
+						`/delete?path=${encodeURIComponent(path)}`,
+						{ method: "POST" }
+					);
+					return jsonResult(result);
+				} catch (error) {
+					const message = error instanceof Error ? error.message : String(error);
+					// A component from before /delete existed refuses it by name.
+					if (/non-allowlisted/.test(message)) {
+						return errorResult(
+							"This home's Vome component predates file deletion. Update the Vome " +
+								"add-on (0.3.55 or later) or the integration (0.9.39 or later), then try again."
+						);
+					}
+					throw error;
+				}
+			})
+	);
 }

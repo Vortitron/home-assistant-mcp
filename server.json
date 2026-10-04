@@ -1,0 +1,49 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.Vortitron/home-assistant-mcp",
+  "description": "Home Assistant and ESPHome for coding agents: states, services, automations, dashboards, flashing.",
+  "repository": {
+    "url": "https://github.com/Vortitron/home-assistant-mcp",
+    "source": "github"
+  },
+  "version": "0.10.0",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "@vortitron/home-assistant-mcp",
+      "version": "0.10.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "HA_URL",
+          "description": "Your Home Assistant's address, e.g. http://homeassistant.local:8123 (or use VOMEHOME_TOKEN instead)",
+          "isRequired": false,
+          "format": "string"
+        },
+        {
+          "name": "HA_TOKEN",
+          "description": "A Home Assistant long-lived access token",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": true
+        },
+        {
+          "name": "HA_ALLOW_WRITE",
+          "description": "Set to true to allow service calls and edits; reads only without it",
+          "isRequired": false,
+          "format": "boolean"
+        },
+        {
+          "name": "VOMEHOME_TOKEN",
+          "description": "A key from the Vome app's Agent tab, to reach the home through Vome instead of HA_URL and HA_TOKEN",
+          "isRequired": false,
+          "format": "string",
+          "isSecret": true
+        }
+      ]
+    }
+  ],
+  "websiteUrl": "https://github.com/Vortitron/home-assistant-mcp"
+}

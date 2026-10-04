@@ -1,6 +1,7 @@
 {
 	"name": "@vortitron/home-assistant-mcp",
 	"version": "0.10.0",
+	"mcpName": "io.github.Vortitron/home-assistant-mcp",
 	"description": "Model Context Protocol (MCP) server that lets coding agents (Cursor, VS Code, Claude) read and control Home Assistant, ESPHome and Node-RED: inspect entities, call services, render templates, debug logs, edit automations and deploy Node-RED flows.",
 	"type": "module",
 	"license": "MIT",

@@ -1,7 +1,7 @@
 import type { Config } from "../config.js";
 import type { Logger } from "../logger.js";
 import { HaApiError, binaryResult, type StateWatchGrant } from "./restClient.js";
-import type { HaImage, HaRestClient, HistoryParams, LogbookParams } from "./restClient.js";
+import type { HaImage, HaRestClient, HaServiceCallResult, HistoryParams, LogbookParams } from "./restClient.js";
 import type { HaWsClient } from "./wsClient.js";
 import type {
 	HaApiStatus,
@@ -131,7 +131,7 @@ export function createBrokeredHaRestClient(
 		service: string,
 		data: Record<string, unknown> = {},
 		target?: HaTarget
-	): Promise<HaState[]> {
+	): Promise<HaServiceCallResult> {
 		const body: Record<string, unknown> = { ...data };
 		if (target) {
 			for (const [key, value] of Object.entries(target)) {
@@ -140,7 +140,9 @@ export function createBrokeredHaRestClient(
 				}
 			}
 		}
-		return broker<HaState[]>(
+		// The broker retries with ?return_response itself when HA asks for it,
+		// so this can be either shape.
+		return broker<HaServiceCallResult>(
 			`/services/${encodeURIComponent(domain)}/${encodeURIComponent(service)}`,
 			{ method: "POST", body }
 		);

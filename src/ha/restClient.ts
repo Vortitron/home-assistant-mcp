@@ -15,6 +15,33 @@ import type { HaWsClient } from "./wsClient.js";
  * Thrown for any non-2xx Home Assistant REST response. Carries the HTTP status
  * and raw body so tools can surface a useful message back to the agent.
  */
+/**
+ * What POST /api/services/... answers: the states that changed, or -- for a
+ * service that returns data, called with ?return_response -- those states
+ * and the service's response together.
+ */
+export type HaServiceCallResult =
+	| HaState[]
+	| { changed_states?: HaState[]; service_response?: unknown };
+
+/** The changed states and (if any) the service's own response, whichever shape came back. */
+export function splitServiceResult(raw: unknown): { changed: HaState[]; response?: unknown } {
+	if (Array.isArray(raw)) {
+		return { changed: raw as HaState[] };
+	}
+	if (raw && typeof raw === "object") {
+		const obj = raw as { changed_states?: unknown; service_response?: unknown };
+		const changed = Array.isArray(obj.changed_states) ? (obj.changed_states as HaState[]) : [];
+		return "service_response" in obj ? { changed, response: obj.service_response } : { changed };
+	}
+	return { changed: [] };
+}
+
+/** HA's 400 for a service that only works with ?return_response. */
+export function wantsReturnResponse(error: unknown): boolean {
+	return error instanceof HaApiError && error.status === 400 && /return_response/.test(error.body);
+}
+
 export class HaApiError extends Error {
 	readonly status: number;
 	readonly body: string;
@@ -77,7 +104,7 @@ export interface HaRestClient {
 		service: string,
 		data?: Record<string, unknown>,
 		target?: HaTarget
-	): Promise<HaState[]>;
+	): Promise<HaServiceCallResult>;
 	renderTemplate(template: string, variables?: Record<string, unknown>): Promise<string>;
 	checkConfig(): Promise<HaCheckConfigResult>;
 	getErrorLog(): Promise<string>;
@@ -185,12 +212,12 @@ export function createHaRestClient(
 		}
 	}
 
-	function callService(
+	async function callService(
 		domain: string,
 		service: string,
 		data: Record<string, unknown> = {},
 		target?: HaTarget
-	): Promise<HaState[]> {
+	): Promise<HaServiceCallResult> {
 		const body: Record<string, unknown> = { ...data };
 		if (target) {
 			for (const [key, value] of Object.entries(target)) {
@@ -199,13 +226,18 @@ export function createHaRestClient(
 				}
 			}
 		}
-		return request<HaState[]>(
-			`/api/services/${encodeURIComponent(domain)}/${encodeURIComponent(service)}`,
-			{
-				method: "POST",
-				body
+		const path = `/api/services/${encodeURIComponent(domain)}/${encodeURIComponent(service)}`;
+		try {
+			return await request<HaServiceCallResult>(path, { method: "POST", body });
+		} catch (error) {
+			// Services that return data (vomesync.subscribe_switch, ...) refuse
+			// a plain call. Retry once asking for the response, as the VomeHome
+			// broker does, so both transports behave the same.
+			if (!wantsReturnResponse(error)) {
+				throw error;
 			}
-		);
+			return request<HaServiceCallResult>(path, { method: "POST", body, query: { return_response: "true" } });
+		}
 	}
 
 	async function renderTemplate(

@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { SafetyConfig } from "../config.js";
 import type { HaTarget } from "../ha/types.js";
+import { splitServiceResult } from "../ha/restClient.js";
 import { evaluateDomainWrite, extractDomain } from "../safety.js";
 import { errorResult, jsonResult, runTool, type ToolContext } from "./helpers.js";
 
@@ -108,7 +109,7 @@ export function registerServiceTools(server: McpServer, ctx: ToolContext): void 
 		{
 			title: "Call a service",
 			description:
-				"Call a Home Assistant service to change state (e.g. domain='light', service='turn_on', data={ brightness_pct: 60 }, target={ entity_id: 'light.kitchen' }). Refused unless writes are enabled, and blocked for denied domains. Returns the entities that changed.",
+				"Call a Home Assistant service to change state (e.g. domain='light', service='turn_on', data={ brightness_pct: 60 }, target={ entity_id: 'light.kitchen' }). Refused unless writes are enabled, and blocked for denied domains. Returns the entities that changed, and service_response for services that return data.",
 			inputSchema: {
 				domain: z.string().describe("Service domain, e.g. 'light', 'switch', 'climate'."),
 				service: z.string().describe("Service name, e.g. 'turn_on', 'set_temperature'."),
@@ -160,14 +161,18 @@ export function registerServiceTools(server: McpServer, ctx: ToolContext): void 
 							`Target specific entity_id(s) instead, or call the domain-specific service (e.g. 'light.${service}').`
 					);
 				}
-				const changed = await ctx.rest.callService(domain, service, data ?? {}, target);
+				const { changed, response } = splitServiceResult(
+					await ctx.rest.callService(domain, service, data ?? {}, target)
+				);
 				return jsonResult({
 					called: `${domain}.${service}`,
 					changed_entities: changed.map((state) => ({
 						entity_id: state.entity_id,
 						state: state.state
 					})),
-					raw_changed_count: changed.length
+					raw_changed_count: changed.length,
+					// What a service that returns data said (vomesync.subscribe_switch, ...).
+					...(response === undefined ? {} : { service_response: response })
 				});
 			})
 	);

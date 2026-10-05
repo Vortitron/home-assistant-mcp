@@ -51,6 +51,29 @@ describe("createHaRestClient", () => {
 		});
 	});
 
+	it("retries a service that needs return_response, and keeps its response", async () => {
+		const fetchMock = vi
+			.fn()
+			.mockResolvedValueOnce(
+				jsonResponse({ message: "Validation error: The action requires responses and must be called with return_response=True" }, 400)
+			)
+			.mockResolvedValueOnce(jsonResponse({ changed_states: [], service_response: { uid: "vs_1" } }));
+		vi.stubGlobal("fetch", fetchMock);
+
+		const result = await client().callService("vomesync", "subscribe_switch", { uid: "vs_1" });
+
+		expect(result).toEqual({ changed_states: [], service_response: { uid: "vs_1" } });
+		expect(fetchMock.mock.calls[1]![0]).toBe("http://ha.local:8123/api/services/vomesync/subscribe_switch?return_response=true");
+	});
+
+	it("does not retry other 400s", async () => {
+		const fetchMock = vi.fn(async () => jsonResponse({ message: "Entity not found" }, 400));
+		vi.stubGlobal("fetch", fetchMock);
+
+		await expect(client().callService("light", "turn_on", {})).rejects.toBeInstanceOf(HaApiError);
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+	});
+
 	it("returns rendered template text (not JSON)", async () => {
 		const fetchMock = vi.fn(async () => new Response("21.4", { status: 200 }));
 		vi.stubGlobal("fetch", fetchMock);

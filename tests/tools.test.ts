@@ -66,6 +66,30 @@ function buildHarness(
 	return server;
 }
 
+describe("ha_call_service results", () => {
+	it("reports a service's own response when HA returns one (changed_states + service_response)", async () => {
+		const callService = vi.fn(async () => ({
+			changed_states: [{ entity_id: "sensor.x", state: "on", attributes: {} }],
+			service_response: { uid: "vs_1", name: "Tower Bridge open" }
+		}));
+		const server = buildHarness({ env: { HA_ALLOW_WRITE: "true" }, rest: { callService } });
+		const result = await server.call("ha_call_service", { domain: "vomesync", service: "subscribe_switch", data: { uid: "vs_1" } });
+		expect(result.isError).toBeFalsy();
+		const body = JSON.parse(textOf(result));
+		expect(body.changed_entities).toEqual([{ entity_id: "sensor.x", state: "on" }]);
+		expect(body.service_response).toEqual({ uid: "vs_1", name: "Tower Bridge open" });
+	});
+
+	it("still takes the plain list of changed states", async () => {
+		const callService = vi.fn(async () => [{ entity_id: "light.k", state: "off", attributes: {} }]);
+		const server = buildHarness({ env: { HA_ALLOW_WRITE: "true" }, rest: { callService } });
+		const result = await server.call("ha_call_service", { domain: "light", service: "turn_off", target: { entity_id: "light.k" } });
+		const body = JSON.parse(textOf(result));
+		expect(body.raw_changed_count).toBe(1);
+		expect(body.service_response).toBeUndefined();
+	});
+});
+
 describe("ha_call_service safety", () => {
 	it("refuses when writes are disabled", async () => {
 		const callService = vi.fn();

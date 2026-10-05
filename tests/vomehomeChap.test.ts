@@ -96,6 +96,7 @@ describe("vomehome CHAP tools", () => {
 			"vomehome_chap_link_standby",
 			"vomehome_chap_pair",
 			"vomehome_chap_set_home_address",
+			"vomehome_chap_set_takeover_rule",
 			"vomehome_chap_standby_candidates",
 			"vomehome_chap_status",
 			"vomehome_chap_switch",
@@ -130,6 +131,13 @@ describe("vomehome CHAP tools", () => {
 		const result = await harness(WRITE, { chap }).call("vomehome_chap_link_standby", { instance_id: "home-1", install_id: "spare" });
 		expect(result.isError).toBe(true);
 		expect(textOf(result)).toMatch(/already has a standby/);
+	});
+
+	it("sets what an out-of-step standby does", async () => {
+		const chap = vi.fn(async () => ({ ok: true, takeover_when_out_of_step: "in_step" }));
+		const result = await harness(WRITE, { chap }).call("vomehome_chap_set_takeover_rule", { instance_id: "home-1", rule: "in_step" });
+		expect(result.isError).toBeUndefined();
+		expect(chap).toHaveBeenCalledWith("home-1", "takeover-rule", "POST", { rule: "in_step" });
 	});
 
 	it("switches back at once only when asked to", async () => {

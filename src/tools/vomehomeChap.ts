@@ -149,11 +149,26 @@ export function registerVomeHomeChapTools(server: McpServer, ctx: ToolContext): 
 		"CHAP: switch back",
 		"Move the home back to its main install. By default the standby's changes go back first; now=true " +
 			"switches back at once and leaves anything changed on the standby since its last sync behind — " +
-			"for emergencies only. Ask the user first.",
+			"for emergencies only. A standby that was out of step when it took over is refused the sync " +
+			"(it would put old settings over newer ones): use now=true then. Ask the user first.",
 		"switch-back",
 		"POST",
 		{ now: z.boolean().optional().describe("Switch back without syncing first (emergency).") },
 		(args) => (args.now ? { now: true } : {})
+	);
+
+	write(
+		"vomehome_chap_set_takeover_rule",
+		"CHAP: what an out-of-step standby does",
+		"Choose what a standby that has stopped taking the main install's changes does when the home " +
+			"needs it: rule=\"anyway\" (the default) takes over on its old settings, since they beat no " +
+			"Home Assistant at all, and nothing it changes is synced back; rule=\"in_step\" waits until it is " +
+			"back in step. vomehome_chap_status shows the rule (pair.takeover_when_out_of_step) and whether " +
+			"the standby is out of step now (pair.out_of_step).",
+		"takeover-rule",
+		"POST",
+		{ rule: z.enum(["anyway", "in_step"]).describe("anyway: take over on old settings; in_step: wait until in step.") },
+		(args) => ({ rule: args.rule })
 	);
 
 	write(

@@ -1,0 +1,14 @@
+{
+  "name": "vome-doom",
+  "version": "0.1.0",
+  "description": "house.wad in a Claude Code pane: your Home Assistant home as a Doom level, played in the terminal. Shoot a lamp and it turns off for real.",
+  "author": {
+    "name": "Vortitron",
+    "url": "https://vome.io"
+  },
+  "homepage": "https://github.com/Vortitron/home-assistant-mcp/tree/main/claude-plugin/vome-doom",
+  "repository": "https://github.com/Vortitron/home-assistant-mcp",
+  "license": "MIT",
+  "keywords": ["home-assistant", "vome", "doom", "housewad"],
+  "types": "./types/index.d.ts"
+}

@@ -485,6 +485,14 @@ the build it runs as it happens:
 /plugin install vome-esphome --marketplace Vortitron/home-assistant-mcp
 ```
 
+And for fun, [**vome-doom**](claude-plugin/vome-doom/README.md) is
+[house.wad](https://github.com/Vortitron/housewad) in a pane: your home as a
+Doom level, where shooting a lamp turns it off for real:
+
+```
+/plugin install vome-doom --marketplace Vortitron/home-assistant-mcp
+```
+
 And just for fun, [**dont-panic**](https://github.com/Vortitron/dont-panic)
 adds the Guide: a pane that animates whatever the agent is doing and files a
 live, irreverent Guide entry on it. Its README has the price levels; `/guide

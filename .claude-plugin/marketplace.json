@@ -52,6 +52,12 @@
       },
       "description": "Just for fun: a Guide-style pane with animated scenes and live, irreverent Guide entries on whatever the agent is doing, and doodles that evolve as you work.",
       "category": "fun"
+    },
+    {
+      "name": "vome-doom",
+      "source": "./claude-plugin/vome-doom",
+      "description": "house.wad in a pane: your Home Assistant home as a Doom level, in the terminal. Shoot a lamp and it turns off for real.",
+      "category": "productivity"
     }
   ]
 }

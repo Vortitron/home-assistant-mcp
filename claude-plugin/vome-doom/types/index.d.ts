@@ -15,6 +15,8 @@ declare module 'claude-code' {
       status: Status | null
       /** Which home: the name the game titles its level with. */
       home: string | null
+      /** Auto mode refused one of the pane's calls: on which server, and which tool. */
+      blocked: { server: string; tool: string } | null
     }
   }
 }

@@ -19,6 +19,8 @@ const HOUSEWAD_VERSION = '0.7.6'
 const RELEASE = `https://raw.githubusercontent.com/Vortitron/housewad/v${HOUSEWAD_VERSION}/dist/`
 const FILES = ['housewad-term.mjs', 'housewad-engine.js', 'housewad-engine.wasm', 'housewad-zdbsp.js', 'housewad-zdbsp.wasm', 'freedoom2.wad']
 /** What the level is built from: the domains house.wad reads. */
+/** The reads a game starts with, all read-only: what auto mode needs allowed by name. */
+const READS = ['ha_list_areas', 'ha_list_devices', 'ha_get_entity_registry', 'ha_list_entities', 'ha_get_state']
 const DOMAINS = ['light', 'switch', 'lock', 'vacuum', 'sensor', 'media_player', 'cover', 'person', 'sun', 'camera', 'binary_sensor', 'water_heater', 'climate', 'alarm_control_panel']
 
 const phase = atom({ plugin: 'vome-doom', key: 'phase' } as const, 'idle' as Phase)
@@ -26,6 +28,7 @@ const note = atom({ plugin: 'vome-doom', key: 'note' } as const, null as string 
 const size = atom({ plugin: 'vome-doom', key: 'size' } as const, null as { columns: number; rows: number } | null)
 const status = atom({ plugin: 'vome-doom', key: 'status' } as const, null as Status | null)
 const homeName = atom({ plugin: 'vome-doom', key: 'home' } as const, null as string | null)
+const blocked = atom({ plugin: 'vome-doom', key: 'blocked' } as const, null as { server: string; tool: string } | null)
 
 // The running game: the module's own, gone with a reload (which kills the child too).
 let frame: string | null = null
@@ -34,10 +37,14 @@ let sequence = 0
 let server: string | null = null
 let room = { columns: 96, rows: 36 }
 let stopRequested = false
+let settingsFile = '~/.claude/settings.json'
+let lastMode: 'real' | 'practice' = 'practice'
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: 'doom', description: 'Play house.wad: your Home Assistant home as a Doom level, in a pane (play, practice)' })
+    const configDir = (await $.env.get('CLAUDE_CONFIG_DIR')) ?? `${(await $.env.get('HOME')) ?? '~'}/.claude`
+    settingsFile = `${configDir.replace(/\/+$/, '')}/settings.json`
     return next(e)
   })
 
@@ -57,12 +64,55 @@ export const register: Register = on => {
       const { Text } = $.ui.resolve(e)
       return <Text>house.wad plays in the terminal.</Text>
     }
-    const { Box, Text, Button, Raster, Client } = $.ui.resolve(e)
+    const { Box, Text, Button, Raster, Client, Markdown, Code } = $.ui.resolve(e)
     // Room for the screen: the pane's width, its height less the strip and the buttons.
     room = { columns: Math.max(40, e.props.bodyColumns), rows: Math.max(12, (e.viewport?.rows ?? 40) - 6) }
     const now = await read($, phase)
     const said = await read($, note)
     const home = await read($, homeName)
+    const refusal = await read($, blocked)
+    const rules = refusal
+      ? refusal.tool === 'ha_call_service'
+        ? `"mcp__${refusal.server}__ha_call_service"`
+        : READS.map(tool => `"mcp__${refusal.server}__${tool}"`).join(',\n')
+      : ''
+    const help = refusal ? (
+      <Box flexDirection="column" borderStyle="round" borderColor="warning" paddingX={1}>
+        {refusal.tool === 'ha_call_service' ? (
+          <Text color="warning" wrap="wrap">
+            Auto mode refused what the game did to the house: it calls ha_call_service, and allowing that by name would let
+            Claude change things without asking too. Practise, switch auto mode off, or allow it in {settingsFile} if you are
+            happy with that:
+          </Text>
+        ) : (
+          <Text color="warning" wrap="wrap">
+            Auto mode refused reading your home. Add these to permissions.allow in {settingsFile}; they only read:
+          </Text>
+        )}
+        <Markdown text={`[${settingsFile}](file://${settingsFile})`} />
+        <Code source={rules} />
+        <Box flexDirection="row" gap={2}>
+          <Button key="copy-rule" hotkey="c" onPress={press => $.ui.copy({ text: rules, surface: press.surface })}>
+            Copy
+          </Button>
+          {refusal.tool === 'ha_call_service' ? null : (
+            <Button
+              key="retry"
+              hotkey="r"
+              onPress={async () => {
+                await update($, blocked, () => null)
+                await start($, lastMode)
+              }}
+            >
+              Retry
+            </Button>
+          )}
+          <Button key="dismiss-rule" dimColor onPress={() => update($, blocked, () => null)}>
+            Dismiss
+          </Button>
+        </Box>
+      </Box>
+    ) : null
 
     if (now === 'playing') {
       const shape = await read($, size)
@@ -84,6 +134,7 @@ export const register: Register = on => {
             <Button key="stop" hotkey="q" onPress={() => stop($)}>Stop</Button>
             {said ? <Text dimColor wrap="truncate-end">{said}</Text> : null}
           </Box>
+          {help}
         </Box>
       )
     }
@@ -96,7 +147,8 @@ export const register: Register = on => {
           Your home as a Doom level. Rooms are your areas; lamps, plugs and screens are where they really are. Shoot a lamp and it
           turns off for real. Use a door and its lock opens, after a Y/N. House problems are the monsters.
         </Text>
-        {busy ? <Text color="yellow">{said ?? 'Working…'}</Text> : said ? <Text color={now === 'failed' ? 'red' : undefined} wrap="wrap">{said}</Text> : null}
+        {busy ? <Text color="yellow">{said ?? 'Working…'}</Text> : said && !refusal ? <Text color={now === 'failed' ? 'red' : undefined} wrap="wrap">{said}</Text> : null}
+        {help}
         {busy ? null : (
           <Box flexDirection="row" gap={1}>
             <Button key="play" variant="primary" hotkey="p" onPress={() => start($, 'real')}>Play for real</Button>
@@ -124,7 +176,9 @@ export const register: Register = on => {
 // ---------------------------------------------------------------- the game
 
 async function start($: EngineInterface, mode: 'real' | 'practice') {
+  lastMode = mode
   stopRequested = false
+  await update($, blocked, () => null)
   frame = null
   await update($, status, () => null)
   await update($, size, () => null)
@@ -221,9 +275,12 @@ async function act($: EngineInterface, message: Record<string, unknown>) {
     const result = await $.mcp.call(server!, 'ha_call_service', { domain: message.domain, service: message.service, data })
     if (result.isError) error = firstLine(result.content.map(block => block.text ?? '').join('\n')) ?? 'refused'
   } catch (thrown) {
-    error = /auto mode|classifier|permission|denied/i.test(String(thrown))
-      ? 'auto mode refused it: allow ha_call_service, or play with auto mode off'
-      : firstLine(String(thrown)) ?? 'failed'
+    if (/auto mode|classifier|permission|denied/i.test(String(thrown))) {
+      error = 'auto mode refused it'
+      await update($, blocked, () => ({ server: server!, tool: 'ha_call_service' }))
+    } else {
+      error = firstLine(String(thrown)) ?? 'failed'
+    }
   }
   await send($, [{ t: 'reply', id, error }])
   const entity = typeof data.entity_id === 'string' ? data.entity_id : null
@@ -318,7 +375,8 @@ async function readHome($: EngineInterface, from: string): Promise<Snapshot | nu
       return parseJson(text) ?? {}
     } catch (error) {
       if (/auto mode|classifier|permission|denied/i.test(String(error))) {
-        throw new Error(`auto mode refused ${tool}. Allow the Vome MCP's read tools (see the vome-doom README), then press Play again.`)
+        await update($, blocked, () => ({ server: from, tool }))
+        throw new Error(`auto mode refused ${tool}.`)
       }
       throw error
     }

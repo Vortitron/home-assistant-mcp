@@ -52,8 +52,18 @@ moment and holding it down keeps you moving.
 
 Starting a game reads the home in the background: `ha_list_areas`,
 `ha_list_devices`, `ha_get_entity_registry`, `ha_list_entities` and
-`ha_get_state`, all read-only. In auto mode, allow them by name (with
-`vome-connect`, `mcp__plugin_vome-connect_vome__ha_list_areas` and so on).
+`ha_get_state`, all read-only. In auto mode Claude Code refuses background
+calls nobody asked for unless they are allowed by name; when it does, the pane
+shows the exact lines for your Vome server, a link to your `settings.json`, a
+Copy button and Retry. With `vome-connect` they are:
+
+```json
+"mcp__plugin_vome-connect_vome__ha_list_areas",
+"mcp__plugin_vome-connect_vome__ha_list_devices",
+"mcp__plugin_vome-connect_vome__ha_get_entity_registry",
+"mcp__plugin_vome-connect_vome__ha_list_entities",
+"mcp__plugin_vome-connect_vome__ha_get_state"
+```
 
 Playing for real calls `ha_call_service` when you shoot a lamp or open a door.
 Allowing that by name would let Claude change things without asking too, so the

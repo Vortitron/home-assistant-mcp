@@ -39,6 +39,28 @@ let room = { columns: 96, rows: 36 }
 let stopRequested = false
 let settingsFile = '~/.claude/settings.json'
 let lastMode: 'real' | 'practice' = 'practice'
+let keysSent = 0
+
+/**
+ * The controls as pane hotkeys: they work once the pane has the keyboard, which any click on it
+ * gives (the picture included), unlike the strip, which must be clicked itself. Hotkeys are
+ * letters and digits only, so arrows and Space stay with the strip. Each sends the game the
+ * terminal key name or character its own keys map from (A and D in the game strafe; here they turn).
+ */
+const CONTROLS: Array<{ hotkey: string; label: string; key: string }> = [
+  { hotkey: 'w', label: 'forward', key: 'up' },
+  { hotkey: 's', label: 'back', key: 'down' },
+  { hotkey: 'a', label: 'turn left', key: 'left' },
+  { hotkey: 'd', label: 'turn right', key: 'right' },
+  { hotkey: 'z', label: 'strafe left', key: 'a' },
+  { hotkey: 'x', label: 'strafe right', key: 'd' },
+  { hotkey: 'f', label: 'fire', key: 'f' },
+  { hotkey: 'e', label: 'use', key: 'e' },
+  { hotkey: 'y', label: 'yes', key: 'y' },
+  { hotkey: 'n', label: 'no', key: 'n' },
+  { hotkey: 'm', label: 'menu', key: 'm' },
+  ...['fist', 'pistol', 'shotgun', 'chaingun', 'rockets', 'plasma', 'BFG'].map((label, i) => ({ hotkey: String(i + 1), label, key: String(i + 1) })),
+]
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
@@ -128,11 +150,20 @@ export const register: Register = on => {
             key="keys"
             module="./keys.tsx"
             width={shape.columns}
-            props={{ text, hint: 'Click here to play. Arrows/WASD move, Space fires, E uses, Y/N answers, M menu, Esc gives the keys back.' }}
+            props={{ text, hint: 'Click this line for the full keyboard: arrows, Space to fire. Esc gives the keys back.' }}
           />
+          <Box flexDirection="row" flexWrap="wrap" columnGap={1}>
+            {CONTROLS.map(c => (
+              <Button key={`k-${c.hotkey}`} plain hotkey={c.hotkey} onPress={() => send($, [{ t: 'key', key: c.key }])}>
+                {c.label}
+              </Button>
+            ))}
+          </Box>
           <Box flexDirection="row" gap={1}>
-            <Button key="stop" hotkey="q" onPress={() => stop($)}>Stop</Button>
-            {said ? <Text dimColor wrap="truncate-end">{said}</Text> : null}
+            <Button key="stop" onPress={() => stop($)}>Stop</Button>
+            <Text dimColor wrap="truncate-end">
+              {said ? `${said} · ` : ''}Click the picture, then the keys above work. Keys sent: {keysSent}
+            </Text>
           </Box>
           {help}
         </Box>
@@ -302,8 +333,11 @@ async function stop($: EngineInterface) {
 /** Messages to the game: one small file each batch, read in name order and deleted by the game. */
 async function send($: EngineInterface, messages: unknown[]) {
   if (!inputDir) return
+  keysSent += messages.filter(m => (m as { t?: string }).t === 'key').length
   sequence += 1
   await $.fs.write(`${inputDir}/${String(sequence).padStart(9, '0')}.json`, messages.map(m => JSON.stringify(m)).join('\n') + '\n')
+  // The pane shows how many keys went out: a redraw, folded to ten a second by the engine.
+  if (messages.some(m => (m as { t?: string }).t === 'key')) $.ui.invalidate('ui.render')
 }
 
 async function download($: EngineInterface, dir: string, files: string[]): Promise<boolean> {

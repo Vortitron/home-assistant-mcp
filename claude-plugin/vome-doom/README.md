@@ -27,7 +27,7 @@ Open **Vome** and create a key on its **Agent** tab.
 
 **3. Play:** `/doom`, then **Practice** (nothing in the house changes) or
 **Play for real**. `/doom practice` and `/doom play` start one straight away.
-Click the strip under the screen to give the game the keyboard.
+Click the picture to give the pane the keyboard.
 
 It needs **Node 18 or newer** on the computer. The first game downloads its
 data once, about 19 MB (house.wad's engine and Freedoom's free game data),
@@ -35,18 +35,24 @@ into `~/.cache/vome-doom`.
 
 ## Keys
 
+Click the picture and these work, as long as the pane has the keyboard:
+
 | | |
 | --- | --- |
-| Arrows, or W A S D | move, turn and strafe |
-| Space or F | fire |
+| W / S | forward, back |
+| A / D | turn left, right |
+| Z / X | strafe left, right |
+| F | fire |
 | E | use (doors, switches) |
 | Y / N | answer the door's question |
+| M | the menu |
 | 1 to 7 | weapons |
-| M | the menu (a pane never sees Escape) |
-| Esc | gives the keyboard back to Claude Code |
 
-A terminal reports key presses but not releases, so a press holds the key for a
-moment and holding it down keeps you moving.
+For the full keyboard (arrows, Space to fire), click the line under the
+picture instead. Esc gives the keyboard back to Claude Code. A terminal reports
+key presses but not releases, so a press holds the key for a moment, and
+holding it down keeps you moving. The pane counts the keys it has sent, which
+shows at a glance whether it is hearing you.
 
 ## Auto mode
 

@@ -92,10 +92,12 @@ describe("vomehome CHAP tools", () => {
 	it("registers one tool per CHAP page action", () => {
 		const server = harness();
 		expect([...server.tools.keys()].sort()).toEqual([
+			"vomehome_chap_addon",
 			"vomehome_chap_enrol",
 			"vomehome_chap_link_standby",
 			"vomehome_chap_pair",
 			"vomehome_chap_set_home_address",
+			"vomehome_chap_set_standby_addons",
 			"vomehome_chap_set_takeover_rule",
 			"vomehome_chap_standby_candidates",
 			"vomehome_chap_status",
@@ -131,6 +133,15 @@ describe("vomehome CHAP tools", () => {
 		const result = await harness(WRITE, { chap }).call("vomehome_chap_link_standby", { instance_id: "home-1", install_id: "spare" });
 		expect(result.isError).toBe(true);
 		expect(textOf(result)).toMatch(/already has a standby/);
+	});
+
+	it("chooses the standby's add-ons and deals with a stopped one", async () => {
+		const chap = vi.fn(async () => ({ ok: true }));
+		const server = harness(WRITE, { chap });
+		await server.call("vomehome_chap_set_standby_addons", { instance_id: "home-1", addons: ["core_mosquitto"] });
+		await server.call("vomehome_chap_addon", { instance_id: "home-1", slug: "core_matter_server", action: "unlist" });
+		expect(chap).toHaveBeenNthCalledWith(1, "home-1", "standby-addons", "POST", { addons: ["core_mosquitto"] });
+		expect(chap).toHaveBeenNthCalledWith(2, "home-1", "addon", "POST", { slug: "core_matter_server", action: "unlist" });
 	});
 
 	it("sets what an out-of-step standby does", async () => {

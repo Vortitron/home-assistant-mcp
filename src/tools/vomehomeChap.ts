@@ -172,6 +172,35 @@ export function registerVomeHomeChapTools(server: McpServer, ctx: ToolContext): 
 	);
 
 	write(
+		"vomehome_chap_set_standby_addons",
+		"CHAP: the add-ons the standby runs",
+		"Choose which of the home's add-ons the standby runs when it takes over (slugs from the home's " +
+			"add-on list; a small box should run only what the house needs). The rest stay stopped there " +
+			"and are left out of its next copy. vomehome_chap_status shows the current list " +
+			"(pair.standby_addons).",
+		"standby-addons",
+		"POST",
+		{ addons: z.array(z.string()).describe("Add-on slugs, e.g. [\"core_matter_server\", \"core_mosquitto\"].") },
+		(args) => ({ addons: args.addons })
+	);
+
+	write(
+		"vomehome_chap_addon",
+		"CHAP: a listed add-on stopped where the home runs",
+		"For an add-on in pair.addons_stopped_where_home_runs (on the standby's list but not running on the " +
+			"install running the home): action=\"unlist\" takes it off the standby's list, when it was stopped " +
+			"on purpose; action=\"start\" starts it there, when it should be running and may have crashed. " +
+			"Ask the user which.",
+		"addon",
+		"POST",
+		{
+			slug: z.string().describe("The add-on's slug, e.g. core_matter_server."),
+			action: z.enum(["start", "unlist"]).describe("start it, or take it off the standby's list."),
+		},
+		(args) => ({ slug: args.slug, action: args.action })
+	);
+
+	write(
 		"vomehome_chap_set_home_address",
 		"CHAP: the home's address at home",
 		"Set the house-network address (e.g. 192.168.1.15/24) that follows whichever install runs the " +

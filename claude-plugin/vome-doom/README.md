@@ -29,6 +29,11 @@ Open **Vome** and create a key on its **Agent** tab.
 **Play for real**. `/doom practice` and `/doom play` start one straight away.
 Click the picture to give the pane the keyboard.
 
+**4. On your dashboard too:** the pane's **Put it on my Home Assistant
+dashboard** button (or `/doom install`) asks Claude to add house.wad's card to
+your Home Assistant, through HACS if you have it, so the same game plays in a
+browser. Claude asks which dashboard first and changes nothing else.
+
 It needs **Node 18 or newer** on the computer. The first game downloads its
 data once, about 19 MB (house.wad's engine and Freedoom's free game data),
 into `~/.cache/vome-doom`.

@@ -78,11 +78,15 @@ export const register: Register = on => {
   on('command.run', { command: 'doom' }, async ($, e) => {
     await $.ui.open({ id: PANE, title: 'house.wad', focus: true })
     const word = e.args.trim().toLowerCase()
+    if (word === 'install') {
+      await $.prompt.submit({ text: installPrompt((await read($, homeName)) ?? null) })
+      return { text: 'Asking Claude to put house.wad on your Home Assistant dashboard.' }
+    }
     if (word === 'play' || word === 'practice') {
       void start($, word === 'play' ? 'real' : 'practice')
       return { text: `Starting house.wad${word === 'practice' ? ' in practice (nothing in the house changes)' : ''}. Click the strip under the screen to play.` }
     }
-    return { text: 'house.wad is open in the pane. Press Play when you are ready (or /doom play, /doom practice).' }
+    return { text: 'house.wad is open in the pane. Press Play when you are ready (or /doom play, /doom practice, /doom install).' }
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
@@ -191,14 +195,22 @@ export const register: Register = on => {
         {busy ? <Text color="yellow">{said ?? 'Working…'}</Text> : said && !refusal ? <Text color={now === 'failed' ? 'red' : undefined} wrap="wrap">{said}</Text> : null}
         {help}
         {busy ? null : (
-          <Box flexDirection="row" gap={1}>
+          <Box flexDirection="row" gap={1} flexWrap="wrap">
             <Button key="play" variant="primary" hotkey="p" onPress={() => start($, 'real')}>Play for real</Button>
             <Button key="practice" hotkey="t" onPress={() => start($, 'practice')}>Practice (nothing changes)</Button>
+            <Button key="install" hotkey="i" onPress={() => $.prompt.submit({ text: installPrompt(home) })}>
+              Put it on my Home Assistant dashboard
+            </Button>
           </Box>
         )}
         <Text dimColor wrap="wrap">
           Needs Node 18 or newer. The first game downloads its data once (about 19 MB, Freedoom's free game data). Built from
-          github.com/Vortitron/housewad.
+          github.com/Vortitron/housewad. The dashboard button asks Claude to add house.wad's card to your Home Assistant, so
+          you can play it in a browser too.
+        </Text>
+        <Text dimColor wrap="wrap">
+          Played through Vome, which also gives Home Assistant remote access without port forwarding, a health score and keys
+          for coding agents: vome.io
         </Text>
       </Box>
     )
@@ -399,6 +411,23 @@ async function download($: EngineInterface, dir: string, files: string[]): Promi
     }
   }
   return true
+}
+
+/** What the dashboard button asks Claude: house.wad's own install steps, done through the Vome MCP. */
+function installPrompt(home: string | null): string {
+  return [
+    `Put the house.wad card on my Home Assistant dashboard${home ? ` (${home})` : ''}, using the Vome MCP.`,
+    '',
+    '1. First check it is not there already: a Lovelace resource or a card of type custom:housewad-card.',
+    '2. If HACS is installed, add https://github.com/Vortitron/housewad to HACS as a custom repository of the Dashboard',
+    '   (plugin) category, download it, and check its housewad-card.js is registered as a JavaScript module resource.',
+    '3. Without HACS, do not copy files into /config/www: tell me the manual steps from the house.wad README instead.',
+    '4. Then ask me which dashboard should get it, offering a new one called house.wad, and add a panel view with',
+    '   `type: custom:housewad-card` there. Change nothing else.',
+    '',
+    'house.wad turns the house into a Doom level: in its own Play mode, shooting a lamp turns it off for real, and a',
+    'lock asks Y/N before it opens. Its card has a Practice mode too.',
+  ].join('\n')
 }
 
 // ---------------------------------------------------------------- the home

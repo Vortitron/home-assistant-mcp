@@ -33,3 +33,17 @@ test('/doom opens the pane', async ($, on) => {
   expect(opened).toContain('house-wad')
   expect(JSON.stringify(result)).toContain('Press Play')
 })
+
+test('the dashboard button asks Claude to install the card, by its own steps', async ($, on) => {
+  base(on)
+  let asked = ''
+  on('prompt.submit', (_$, e) => {
+    asked = e.text
+    return { text: e.text }
+  })
+  const ui = await mount($)
+  await ui.press({ key: 'install' })
+  expect(asked).toContain('custom:housewad-card')
+  expect(asked).toContain('github.com/Vortitron/housewad')
+  expect(asked).toContain('Change nothing else')
+})

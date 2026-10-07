@@ -1,6 +1,6 @@
 {
   "name": "vome-doom",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "house.wad in a Claude Code pane: your Home Assistant home as a Doom level, played in the terminal. Shoot a lamp and it turns off for real.",
   "author": {
     "name": "Vortitron",

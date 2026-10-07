@@ -15,7 +15,7 @@ import type { Phase, Status } from '../types'
 
 const PANE = 'house-wad'
 /** The house.wad release whose dist/ has the terminal host. */
-const HOUSEWAD_VERSION = '0.7.6'
+const HOUSEWAD_VERSION = '0.8.1'
 const RELEASE = `https://raw.githubusercontent.com/Vortitron/housewad/v${HOUSEWAD_VERSION}/dist/`
 const FILES = ['housewad-term.mjs', 'housewad-engine.js', 'housewad-engine.wasm', 'housewad-zdbsp.js', 'housewad-zdbsp.wasm', 'freedoom2.wad']
 /** What the level is built from: the domains house.wad reads. */
@@ -40,6 +40,10 @@ let stopRequested = false
 let settingsFile = '~/.claude/settings.json'
 let lastMode: 'real' | 'practice' = 'practice'
 let keysSent = 0
+/** The size last asked of the game, and when: a resize asks again, twice a second at most. */
+let askedSize = { columns: 0, rows: 0 }
+let askedAt = 0
+let isRunning = false
 
 /**
  * The controls as pane hotkeys: they work once the pane has the keyboard, which any click on it
@@ -87,8 +91,14 @@ export const register: Register = on => {
       return <Text>house.wad plays in the terminal.</Text>
     }
     const { Box, Text, Button, Raster, Client, Markdown, Code } = $.ui.resolve(e)
-    // Room for the screen: the pane's width, its height less the strip and the buttons.
-    room = { columns: Math.max(40, e.props.bodyColumns), rows: Math.max(12, (e.viewport?.rows ?? 40) - 6) }
+    // Room for the screen: the pane's whole width, its height less the strip, the controls and Stop.
+    const bodyRows = e.props.scroll?.bodyRows ?? (e.viewport?.rows ?? 40) - 2
+    room = { columns: Math.max(40, e.props.bodyColumns), rows: Math.max(12, bodyRows - 6) }
+    if (isRunning && (room.columns !== askedSize.columns || Math.abs(room.rows - askedSize.rows) >= 2) && Date.now() - askedAt > 500) {
+      askedSize = { ...room }
+      askedAt = Date.now()
+      void send($, [{ t: 'size', columns: room.columns, rows: room.rows }])
+    }
     const now = await read($, phase)
     const said = await read($, note)
     const home = await read($, homeName)
@@ -256,6 +266,9 @@ async function run($: EngineInterface, dir: string, mode: 'real' | 'practice', s
   ]
   let pending = ''
   let isPlaying = false
+  isRunning = true
+  askedSize = { ...room }
+  askedAt = Date.now()
   try {
     for await (const piece of $.process.spawn({ argv, input: JSON.stringify(snapshot) })) {
       if (stopRequested) break
@@ -277,23 +290,28 @@ async function run($: EngineInterface, dir: string, mode: 'real' | 'practice', s
           const shape = (await read($, size))
           if (isPlaying && shape) void $.ui.blit({ requestId: PANE, key: 'screen', cells: frame, columns: shape.columns, rows: shape.rows })
         } else if (message.t === 'ready') {
+          // The first says the game is on; later ones are a new size after the pane changed.
+          frame = null
           await update($, size, () => ({ columns: Number(message.columns), rows: Number(message.rows) }))
-          await setPhase($, 'playing', mode === 'real' ? null : 'Practice: nothing in the house changes.')
+          if (!isPlaying) await setPhase($, 'playing', mode === 'real' ? null : 'Practice: nothing in the house changes.')
           isPlaying = true
         } else if (message.t === 'status') {
           await update($, status, () => ({ room: String(message.room ?? ''), aim: String(message.aim ?? ''), last: String(message.last ?? ''), world: String(message.world ?? '') }))
         } else if (message.t === 'call') {
           void act($, message)
         } else if (message.t === 'error') {
+          isRunning = false
           await fail($, String(message.text ?? 'The game stopped.'))
           return
         }
       }
     }
   } catch (error) {
+    isRunning = false
     await fail($, `The game stopped: ${String(error)}`)
     return
   }
+  isRunning = false
   if ((await read($, phase)) !== 'failed') await setPhase($, 'ended', stopRequested ? null : 'The game ended.')
 }
 

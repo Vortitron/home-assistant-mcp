@@ -49,6 +49,17 @@ async function authCommand<T>(ctx: ToolContext, command: Record<string, unknown>
 	return ctx.ws.sendCommand<T>(command);
 }
 
+/**
+ * Home Assistant's form of a username: trimmed and case-folded. Since 2026.10
+ * it refuses to create a login in any other form; before that only installs
+ * still in the auth provider's legacy mode accepted one. JavaScript has no
+ * casefold, and lower case differs from it only outside the alphabets people
+ * type usernames in (German ß being the notable one).
+ */
+export function normalizeUsername(username: string): string {
+	return username.trim().toLowerCase();
+}
+
 function refuseWrite(ctx: ToolContext): string {
 	return ctx.instances.brokered
 		? "Refused: user management is blocked locally for this instance " +
@@ -187,13 +198,15 @@ export function registerUserTools(server: McpServer, ctx: ToolContext): void {
 			description:
 				"Create a local username/password login and attach it to an existing user that has none " +
 				"yet (use ha_create_user first). Fails if that username is already taken, or the user " +
-				"already has a login (use ha_change_user_password instead).\n\n" +
+				"already has a login (use ha_change_user_password instead). The username is trimmed and " +
+				"lower-cased first, because Home Assistant refuses any other form (enforced everywhere " +
+				"since 2026.10); the result says so when it changed what you passed.\n\n" +
 				"**This mints a standing Home Assistant login independent of any VomeHome API key** — " +
 				"revoking the key that called this does not revoke the login. Only do this for an " +
 				"account the home's owner actually wants to exist. Requires ha:config.",
 			inputSchema: {
 				user_id: z.string().describe("User id from ha_list_users or ha_create_user."),
-				username: z.string().describe("Login username."),
+				username: z.string().describe("Login username; stored trimmed and in lower case."),
 				password: z.string().describe("Login password, chosen by the caller.")
 			},
 			annotations: { readOnlyHint: false, openWorldHint: true, destructiveHint: true }
@@ -204,13 +217,22 @@ export function registerUserTools(server: McpServer, ctx: ToolContext): void {
 				if (!decision.allowed) {
 					return errorResult(refuseWrite(ctx));
 				}
+				const normalized = normalizeUsername(username);
+				if (!normalized) {
+					return errorResult("Refused: the username is empty once its spaces are trimmed.");
+				}
 				await authCommand(ctx, {
 					type: "config/auth_provider/homeassistant/create",
 					user_id,
-					username,
+					username: normalized,
 					password
 				});
-				return jsonResult({ created: true, user_id, username });
+				return jsonResult({
+					created: true,
+					user_id,
+					username: normalized,
+					...(normalized !== username ? { normalized_from: username } : {})
+				});
 			})
 	);
 

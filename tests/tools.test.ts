@@ -1534,6 +1534,31 @@ describe("users", () => {
 		expect(body.created).toBe(true);
 	});
 
+	it("lower-cases and trims a username, as Home Assistant 2026.10 requires", async () => {
+		const sendCommand = vi.fn(async () => ({}));
+		const server = buildHarness({ env: WRITE, ws: { sendCommand } });
+
+		const body = jsonOf(
+			await server.call("ha_set_user_credentials", { user_id: "u1", username: " Mum ", password: "hunter2" })
+		);
+		expect(sendCommand).toHaveBeenCalledWith({
+			type: "config/auth_provider/homeassistant/create",
+			user_id: "u1",
+			username: "mum",
+			password: "hunter2"
+		});
+		expect(body).toMatchObject({ created: true, username: "mum", normalized_from: " Mum " });
+	});
+
+	it("refuses a username that is only spaces", async () => {
+		const sendCommand = vi.fn(async () => ({}));
+		const server = buildHarness({ env: WRITE, ws: { sendCommand } });
+
+		const result = await server.call("ha_set_user_credentials", { user_id: "u1", username: "   ", password: "x" });
+		expect(result.isError).toBe(true);
+		expect(sendCommand).not.toHaveBeenCalled();
+	});
+
 	it("changes an existing user's password via admin_change_password", async () => {
 		const sendCommand = vi.fn(async () => ({}));
 		const server = buildHarness({ env: WRITE, ws: { sendCommand } });

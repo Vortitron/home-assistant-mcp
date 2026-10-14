@@ -98,6 +98,7 @@ describe("vomehome CHAP tools", () => {
 			"vomehome_chap_pair",
 			"vomehome_chap_set_home_address",
 			"vomehome_chap_set_standby_addons",
+			"vomehome_chap_set_switch_back_rule",
 			"vomehome_chap_set_takeover_rule",
 			"vomehome_chap_standby_candidates",
 			"vomehome_chap_status",
@@ -158,5 +159,42 @@ describe("vomehome CHAP tools", () => {
 		await server.call("vomehome_chap_switch_back", { instance_id: "home-1", now: true });
 		expect(chap).toHaveBeenNthCalledWith(1, "home-1", "switch-back", "POST", {});
 		expect(chap).toHaveBeenNthCalledWith(2, "home-1", "switch-back", "POST", { now: true });
+	});
+
+	it("calls off a pending switch back", async () => {
+		const chap = vi.fn(async () => ({ ok: true }));
+		const result = await harness(WRITE, { chap }).call("vomehome_chap_switch_back", { instance_id: "home-1", cancel: true });
+		expect(result.isError).toBeUndefined();
+		expect(chap).toHaveBeenCalledWith("home-1", "switch-back", "POST", { cancel: true });
+	});
+
+	it("refuses now and cancel together without calling VomeHome", async () => {
+		const chap = vi.fn();
+		const result = await harness(WRITE, { chap }).call("vomehome_chap_switch_back", { instance_id: "home-1", now: true, cancel: true });
+		expect(result.isError).toBe(true);
+		expect(textOf(result)).toMatch(/not both/);
+		expect(chap).not.toHaveBeenCalled();
+	});
+
+	it("says why a call-off was refused", async () => {
+		const chap = vi.fn(async () => ({ ok: false, error: "There is no switch back waiting to be called off." }));
+		const result = await harness(WRITE, { chap }).call("vomehome_chap_switch_back", { instance_id: "home-1", cancel: true });
+		expect(result.isError).toBe(true);
+		expect(textOf(result)).toMatch(/no switch back waiting/);
+	});
+
+	it("sets whether the home switches back by itself", async () => {
+		const chap = vi.fn(async () => ({ ok: true, switch_back_when: "ask" }));
+		const result = await harness(WRITE, { chap }).call("vomehome_chap_set_switch_back_rule", { instance_id: "home-1", rule: "ask" });
+		expect(result.isError).toBeUndefined();
+		expect(JSON.parse(textOf(result)).switch_back_when).toBe("ask");
+		expect(chap).toHaveBeenCalledWith("home-1", "switch-back-rule", "POST", { rule: "ask" });
+	});
+
+	it("refuses the switch-back rule when writes are off locally", async () => {
+		const chap = vi.fn();
+		const result = await harness({}, { chap }).call("vomehome_chap_set_switch_back_rule", { instance_id: "home-1", rule: "auto" });
+		expect(result.isError).toBe(true);
+		expect(chap).not.toHaveBeenCalled();
 	});
 });

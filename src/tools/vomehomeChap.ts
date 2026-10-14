@@ -67,7 +67,8 @@ export function registerVomeHomeChapTools(server: McpServer, ctx: ToolContext): 
 		path: string,
 		method: string,
 		schema: Record<string, z.ZodTypeAny>,
-		body: (args: Record<string, unknown>) => unknown
+		body: (args: Record<string, unknown>) => unknown,
+		invalid?: (args: Record<string, unknown>) => string | undefined
 	): void => {
 		server.registerTool(
 			name,
@@ -80,6 +81,8 @@ export function registerVomeHomeChapTools(server: McpServer, ctx: ToolContext): 
 			async (args: Record<string, unknown>) =>
 				runTool(ctx.logger, name, async () => {
 					const id = String(args.instance_id);
+					const wrong = invalid?.(args);
+					if (wrong) return errorResult(wrong);
 					const refused = refuse(ctx, id);
 					if (refused) return errorResult(refused);
 					const result = await ctx.vomehome.chap(id, path, method, body(args));
@@ -150,11 +153,38 @@ export function registerVomeHomeChapTools(server: McpServer, ctx: ToolContext): 
 		"Move the home back to its main install. By default the standby's changes go back first; now=true " +
 			"switches back at once and leaves anything changed on the standby since its last sync behind — " +
 			"for emergencies only. A standby that was out of step when it took over is refused the sync " +
-			"(it would put old settings over newer ones): use now=true then. Ask the user first.",
+			"(it would put old settings over newer ones): use now=true then. cancel=true calls off a switch " +
+			"back that has not happened yet (status action cancel_switch_back): nothing moves, the install " +
+			"running the home keeps it, and Vome does not start another switch back by itself for the rest " +
+			"of this failover — the user switches back when ready. Pass at most one of now and cancel. " +
+			"Ask the user first.",
 		"switch-back",
 		"POST",
-		{ now: z.boolean().optional().describe("Switch back without syncing first (emergency).") },
-		(args) => (args.now ? { now: true } : {})
+		{
+			now: z.boolean().optional().describe("Switch back without syncing first (emergency)."),
+			cancel: z.boolean().optional().describe("Call off a pending switch back instead; nothing moves.")
+		},
+		(args) => (args.cancel ? { cancel: true } : args.now ? { now: true } : {}),
+		(args) =>
+			args.now && args.cancel
+				? "Pass now=true to switch back at once, or cancel=true to call off a pending switch back, not both."
+				: undefined
+	);
+
+	write(
+		"vomehome_chap_set_switch_back_rule",
+		"CHAP: when the home switches back",
+		"Choose what happens once the main install can be reached again after the standby took over: " +
+			"rule=\"auto\" (the default) moves the home back by itself once the main install has stayed " +
+			"reachable for a few minutes; " +
+			"rule=\"ask\" leaves the home where it runs and emails the user that the main install is back, " +
+			"so they switch back when they trust it (vomehome_chap_switch_back). Use \"ask\" when the main " +
+			"install may come back unhealthy. Needs a linked standby. vomehome_chap_status shows the rule " +
+			"(pair.switch_back_when).",
+		"switch-back-rule",
+		"POST",
+		{ rule: z.enum(["auto", "ask"]).describe("auto: switch back by itself; ask: wait for the user.") },
+		(args) => ({ rule: args.rule })
 	);
 
 	write(

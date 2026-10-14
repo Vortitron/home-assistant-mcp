@@ -34,6 +34,9 @@ const SUPERVISOR_TARGETS = [
 	"cli"
 ] as const;
 
+/** Terminal colour codes: the Supervisor's core log is coloured, the old file was not. */
+const ANSI = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g");
+
 function tail(text: string, lines: number): string {
 	const all = text.split("\n");
 	if (all.length <= lines) {
@@ -327,7 +330,24 @@ export function registerLogTools(server: McpServer, ctx: ToolContext): void {
 		},
 		async ({ tail_lines }) =>
 			runTool(ctx.logger, "ha_get_error_log", async () => {
-				const log = await ctx.rest.getErrorLog();
+				let log: string;
+				try {
+					log = await ctx.rest.getErrorLog();
+				} catch (error) {
+					// HA only serves /api/error_log when it writes a log file, and
+					// on HAOS it no longer does (it logs to the journal), so a
+					// current HAOS home 404s here. The same lines are the
+					// Supervisor's core log, which is what HA's own UI reads.
+					if (!(error instanceof HaApiError && error.status === 404)) throw error;
+					try {
+						log = (await ctx.rest.getSupervisorLog("core")).replace(ANSI, "");
+					} catch {
+						return errorResult(
+							"This Home Assistant has no error log file (/api/error_log is 404) and no Supervisor core log " +
+								"to read instead. Use ha_get_system_log."
+						);
+					}
+				}
 				return textResult(tail(log, tail_lines ?? DEFAULT_TAIL_LINES) || "(error log is empty)");
 			})
 	);

@@ -25,6 +25,18 @@ import type { ToolContext } from "./helpers.js";
 
 const TTL_MS = 30_000;
 
+/**
+ * How long a *failed* read stands before the next reply tries again.
+ *
+ * It used to stand for the full TTL, so one blip became half a minute of
+ * "UNVERIFIED" on every reply, and an agent stopping a home for a restart
+ * (the read 502s while HA is down) got a second half minute straight after.
+ * An agent told so often enough that it cannot trust its replies either
+ * stops or learns to ignore the warning, and both defeat the stamp. Not zero,
+ * so a home that is really down is not asked again on every call of a burst.
+ */
+const FAILURE_TTL_MS = 3_000;
+
 interface Identity {
 	id: string;
 	home?: string;
@@ -68,12 +80,12 @@ export function createIdentityReader(ctx: ToolContext): () => Promise<Identity> 
 	return async function identity(): Promise<Identity> {
 		const id = ctx.instances.activeId();
 		const hit = cache.get(id);
-		if (hit && Date.now() - hit.at < TTL_MS) {
+		if (hit && Date.now() - hit.at < (hit.identity.error ? FAILURE_TTL_MS : TTL_MS)) {
 			return hit.identity;
 		}
 		let result: Identity;
 		try {
-			const config = (await ctx.rest.getConfig()) as {
+			const config = (await readConfig(ctx)) as {
 				location_name?: string;
 				version?: string;
 				components?: unknown[];
@@ -90,10 +102,41 @@ export function createIdentityReader(ctx: ToolContext): () => Promise<Identity> 
 			// tells the reader the reply cannot be trusted to be from the
 			// instance they asked for.
 			result = { id, error: error instanceof Error ? error.message : String(error) };
+			// Logged, because the reader only sees the stamp: a run of
+			// unverified replies on 14 Oct left no trace of why.
+			ctx.logger?.warn(`Instance stamp: could not read ${id}'s identity: ${describe(error)}`);
 		}
 		cache.set(id, { identity: result, at: Date.now() });
 		return result;
 	};
+}
+
+/**
+ * The config read, retried once when no answer came back at all.
+ *
+ * A request that dies before the server sees it (a pooled connection the
+ * other end had already closed) throws a bare TypeError from fetch rather
+ * than an HTTP error. That says nothing about the home, so it is worth one
+ * immediate retry; an HTTP error or a timeout is a real answer and is not.
+ */
+async function readConfig(ctx: ToolContext): Promise<unknown> {
+	try {
+		return await ctx.rest.getConfig();
+	} catch (error) {
+		if (!(error instanceof TypeError)) throw error;
+		return await ctx.rest.getConfig();
+	}
+}
+
+/** The message plus fetch's underlying cause (e.g. ECONNRESET), which is where the detail is. */
+function describe(error: unknown): string {
+	if (!(error instanceof Error)) return String(error);
+	const cause = (error as { cause?: unknown }).cause;
+	if (cause instanceof Error) {
+		const code = (cause as { code?: unknown }).code;
+		return `${error.message} (${typeof code === "string" ? `${code}: ` : ""}${cause.message})`;
+	}
+	return error.message;
 }
 
 const INSTANCE_ARG = "instance_id";

@@ -8,6 +8,7 @@ import {
 	withInstanceStamp
 } from "../src/tools/instanceStamp.js";
 import type { ToolContext } from "../src/tools/helpers.js";
+import { HaApiError } from "../src/ha/restClient.js";
 
 /**
  * Every reply must say which Home Assistant answered it.
@@ -144,6 +145,62 @@ describe("every registered tool is stamped", () => {
 		await identity();
 		await identity();
 		await identity();
+		expect(getConfig).toHaveBeenCalledTimes(1);
+	});
+
+	it("asks again soon after a failed read instead of holding the failure for the window", async () => {
+		/* 14 Oct: one failed read was cached for the full 30 s, then a
+		   restart's 502 cached another, and an agent got a run of
+		   "UNVERIFIED" replies from a home that was answering fine. */
+		vi.useFakeTimers();
+		try {
+			let fail = true;
+			const getConfig = vi.fn(async () => {
+				if (fail) throw new HaApiError("responded 502", 502, "");
+				return { location_name: "GamlaBio" };
+			});
+			const warn = vi.fn();
+			const identity = createIdentityReader({
+				instances: { activeId: () => "748d339f" },
+				rest: { getConfig },
+				logger: { warn }
+			} as unknown as ToolContext);
+			expect((await identity()).error).toMatch(/502/);
+			expect(warn).toHaveBeenCalledWith(expect.stringContaining("502"));
+			fail = false;
+			expect((await identity()).error).toBeDefined(); // within the short hold
+			vi.advanceTimersByTime(3_100);
+			expect((await identity()).home).toBe("GamlaBio");
+			vi.advanceTimersByTime(10_000);
+			await identity();
+			expect(getConfig).toHaveBeenCalledTimes(2); // success still holds for the window
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("retries once when the request got no answer at all", async () => {
+		const getConfig = vi
+			.fn()
+			.mockRejectedValueOnce(new TypeError("fetch failed"))
+			.mockResolvedValueOnce({ location_name: "Home" });
+		const identity = createIdentityReader({
+			instances: { activeId: () => "748d339f" },
+			rest: { getConfig }
+		} as unknown as ToolContext);
+		expect((await identity()).home).toBe("Home");
+		expect(getConfig).toHaveBeenCalledTimes(2);
+	});
+
+	it("does not retry a real HTTP answer", async () => {
+		const getConfig = vi.fn(async () => {
+			throw new HaApiError("responded 403", 403, "");
+		});
+		const identity = createIdentityReader({
+			instances: { activeId: () => "748d339f" },
+			rest: { getConfig }
+		} as unknown as ToolContext);
+		expect((await identity()).error).toMatch(/403/);
 		expect(getConfig).toHaveBeenCalledTimes(1);
 	});
 

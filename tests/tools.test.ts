@@ -487,6 +487,54 @@ describe("ha_get_supervisor_log", () => {
 	});
 });
 
+describe("ha_get_error_log", () => {
+	/* HA serves /api/error_log only when it writes a log file. Current HAOS
+	   logs to the journal instead, so the endpoint 404s and the tool was dead
+	   on every hosted home (seen on GamlaBio, 14 Oct). The same lines are the
+	   Supervisor's core log. */
+	it("reads the log file where HA still serves it", async () => {
+		const getErrorLog = vi.fn(async () => "a\nb\nc");
+		const getSupervisorLog = vi.fn();
+		const server = buildHarness({ rest: { getErrorLog, getSupervisorLog } });
+		expect(textOf(await server.call("ha_get_error_log", { tail_lines: 2 }))).toBe("b\nc");
+		expect(getSupervisorLog).not.toHaveBeenCalled();
+	});
+
+	it("falls back to the Supervisor's core log on a 404, without the colour codes", async () => {
+		const esc = String.fromCharCode(27);
+		const getErrorLog = vi.fn(async () => {
+			throw new HaApiError("responded 404", 404, "404: Not Found");
+		});
+		const getSupervisorLog = vi.fn(async () => `${esc}[33mWARNING one${esc}[0m\n${esc}[31mERROR two${esc}[0m`);
+		const server = buildHarness({ rest: { getErrorLog, getSupervisorLog } });
+		const result = await server.call("ha_get_error_log");
+		expect(result.isError).toBeFalsy();
+		expect(getSupervisorLog).toHaveBeenCalledWith("core");
+		expect(textOf(result)).toBe("WARNING one\nERROR two");
+	});
+
+	it("points at the system log when there is no Supervisor either", async () => {
+		const notFound = async () => {
+			throw new HaApiError("responded 404", 404, "");
+		};
+		const server = buildHarness({ rest: { getErrorLog: vi.fn(notFound), getSupervisorLog: vi.fn(notFound) } });
+		const result = await server.call("ha_get_error_log");
+		expect(result.isError).toBe(true);
+		expect(textOf(result)).toMatch(/ha_get_system_log/);
+	});
+
+	it("does not mask other failures as a missing file", async () => {
+		const getSupervisorLog = vi.fn();
+		const getErrorLog = vi.fn(async () => {
+			throw new HaApiError("responded 401", 401, "");
+		});
+		const server = buildHarness({ rest: { getErrorLog, getSupervisorLog } });
+		const result = await server.call("ha_get_error_log");
+		expect(result.isError).toBe(true);
+		expect(getSupervisorLog).not.toHaveBeenCalled();
+	});
+});
+
 describe("automation traces", () => {
 	const automationStates = [
 		{ entity_id: "automation.morning", state: "on", attributes: { id: "1699999999999" } }

@@ -1342,8 +1342,17 @@ describe("hacs", () => {
 
 	afterEach(() => vi.useRealTimers());
 
+	// Home Assistant before 2026.11: no Marketplace, so its commands are unknown.
+	const preMarketplace = (handler: (command: Record<string, unknown>) => unknown) =>
+		vi.fn(async (command: Record<string, unknown>) => {
+			if (String(command.type).startsWith("marketplace/")) {
+				throw new Error('WebSocket command failed: {"code":"unknown_command","message":"Unknown command."}');
+			}
+			return handler(command);
+		});
+
 	it("gets HACS status over the websocket", async () => {
-		const sendCommand = vi.fn(async () => ({ version: "2.1.0", stage: "running" }));
+		const sendCommand = preMarketplace(async () => ({ version: "2.1.0", stage: "running" }));
 		const server = buildHarness({ ws: { sendCommand } });
 
 		const body = jsonOf(await server.call("ha_hacs_info", {}));
@@ -1352,7 +1361,7 @@ describe("hacs", () => {
 	});
 
 	it("lists repositories, optionally filtered by category", async () => {
-		const sendCommand = vi.fn(async () => [{ id: "1", full_name: "me/repo", category: "integration" }]);
+		const sendCommand = preMarketplace(async () => [{ id: "1", full_name: "me/repo", category: "integration" }]);
 		const server = buildHarness({ ws: { sendCommand } });
 
 		const body = jsonOf(await server.call("ha_hacs_list_repositories", { categories: ["integration"] }));
@@ -1381,7 +1390,7 @@ describe("hacs", () => {
 	it("confirms a repository add by re-listing, since HACS acks even a failed add", async () => {
 		vi.useFakeTimers();
 		const added: Array<Record<string, unknown>> = [];
-		const sendCommand = vi.fn(async (command: Record<string, unknown>) => {
+		const sendCommand = preMarketplace(async (command: Record<string, unknown>) => {
 			if (command.type === "hacs/repositories/add") {
 				added.push(command);
 				return {};
@@ -1406,8 +1415,8 @@ describe("hacs", () => {
 	});
 
 	it("reports a repository already tracked without adding it again", async () => {
-		const sendCommand = vi.fn(async (command: Record<string, unknown>) => {
-			expect(command.type).toBe("hacs/repositories/list");
+		const sendCommand = preMarketplace(async (command: Record<string, unknown>) => {
+			expect(["hacs/info", "hacs/repositories/list"]).toContain(command.type);
 			return [{ id: "123", full_name: "me/repo", category: "integration", installed: true }];
 		});
 		const server = buildHarness({ env: WRITE, ws: { sendCommand } });
@@ -1421,7 +1430,7 @@ describe("hacs", () => {
 
 	it("reports failure when HACS silently drops the add", async () => {
 		vi.useFakeTimers();
-		const sendCommand = vi.fn(async (command: Record<string, unknown>) =>
+		const sendCommand = preMarketplace(async (command: Record<string, unknown>) =>
 			command.type === "hacs/repositories/list" ? [] : {}
 		);
 		const server = buildHarness({ env: WRITE, ws: { sendCommand } });
@@ -1438,9 +1447,12 @@ describe("hacs", () => {
 	});
 
 	it("downloads (installs) a repository resolved by full_name to its id", async () => {
-		const sendCommand = vi.fn(async (command: Record<string, unknown>) => {
+		const sendCommand = preMarketplace(async (command: Record<string, unknown>) => {
 			if (command.type === "hacs/repositories/list") {
 				return [{ id: "123", full_name: "me/repo", category: "integration", installed: true }];
+			}
+			if (command.type === "hacs/info") {
+				return {};
 			}
 			expect(command).toEqual({ type: "hacs/repository/download", repository: "123" });
 			return {};
@@ -1453,7 +1465,7 @@ describe("hacs", () => {
 	});
 
 	it("errors clearly when the repository to download isn't tracked", async () => {
-		const sendCommand = vi.fn(async () => []);
+		const sendCommand = preMarketplace(async () => []);
 		const server = buildHarness({ env: WRITE, ws: { sendCommand } });
 
 		const result = await server.call("ha_hacs_download_repository", { repository: "me/missing" });
@@ -1463,11 +1475,13 @@ describe("hacs", () => {
 
 	it("uninstalls before untracking a repository that is installed", async () => {
 		const seen: string[] = [];
-		const sendCommand = vi.fn(async (command: Record<string, unknown>) => {
+		const sendCommand = preMarketplace(async (command: Record<string, unknown>) => {
 			if (command.type === "hacs/repositories/list") {
 				return [{ id: "123", full_name: "me/repo", category: "integration", installed: true }];
 			}
-			seen.push(command.type as string);
+			if (command.type !== "hacs/info") {
+				seen.push(command.type as string);
+			}
 			return {};
 		});
 		const server = buildHarness({ env: WRITE, ws: { sendCommand } });
@@ -1479,17 +1493,109 @@ describe("hacs", () => {
 
 	it("only untracks a repository that was never installed", async () => {
 		const seen: string[] = [];
-		const sendCommand = vi.fn(async (command: Record<string, unknown>) => {
+		const sendCommand = preMarketplace(async (command: Record<string, unknown>) => {
 			if (command.type === "hacs/repositories/list") {
 				return [{ id: "123", full_name: "me/repo", category: "integration", installed: false }];
 			}
-			seen.push(command.type as string);
+			if (command.type !== "hacs/info") {
+				seen.push(command.type as string);
+			}
 			return {};
 		});
 		const server = buildHarness({ env: WRITE, ws: { sendCommand } });
 
 		await server.call("ha_hacs_remove_repository", { repository: "123" });
 		expect(seen).toEqual(["hacs/repositories/remove"]);
+	});
+	describe("on the Marketplace (Home Assistant 2026.11+)", () => {
+		const ROW = { id: "123", full_name: "me/repo", category: "integration", installed: false };
+
+		it("reports which store it found", async () => {
+			const sendCommand = vi.fn(async () => ({ version: "2026.11.0", warning_accepted: true }));
+			const server = buildHarness({ ws: { sendCommand } });
+
+			const body = jsonOf(await server.call("ha_hacs_info", {}));
+			expect(body.store).toBe("marketplace");
+			expect(body.warning_accepted).toBe(true);
+			expect(sendCommand).toHaveBeenCalledWith({ type: "marketplace/info" });
+			expect(sendCommand).not.toHaveBeenCalledWith({ type: "hacs/info" });
+		});
+
+		it("installs with marketplace/repository/install, never a hacs/ command", async () => {
+			const seen: Array<Record<string, unknown>> = [];
+			const sendCommand = vi.fn(async (command: Record<string, unknown>) => {
+				seen.push(command);
+				if (command.type === "marketplace/repositories/list") {
+					return [ROW];
+				}
+				return {};
+			});
+			const server = buildHarness({ env: WRITE, ws: { sendCommand } });
+
+			const body = jsonOf(
+				await server.call("ha_hacs_download_repository", { repository: "me/repo", version: "v1.2.0" })
+			);
+			expect(body.store).toBe("marketplace");
+			expect(seen).toContainEqual({ type: "marketplace/repository/install", repository: "123", version: "v1.2.0" });
+			expect(seen.some((command) => String(command.type).startsWith("hacs/"))).toBe(false);
+		});
+
+		it("uninstalls and untracks with the Marketplace's verbs", async () => {
+			const seen: string[] = [];
+			const sendCommand = vi.fn(async (command: Record<string, unknown>) => {
+				if (command.type === "marketplace/repositories/list") {
+					return [{ ...ROW, installed: true }];
+				}
+				if (command.type !== "marketplace/info") {
+					seen.push(command.type as string);
+				}
+				return {};
+			});
+			const server = buildHarness({ env: WRITE, ws: { sendCommand } });
+
+			await server.call("ha_hacs_remove_repository", { repository: "me/repo" });
+			expect(seen).toEqual(["marketplace/repository/uninstall", "marketplace/repositories/remove"]);
+		});
+
+		it("explains the warning the owner has to accept, and doesn't accept it", async () => {
+			const seen: string[] = [];
+			const sendCommand = vi.fn(async (command: Record<string, unknown>) => {
+				seen.push(command.type as string);
+				if (command.type === "marketplace/repositories/list") {
+					return [ROW];
+				}
+				if (command.type === "marketplace/repository/install") {
+					throw new Error(
+						'WebSocket command failed: {"code":"warning_not_accepted","message":"Accept the warning first"}'
+					);
+				}
+				return {};
+			});
+			const server = buildHarness({ env: WRITE, ws: { sendCommand } });
+
+			const result = await server.call("ha_hacs_download_repository", { repository: "me/repo" });
+			expect(result.isError).toBe(true);
+			expect(textOf(result)).toMatch(/Settings → Marketplace/);
+			expect(textOf(result)).toMatch(/owner's decision/);
+			expect(seen).not.toContain("marketplace/warning/accept");
+		});
+
+		it("explains that a custom repository needs GitHub connected", async () => {
+			const sendCommand = vi.fn(async (command: Record<string, unknown>) => {
+				if (command.type === "marketplace/repositories/list") {
+					return [];
+				}
+				if (command.type === "marketplace/repositories/add") {
+					throw new Error('VomeHome broker POST /ws/command responded 400: {"error":{"code":"github_not_connected"}}');
+				}
+				return {};
+			});
+			const server = buildHarness({ env: WRITE, ws: { sendCommand } });
+
+			const result = await server.call("ha_hacs_add_repository", { repository: "me/repo", category: "integration" });
+			expect(result.isError).toBe(true);
+			expect(textOf(result)).toMatch(/GitHub account connected/);
+		});
 	});
 });
 

@@ -85,7 +85,7 @@ export function registerVomeHomeTools(server: McpServer, ctx: ToolContext): void
 		{
 			title: "Switch active VomeHome instance",
 			description:
-				"Switch which VomeHome instance the Home Assistant tools target. Subsequent ha_* calls (states, services, automations, templates, check_config) operate on this instance, and write/config permission follows that instance's own flags (declared in VOMEHOME_INSTANCES, the default instance, or auto-granted on create). An undeclared but reachable instance inherits the global default, which in brokered mode defers to the API key's server-side scopes.",
+				"Switch which VomeHome instance the Home Assistant tools target. Subsequent ha_* calls (states, services, automations, templates, check_config) operate on this instance, and write/config permission follows that instance's own flags (declared in VOMEHOME_INSTANCES, the default instance, or auto-granted on create). An undeclared but reachable instance inherits the global default, which in brokered mode defers to the API key's server-side scopes. The switch applies to this session only, but on the hosted server it is also remembered for this API key and client: a later session (a reconnect, another window of the same app) starts on it. To keep two windows on different homes, pin each with ?instance=<id> on the server URL, and pass instance_id on calls that matter.",
 			inputSchema: {
 				instance_id: z
 					.string()

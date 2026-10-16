@@ -69,6 +69,97 @@ export function registerRegistryEditTools(server: McpServer, ctx: ToolContext): 
 	);
 
 	server.registerTool(
+		"ha_update_device",
+		{
+			title: "Rename a device, move it to an area, or disable it",
+			description:
+				"Change a device's registry entry: its name (the one the owner sets, over the integration's), " +
+				"its area, or whether it is disabled. Entities that follow their device's area move with it; " +
+				"an entity given its own area keeps it (ha_update_entity). Disabling a device disables all its " +
+				"entities. Omit a field to leave it alone; pass null for name or area_id to clear it. Takes the " +
+				"device id from ha_list_devices. Requires HA_ALLOW_CONFIG_WRITE (ha:config).",
+			inputSchema: {
+				device_id: z.string().min(1).describe("Home Assistant device id (ha_list_devices)."),
+				name: z
+					.string()
+					.nullable()
+					.optional()
+					.describe("The owner's name for it (name_by_user); null goes back to the integration's name."),
+				area_id: z.string().nullable().optional().describe("Area id from ha_list_areas; null removes it."),
+				disabled: z.boolean().optional().describe("true disables it (by the user); false enables it again."),
+				labels: z.array(z.string()).optional().describe("Label ids; replaces the device's labels.")
+			},
+			annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true }
+		},
+		async ({ device_id, name, area_id, disabled, labels }) =>
+			runTool(ctx.logger, "ha_update_device", async () => {
+				const refusal = refuse(ctx);
+				if (refusal) return refusal;
+				const command: Record<string, unknown> = { type: "config/device_registry/update", device_id };
+				if (name !== undefined) command.name_by_user = name;
+				if (area_id !== undefined) command.area_id = area_id;
+				if (disabled !== undefined) command.disabled_by = disabled ? "user" : null;
+				if (labels !== undefined) command.labels = labels;
+				if (Object.keys(command).length === 2) {
+					return errorResult("Nothing to change: pass at least one of name, area_id, disabled, labels.");
+				}
+				const result = await ctx.ws.sendCommand<Record<string, unknown>>(command);
+				return jsonResult({ updated: true, device: result });
+			})
+	);
+
+	server.registerTool(
+		"ha_expose_entities",
+		{
+			title: "Choose what voice assistants can see",
+			description:
+				"Read or change which entities are exposed to voice assistants — the Voice assistants → Expose " +
+				"page. With no entity_ids it lists every entity's exposure. With entity_ids and should_expose it " +
+				"sets them for the given assistants: 'conversation' (Assist, and the Vome LLM API), " +
+				"'cloud.alexa', 'cloud.google_assistant'. Exposing lets that assistant control the entity, so " +
+				"keep locks, alarms and covers off unless the owner asks. Changing it requires " +
+				"HA_ALLOW_CONFIG_WRITE (ha:config); listing needs only read.",
+			inputSchema: {
+				entity_ids: z.array(z.string().regex(ENTITY_ID)).optional().describe("Entities to change; omit to list."),
+				should_expose: z.boolean().optional().describe("true exposes, false stops exposing. Needed with entity_ids."),
+				assistants: z
+					.array(z.string().min(1))
+					.optional()
+					.describe("Default ['conversation']."),
+				exposed_only: z.boolean().optional().describe("When listing: only entities exposed to at least one assistant (default true).")
+			},
+			annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true }
+		},
+		async ({ entity_ids, should_expose, assistants, exposed_only }) =>
+			runTool(ctx.logger, "ha_expose_entities", async () => {
+				if (!entity_ids || entity_ids.length === 0) {
+					const listed = await ctx.ws.sendCommand<{ exposed_entities?: Record<string, Record<string, boolean>> }>({
+						type: "homeassistant/expose_entity/list"
+					});
+					const all = listed?.exposed_entities ?? {};
+					const only = exposed_only ?? true;
+					const entries = Object.entries(all).filter(
+						([, by]) => !only || Object.values(by ?? {}).some(Boolean)
+					);
+					return jsonResult({ count: entries.length, exposed_entities: Object.fromEntries(entries) });
+				}
+				if (should_expose === undefined) {
+					return errorResult("Pass should_expose (true or false) with entity_ids.");
+				}
+				const refusal = refuse(ctx);
+				if (refusal) return refusal;
+				const chosen = assistants && assistants.length > 0 ? assistants : ["conversation"];
+				await ctx.ws.sendCommand({
+					type: "homeassistant/expose_entity",
+					assistants: chosen,
+					entity_ids,
+					should_expose
+				});
+				return jsonResult({ updated: true, assistants: chosen, entity_ids, should_expose });
+			})
+	);
+
+	server.registerTool(
 		"ha_remove_entity",
 		{
 			title: "Remove an entity from the registry",

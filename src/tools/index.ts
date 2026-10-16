@@ -15,6 +15,7 @@ import { registerEsphomeTools } from "./esphome.js";
 import { registerNodeRedTools } from "./nodered.js";
 import { registerVomeHomeTools } from "./vomehome.js";
 import { registerVomeHomeChapTools } from "./vomehomeChap.js";
+import { registerVomeHomeBackupTools } from "./vomehomeBackups.js";
 import { registerAddonTools } from "./addons.js";
 import { registerIntegrationTools } from "./integrations.js";
 import { registerHelperEntityTools } from "./helperEntities.js";
@@ -52,6 +53,7 @@ export function registerAllTools(rawServer: McpServer, ctx: ToolContext): void {
 	registerNodeRedTools(server, ctx);
 	registerVomeHomeTools(server, ctx);
 	registerVomeHomeChapTools(server, ctx);
+	registerVomeHomeBackupTools(server, ctx);
 	registerAddonTools(server, ctx);
 	registerIntegrationTools(server, ctx);
 	registerHelperEntityTools(server, ctx);

@@ -95,6 +95,11 @@ export interface VomeHomeClient {
 	 * not as an exception: the reason is what the agent needs to tell the user.
 	 */
 	chap(id: string, path?: string, method?: string, body?: unknown): Promise<Record<string, unknown>>;
+	/**
+	 * Backups in the home's Vome backup location
+	 * (``/api/v1/instances/<id>/backups[/<path>]``).
+	 */
+	backups(id: string, path?: string, method?: string): Promise<Record<string, unknown>>;
 }
 
 /** Which Home Assistant setup-wizard steps are still outstanding. */
@@ -395,9 +400,16 @@ export function createVomeHomeClient(config: Config, logger: Logger): VomeHomeCl
 		}
 	}
 
+	async function backups(id: string, path = "", method = "GET"): Promise<Record<string, unknown>> {
+		const url = `${INSTANCES_PATH}/${encodeURIComponent(id)}/backups${path ? `/${path}` : ""}`;
+		const payload = await request<unknown>(url, { method, body: method === "GET" ? undefined : {} });
+		return isRecord(payload) ? payload : {};
+	}
+
 	return {
 		isEnabled: () => config.vomehome.enabled,
 		chap,
+		backups,
 		listInstances,
 		getInstance,
 		restartInstance,

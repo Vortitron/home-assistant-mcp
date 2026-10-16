@@ -83,6 +83,16 @@ async function configEntriesDelete<T>(ctx: ToolContext, haApiPath: string): Prom
 	return (text ? JSON.parse(text) : undefined) as T;
 }
 
+/** The integration domain of an installed entry, or null if there is none. */
+async function entryDomain(ctx: ToolContext, entryId: string): Promise<string | null> {
+	const entries = await configEntriesGet<Array<{ entry_id?: string; domain?: string }>>(
+		ctx,
+		"/config/config_entries/entry"
+	);
+	const entry = (entries ?? []).find((row) => row?.entry_id === entryId);
+	return entry?.domain ?? null;
+}
+
 function isCreateEntry(step: ConfigFlowStep): boolean {
 	return step.type === "create_entry";
 }
@@ -278,6 +288,9 @@ export function registerIntegrationTools(server: McpServer, ctx: ToolContext): v
 			description:
 				"Add or configure an integration via Home Assistant's config flow API. " +
 				"Start: pass handler (domain). Continue: pass flow_id + user_input for the current step. " +
+				"Reconfigure an existing entry (the entry's Reconfigure menu item): pass entry_id from " +
+				"ha_list_config_entries, with or without handler. Not every integration offers it; one that " +
+				"doesn't answers with an abort. For an entry's options use ha_config_entry_options. " +
 				"Requires ha:config (brokered) or HA_ALLOW_CONFIG_WRITE (direct).",
 			inputSchema: {
 				handler: z
@@ -292,11 +305,15 @@ export function registerIntegrationTools(server: McpServer, ctx: ToolContext): v
 					.record(z.string(), z.unknown())
 					.optional()
 					.describe("Step answers when continuing (or defaults when starting)"),
+				entry_id: z
+					.string()
+					.optional()
+					.describe("Config entry to reconfigure; starts the integration's reconfigure flow"),
 				show_advanced_options: z.boolean().optional().default(false)
 			},
 			annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true }
 		},
-		async ({ handler, flow_id, user_input, show_advanced_options }) =>
+		async ({ handler, flow_id, user_input, entry_id, show_advanced_options }) =>
 			runTool(ctx.logger, "ha_config_flow", async () => {
 				const decision = evaluateConfigWrite(ctx.instances.currentSafety());
 				if (!decision.allowed) {
@@ -310,17 +327,24 @@ export function registerIntegrationTools(server: McpServer, ctx: ToolContext): v
 					);
 					return jsonResult({ step });
 				}
-				if (!handler) {
-					return errorResult("Provide handler to start a flow, or flow_id to continue one.");
-				}
-				const started = await configEntriesPost<ConfigFlowStep>(
-					ctx,
-					"/config/config_entries/flow",
-					{
-						handler,
-						show_advanced_options: Boolean(show_advanced_options)
+				let domain = handler;
+				if (entry_id && !domain) {
+					domain = (await entryDomain(ctx, entry_id)) ?? undefined;
+					if (!domain) {
+						return errorResult(`No config entry '${entry_id}'. List them with ha_list_config_entries.`);
 					}
-				);
+				}
+				if (!domain) {
+					return errorResult("Provide handler to start a flow, entry_id to reconfigure one, or flow_id to continue one.");
+				}
+				// Home Assistant starts a reconfigure flow when the start request
+				// names an entry: the source becomes "reconfigure".
+				const body: Record<string, unknown> = {
+					handler: domain,
+					show_advanced_options: Boolean(show_advanced_options)
+				};
+				if (entry_id) body.entry_id = entry_id;
+				const started = await configEntriesPost<ConfigFlowStep>(ctx, "/config/config_entries/flow", body);
 				if (user_input && started.type === "form" && started.flow_id) {
 					const step = await configEntriesPost<ConfigFlowStep>(
 						ctx,

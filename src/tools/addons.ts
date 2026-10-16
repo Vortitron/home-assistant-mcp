@@ -21,7 +21,8 @@ export async function supervisorApi(
 	ctx: ToolContext,
 	endpoint: string,
 	method: string,
-	data?: Record<string, unknown>
+	data?: Record<string, unknown>,
+	timeoutSeconds?: number
 ): Promise<unknown> {
 	const command: Record<string, unknown> = {
 		type: "supervisor/api",
@@ -31,8 +32,46 @@ export async function supervisorApi(
 	if (data !== undefined) {
 		command.data = data;
 	}
+	const timeout = timeoutSeconds ?? defaultSupervisorTimeout(endpoint, method);
+	if (timeout !== undefined) {
+		command.timeout = timeout;
+	}
 	return ctx.ws.sendCommand(command);
 }
+
+// Home Assistant gives a supervisor/api call 10 seconds unless told
+// otherwise, then answers `unknown_error` with an empty message — which the
+// broker passes on as a bare 502. Stopping an add-on that shuts down
+// cleanly, or starting one, routinely takes longer than that, so these
+// calls ask for longer. The portal waits as long as the command asks, to
+// a cap below its own worker timeout.
+const SLOW_SUPERVISOR_CALL =
+	/^\/(?:addons\/[^/]+\/(?:start|stop|restart|rebuild|update)|store\/addons\/[^/]+\/(?:install|update)|core\/(?:start|stop|restart|rebuild|update))\/?$/;
+export const SLOW_SUPERVISOR_TIMEOUT_SECONDS = 50;
+export const MAX_SUPERVISOR_TIMEOUT_SECONDS = 50;
+
+export function defaultSupervisorTimeout(endpoint: string, method: string): number | undefined {
+	if (method.toLowerCase() === "get") return undefined;
+	return SLOW_SUPERVISOR_CALL.test(endpoint) ? SLOW_SUPERVISOR_TIMEOUT_SECONDS : undefined;
+}
+
+// Supervisor answers its log endpoints in plain text, and Home Assistant's
+// supervisor/api command can only decode JSON — so `GET /addons/x/logs` there
+// fails with a 502. The log route ha_get_supervisor_log uses reads them fine.
+const LOG_SOURCES = new Set(["core", "supervisor", "host", "audio", "dns", "multicast", "observer", "cli"]);
+
+export function supervisorLogTarget(
+	endpoint: string
+): { target: string; addonSlug?: string } | "unsupported" | null {
+	const match = /^\/(?:addons\/([^/]+)|([a-z]+))\/logs(\/.*)?$/.exec(endpoint.replace(/\?.*$/, ""));
+	if (!match) return null;
+	const [, slug, source, rest] = match;
+	if (source !== undefined && !LOG_SOURCES.has(source)) return null;
+	if (rest !== undefined && rest !== "/") return "unsupported";
+	return slug !== undefined ? { target: "addon", addonSlug: slug } : { target: source as string };
+}
+
+const ADDON_LIFECYCLE = /^\/addons\/([^/]+)\/(start|stop|restart)\/?$/;
 
 export function unwrap(result: unknown): unknown {
 	if (result && typeof result === "object") {
@@ -132,12 +171,23 @@ export function registerAddonTools(server: McpServer, ctx: ToolContext): void {
 				data: z
 					.record(z.string(), z.unknown())
 					.optional()
-					.describe("Optional JSON body for POST/PUT")
+					.describe("Optional JSON body for POST/PUT"),
+				timeout_seconds: z
+					.number()
+					.int()
+					.positive()
+					.max(MAX_SUPERVISOR_TIMEOUT_SECONDS)
+					.optional()
+					.describe(
+						"How long Home Assistant waits for the Supervisor (its own default is 10 s). " +
+							"Add-on and Core start/stop/restart/update/install already get 50 s, the most the public proxy in front of the portal will wait for."
+					)
 			},
 			annotations: { readOnlyHint: false, openWorldHint: true, destructiveHint: true }
 		},
-		async ({ endpoint, method, data }) =>
+		async ({ endpoint, method: givenMethod, data, timeout_seconds }) =>
 			runTool(ctx.logger, "ha_supervisor_api", async () => {
+				const method = givenMethod ?? "get";
 				const safety = ctx.instances.currentSafety();
 				if (!safety.allowWrite && method !== "get") {
 					return errorResult(
@@ -147,8 +197,47 @@ export function registerAddonTools(server: McpServer, ctx: ToolContext): void {
 							: "Writes disabled (set HA_ALLOW_WRITE=true in direct mode)."
 					);
 				}
-				const result = await supervisorApi(ctx, endpoint, method, data);
-				return jsonResult({ endpoint, method, result: unwrap(result) });
+				const logs = method === "get" ? supervisorLogTarget(endpoint) : null;
+				if (logs === "unsupported") {
+					return errorResult(
+						"Supervisor serves its logs as plain text, which Home Assistant's supervisor/api command cannot pass on. " +
+							"Use ha_get_supervisor_log (target, addon_slug, tail_lines) for the current log; " +
+							"follow, boot and range variants are not available."
+					);
+				}
+				if (logs) {
+					const text = await ctx.rest.getSupervisorLog(logs.target, logs.addonSlug);
+					return jsonResult({
+						endpoint,
+						method,
+						note: "Read through the log route (the one ha_get_supervisor_log uses): supervisor/api cannot carry plain text.",
+						result: text
+					});
+				}
+				try {
+					const result = await supervisorApi(ctx, endpoint, method, data, timeout_seconds);
+					return jsonResult({ endpoint, method, result: unwrap(result) });
+				} catch (error) {
+					const lifecycle = ADDON_LIFECYCLE.exec(endpoint);
+					const message = error instanceof Error ? error.message : String(error);
+					if (!lifecycle || !GATEWAY_TIMEOUT.test(message)) throw error;
+					// The Supervisor carries on after the call gives up, so say
+					// where the add-on actually stands rather than "502".
+					let state: unknown = null;
+					try {
+						const info = unwrap(await supervisorApi(ctx, `/addons/${lifecycle[1]}/info`, "get")) as
+							| { state?: unknown }
+							| null;
+						state = info?.state ?? null;
+					} catch {
+						// Leave state unknown.
+					}
+					return errorResult(
+						`${lifecycle[2]} of ${lifecycle[1]} did not answer in time (${message.slice(0, 160)}). ` +
+							`The Supervisor may still be working on it; the add-on's state is now ${JSON.stringify(state)}. ` +
+							"Check again with GET /addons/" + lifecycle[1] + "/info, or call the hassio.addon_" + lifecycle[2] + " service."
+					);
+				}
 			})
 	);
 

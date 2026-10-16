@@ -32,7 +32,9 @@ export function summariseOutput(output: string, tail: number): OutputSummary {
 		return (parts.at(-1) ?? "").trimEnd();
 	}).filter((line) => line !== "");
 	if (lines.length <= WHOLE_UP_TO) {
-		return { output, total_lines: lines.length, summarised: false };
+		// Cleaned too: a short failed build is exactly where the error has to
+		// be readable, not wrapped in `\033[1;31m` and blank lines.
+		return { output: `${lines.join("\n")}\n`, total_lines: lines.length, summarised: false };
 	}
 
 	const head = lines.slice(0, lines.length - tail);

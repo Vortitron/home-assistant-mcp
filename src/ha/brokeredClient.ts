@@ -2,7 +2,7 @@ import type { Config } from "../config.js";
 import type { Logger } from "../logger.js";
 import { HaApiError, binaryResult, type StateWatchGrant } from "./restClient.js";
 import type { HaImage, HaRestClient, HaServiceCallResult, HistoryParams, LogbookParams } from "./restClient.js";
-import type { HaWsClient } from "./wsClient.js";
+import { commandTimeoutMs, type HaWsClient } from "./wsClient.js";
 import type {
 	HaApiStatus,
 	HaArea,
@@ -37,6 +37,8 @@ interface BrokerRequestOptions {
 	method?: string;
 	body?: unknown;
 	expect?: "json" | "text" | "binary";
+	/** Overrides config.timeoutMs for a call known to run longer. */
+	timeoutMs?: number;
 }
 
 function unsupportedError(feature: string): HaApiError {
@@ -88,7 +90,8 @@ export function createBrokeredHaRestClient(
 		const method = options.method ?? "GET";
 		const url = `${base}${path}`;
 		const controller = new AbortController();
-		const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
+		const timeoutMs = options.timeoutMs ?? config.timeoutMs;
+		const timeout = setTimeout(() => controller.abort(), timeoutMs);
 		logger.debug(`VomeHome broker ${method} ${path}`);
 		try {
 			const response = await fetch(url, {
@@ -115,7 +118,7 @@ export function createBrokeredHaRestClient(
 		} catch (error) {
 			if (error instanceof Error && error.name === "AbortError") {
 				throw new HaApiError(
-					`VomeHome broker ${method} ${path} timed out after ${config.timeoutMs}ms`,
+					`VomeHome broker ${method} ${path} timed out after ${timeoutMs}ms`,
 					0,
 					""
 				);
@@ -237,7 +240,8 @@ export function createBrokeredHaRestClient(
 			}
 			return broker<{ result: T }>("/ws/command", {
 				method: "POST",
-				body: command
+				body: command,
+				timeoutMs: commandTimeoutMs(command, config.timeoutMs)
 			}).then((envelope) => envelope.result);
 		}
 	};

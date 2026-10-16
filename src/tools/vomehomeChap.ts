@@ -36,7 +36,8 @@ export function registerVomeHomeChapTools(server: McpServer, ctx: ToolContext): 
 				"How CHAP stands for an instance: whether it is enrolled, its pair (main install, standby, " +
 				"which one runs the home, the kind of pair), whether the two are paired and in step, each " +
 				"part's state as the CHAP page's picture shows it, and `actions` — what can be done now. " +
-				"Asked of a standby, it says which main install it belongs to.",
+				"Asked of a standby, it says which main install it belongs to. `pair.tunnel_history` lists the " +
+				"Home Tunnel's ups and downs over the last 24 hours, so a short drop shows even after it healed.",
 			inputSchema: { instance_id: instanceId },
 			annotations: { readOnlyHint: true, openWorldHint: true }
 		},

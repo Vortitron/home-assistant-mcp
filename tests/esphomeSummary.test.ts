@@ -35,6 +35,17 @@ describe("summariseOutput", () => {
 		expect(summariseOutput(output, 60)).toEqual({ output, total_lines: 25, summarised: false });
 	});
 
+	it("cleans a short failed build too (GamlaBio, 16 Oct)", () => {
+		const output =
+			"\\033[32mINFO ESPHome 2026.9.1\\033[0m\n\n\\033[1;31mFailed config\\033[0m\n\n\n\n" +
+			"\\033[1;31mPlatform not found: 'sensor.not_a_real_platform'\\033[0m\n\n";
+		expect(summariseOutput(output, 60)).toEqual({
+			output: "INFO ESPHome 2026.9.1\nFailed config\nPlatform not found: 'sensor.not_a_real_platform'\n",
+			total_lines: 3,
+			summarised: false
+		});
+	});
+
 	it("does not count a clean '0 errors' line as an error", () => {
 		const output = compileOutput(300, ["INFO Done, 0 errors"]);
 		expect(summariseOutput(output, 60).output).not.toContain("── errors and warnings ──");

@@ -34,7 +34,8 @@ export type FileEncoding = "utf8" | "base64";
 async function filesRequest<T>(
 	ctx: ToolContext,
 	path: string,
-	init: { method: "GET" | "POST"; body?: Record<string, unknown> }
+	init: { method: "GET" | "POST"; body?: Record<string, unknown> },
+	area: "files" | "media" = "files"
 ): Promise<T> {
 	if (!ctx.config.brokered) {
 		throw new Error(NEEDS_RELAY);
@@ -42,7 +43,7 @@ async function filesRequest<T>(
 	const instanceId = ctx.instances.activeId();
 	const url =
 		`${ctx.config.vomehome.apiUrl}/api/v1/instances/` +
-		`${encodeURIComponent(instanceId)}/ha/files${path}`;
+		`${encodeURIComponent(instanceId)}/ha/${area}${path}`;
 	const response = await fetch(url, {
 		method: init.method,
 		headers: {
@@ -56,6 +57,23 @@ async function filesRequest<T>(
 		throw new Error(`${init.method} ${path} failed (${response.status}): ${text.slice(0, 400)}`);
 	}
 	return (text ? JSON.parse(text) : undefined) as T;
+}
+
+/** A component from before an operation existed refuses it by name. */
+const OLD_COMPONENT = /non-allowlisted|update the vome/i;
+
+const IMAGE_TYPES: Record<string, string> = {
+	jpg: "image/jpeg",
+	jpeg: "image/jpeg",
+	png: "image/png",
+	gif: "image/gif",
+	webp: "image/webp"
+};
+
+/** The image MIME type a media file's name implies, or null for anything else. */
+export function imageTypeFor(path: string): string | null {
+	const extension = path.split(".").pop()?.toLowerCase() ?? "";
+	return IMAGE_TYPES[extension] ?? null;
 }
 
 /** Current contents of a file, or null when it does not exist yet. */
@@ -461,4 +479,145 @@ export function registerConfigFileTools(server: McpServer, ctx: ToolContext): vo
 				}
 			})
 	);
+	server.registerTool(
+		"ha_move_config_file",
+		{
+			title: "Move or rename a config file",
+			description:
+				"Move or rename one file under Home Assistant's config directory, e.g. a package into " +
+				"'packages/', or 'esphome/frontpath/frontpath-rgb.yaml' up a folder. Missing folders on " +
+				"the way to 'to' are created. Refuses to replace an existing file unless overwrite is " +
+				"true, never moves a folder, and leaves configuration.yaml, secrets.yaml and the database " +
+				"where they are. Anything that includes or !include's the old path still points at it: " +
+				"update those (ha_edit_config_file), then ha_check_config. Requires the ha:files scope.",
+			inputSchema: {
+				instance_id: z
+					.string()
+					.describe(
+						"The instance this move is meant for (as listed by vomehome_list_instances). " +
+							"Required, and checked against the one this session is targeting."
+					),
+				path: z.string().describe("File to move, relative to the config root."),
+				to: z.string().describe("Its new path, relative to the config root."),
+				overwrite: z.boolean().optional().describe("Replace a file already at 'to' (default false).")
+			},
+			annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true }
+		},
+		async ({ instance_id, path, to, overwrite }) =>
+			runTool(ctx.logger, "ha_move_config_file", async () => {
+				const meant = (instance_id ?? "").trim();
+				const targeting = ctx.instances.activeId();
+				if (ctx.config.brokered && meant !== targeting) {
+					return errorResult(
+						`Refused: this session is targeting "${targeting}", but the move names ` +
+							`"${meant}". Nothing was moved. Select it with vomehome_use_instance first ` +
+							`if "${meant}" is the home you mean.`
+					);
+				}
+				const decision = evaluateConfigWrite(ctx.instances.currentSafety());
+				if (!decision.allowed) {
+					return errorResult(`Refused: ${decision.reason}`);
+				}
+				const query =
+					`?path=${encodeURIComponent(path)}&to=${encodeURIComponent(to)}` +
+					`&overwrite=${overwrite ? 1 : 0}`;
+				try {
+					return jsonResult(await filesRequest(ctx, `/move${query}`, { method: "POST" }));
+				} catch (error) {
+					const message = error instanceof Error ? error.message : String(error);
+					if (OLD_COMPONENT.test(message)) {
+						return errorResult(
+							"This home's Vome component predates moving files. Update the Vome add-on " +
+								"(0.3.66 or later) or the integration (0.9.51 or later), then try again."
+						);
+					}
+					throw error;
+				}
+			})
+	);
+
+	server.registerTool(
+		"ha_list_media_files",
+		{
+			title: "List media files",
+			description:
+				"List a folder in Home Assistant's media directory (/media) — camera snapshots saved by " +
+				"camera.snapshot, recordings, TTS output, anything shown under Media → My media. Read-only. " +
+				"Omit 'path' for the root. Requires the ha:files scope.",
+			inputSchema: {
+				path: z.string().optional().describe("Folder relative to /media, e.g. 'snapshots'. Omit for the root.")
+			},
+			annotations: { readOnlyHint: true, openWorldHint: true }
+		},
+		async ({ path }) =>
+			runTool(ctx.logger, "ha_list_media_files", async () => {
+				try {
+					return jsonResult(
+						await filesRequest(ctx, `/list?path=${encodeURIComponent(path ?? "")}`, { method: "GET" }, "media")
+					);
+				} catch (error) {
+					return mediaError(error);
+				}
+			})
+	);
+
+	server.registerTool(
+		"ha_read_media_file",
+		{
+			title: "Read a media file",
+			description:
+				"Read one file from Home Assistant's media directory (/media). A JPEG, PNG, GIF or WebP " +
+				"comes back as an image you can look at — a snapshot an automation saved with " +
+				"camera.snapshot, say. Other files come back as text, or as base64 with encoding='base64'. " +
+				"Read-only, and limited to a few megabytes (no video). Requires the ha:files scope.",
+			inputSchema: {
+				path: z.string().describe("File relative to /media, e.g. 'snapshots/front_door.jpg'."),
+				encoding: z
+					.enum(["utf8", "base64"])
+					.optional()
+					.describe("For a file that isn't an image: 'utf8' (default) or 'base64'.")
+			},
+			annotations: { readOnlyHint: true, openWorldHint: true }
+		},
+		async ({ path, encoding }) =>
+			runTool(ctx.logger, "ha_read_media_file", async () => {
+				const imageType = imageTypeFor(path);
+				const fileEncoding: FileEncoding = imageType ? "base64" : encoding ?? "utf8";
+				let result: { content?: string; size?: number } | undefined;
+				try {
+					result = await filesRequest<{ content?: string; size?: number }>(
+						ctx,
+						`/read?path=${encodeURIComponent(path)}&encoding=${fileEncoding}`,
+						{ method: "GET" },
+						"media"
+					);
+				} catch (error) {
+					return mediaError(error);
+				}
+				const content = result?.content ?? "";
+				if (imageType) {
+					return {
+						content: [
+							{ type: "image" as const, data: content, mimeType: imageType },
+							{ type: "text" as const, text: `/media/${path}` }
+						]
+					};
+				}
+				if (fileEncoding === "base64") {
+					return jsonResult({ path, encoding: "base64", content });
+				}
+				return textResult(content);
+			})
+	);
+}
+
+function mediaError(error: unknown): CallToolResult {
+	const message = error instanceof Error ? error.message : String(error);
+	if (OLD_COMPONENT.test(message) || /\b501\b/.test(message)) {
+		return errorResult(
+			"This home's Vome component predates reading /media. Update the Vome add-on (0.3.66 or " +
+				`later) or the integration (0.9.51 or later), then try again. (${message.slice(0, 200)})`
+		);
+	}
+	return errorResult(message);
 }

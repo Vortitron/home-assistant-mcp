@@ -65,6 +65,7 @@ policy (see [Safety](#safety)).
 | `ha_get_system_log` | **Deduplicated, structured errors** — level, logger, source, count, first/last seen. Start here. |
 | `ha_get_error_log` | Tail of the raw Home Assistant error log. |
 | `ha_get_supervisor_log` | Add-on / Core / Supervisor / host logs (HAOS or Supervised). |
+| `ha_list_media_files` / `ha_read_media_file` | Read-only look into `/media`: a saved camera snapshot comes back as an image (needs `ha:files`, and Vome add-on 0.3.66 / integration 0.9.51 on the home). |
 | `ha_camera_image` | A camera's current still, as an image the agent can see. Via VomeHome the key needs Cameras ticked. |
 | `ha_camera_frame` | A camera still decoded and shrunk to a small grid of RGB pixels, for clients that draw pictures in text. |
 | `ha_view_snapshot` | Everything a dashboard view shows in one call: states, rendered templates, history in few points, camera frames. For dashboard clients. |
@@ -92,10 +93,13 @@ policy (see [Safety](#safety)).
 | `ha_delete_config_file` | Delete one file under the config directory. Never a directory, and never `configuration.yaml`, `secrets.yaml` or Home Assistant's database. Names its target home like a write (needs `ha:files`, and Vome add-on 0.3.55 / integration 0.9.39 on the home). |
 | `ha_edit_config_file` | Change part of a text file in place: exact find-and-replace edits that must each match once, then the same check-and-restore as a write. For a three-line change to a large file (needs `ha:files`). |
 | `ha_list_config_files` | List a directory under the config directory (needs `ha:files`). |
+| `ha_move_config_file` | Move or rename one file under the config directory, creating folders on the way; never overwrites unless asked. Names its target home like a write (needs `ha:files`, and Vome add-on 0.3.66 / integration 0.9.51). |
 | `ha_delete_helper` | Delete a stored helper. Refuses when the id looks shared with a `configuration.yaml` helper, because Home Assistant would take that entity down with it. |
 | `ha_delete_automation` | Delete an automation (also needs `HA_ALLOW_CONFIG_WRITE`). |
 | `ha_get_script` / `ha_set_script` / `ha_delete_script` | Scripts by id, the same way as automations: put a step several automations share in one script. Writes need `HA_ALLOW_CONFIG_WRITE`. |
 | `ha_update_entity` | Rename, re-id, move, re-icon, disable or hide an entity in the registry (needs `HA_ALLOW_CONFIG_WRITE`). |
+| `ha_update_device` | Rename a device, move it to an area, disable it or set its labels (needs `HA_ALLOW_CONFIG_WRITE`). |
+| `ha_expose_entities` | List or change what Assist, Alexa and Google Assistant can see and control; listing needs only read (changing needs `HA_ALLOW_CONFIG_WRITE`). |
 | `ha_remove_entity` | Remove an orphaned registry entry (needs `HA_ALLOW_CONFIG_WRITE`). |
 | `ha_matter_reinterview` | The Matter device page's Re-interview, for a device whose endpoints changed after a firmware update (needs `HA_ALLOW_CONFIG_WRITE`). |
 | `ha_trigger_automation` | Manually run an automation now. |
@@ -178,6 +182,8 @@ stays behind a full browser login on the portal.
 | `vomehome_reboot_instance` | Reboot an instance's VM (write-gated). |
 | `vomehome_create_instance` | Create a throwaway test/sandbox instance (needs the create scope on your API key; the creating key is granted full HA access on the new instance, which becomes the active target). |
 | `vomehome_get_login_url` | Mint a one-click HA login URL to open in a new tab. |
+| `vomehome_list_backups` | Backups in the home's Vome backup location (needs `ha:files`). |
+| `vomehome_backup_download_link` | A link to download one backup's `.tar`, good for about 15 minutes (needs `ha:files`). |
 | `vomehome_create_guest_link` | Create a non-admin HA user + one-click login URL for sharing (needs `HA_ALLOW_CONFIG_WRITE`). Vome-hosted instances only. |
 | `vomehome_list_guest_links` | List guest links for an instance, revoked ones included. |
 | `vomehome_revoke_guest_link` | Revoke a guest link immediately. |
@@ -206,7 +212,7 @@ be revoked early at any time.
 | `ha_list_config_entries` | List installed integrations (config entries). Optional domain filter. |
 | `ha_delete_config_entry` | Delete a config entry by id — the fix for an orphaned/duplicate entry left behind after a device was removed, which is otherwise why a re-added device's entities pick up a `_2` suffix. Needs `HA_ALLOW_CONFIG_WRITE`. |
 | `ha_list_discovery_flows` | List integrations Home Assistant has discovered on the network but not yet added. |
-| `ha_config_flow` | Start (`handler`) or continue (`flow_id` + `user_input`) an integration's config flow. Needs `HA_ALLOW_CONFIG_WRITE`. |
+| `ha_config_flow` | Start (`handler`), reconfigure an existing entry (`entry_id`) or continue (`flow_id` + `user_input`) an integration's config flow. Needs `HA_ALLOW_CONFIG_WRITE`. |
 | `ha_config_entry_options` | Read or set an integration's options — including ESPHome's `allow_service_calls`. |
 | `ha_integration_setup_vome` | Add the Vome (`vomesync`) config entry with default settings, idempotently. |
 
@@ -214,7 +220,7 @@ be revoked early at any time.
 
 | Tool | Description |
 | --- | --- |
-| `ha_supervisor_api` | Call a Supervisor endpoint via `supervisor/api` (store, add-ons, …). |
+| `ha_supervisor_api` | Call a Supervisor endpoint via `supervisor/api` (store, add-ons, …). A `…/logs` read is served from the log route, since `supervisor/api` cannot carry plain text, and add-on start/stop/restart wait 50 s instead of Home Assistant's 10. |
 | `ha_addon_install_vome` | Add `https://github.com/Vortitron/VomeSync` to the store, install **Vome**, and start it. |
 
 ### HACS (Home Assistant Community Store)

@@ -4,6 +4,20 @@ import type { Logger } from "../logger.js";
 import type { HaArea, HaDevice, HaEntityRegistryEntry } from "./types.js";
 
 /**
+ * A command that names its own `timeout` (seconds — Home Assistant's
+ * supervisor/api takes one) has to be waited for at least that long, plus
+ * the hops in between; otherwise the client gives up on a call Home
+ * Assistant is still running.
+ */
+export function commandTimeoutMs(command: Record<string, unknown>, fallbackMs: number): number {
+	const seconds = command.timeout;
+	if (typeof seconds !== "number" || !Number.isFinite(seconds) || seconds <= 0) {
+		return fallbackMs;
+	}
+	return Math.max(fallbackMs, (seconds + 15) * 1000);
+}
+
+/**
  * Minimal Home Assistant WebSocket client. Home Assistant exposes the area,
  * device and entity registries *only* over the WebSocket API, so we need this in
  * addition to the REST client. The client connects lazily, authenticates, then
@@ -154,7 +168,7 @@ export function createHaWsClient(config: Config, logger: Logger): HaWsClient {
 			const timer = setTimeout(() => {
 				pending.delete(id);
 				reject(new Error(`WebSocket command '${String(command.type)}' timed out`));
-			}, config.timeoutMs);
+			}, commandTimeoutMs(command, config.timeoutMs));
 			pending.set(id, {
 				resolve: resolve as (value: unknown) => void,
 				reject,

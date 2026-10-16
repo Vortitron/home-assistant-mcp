@@ -253,8 +253,13 @@ export async function startMcpHttpServer(args: ServeArgs, logger: Logger): Promi
 	 */
 	/**
 	 * Last instance each token selected with `vomehome_use_instance`, keyed by
-	 * token hash and outliving the session that chose it. It is only *resumed*
-	 * when no other session is holding the same token — see contextForToken.
+	 * token hash and client name, and outliving the session that chose it. A
+	 * switch never moves another session that is already open; it is what the
+	 * *next* session with that token and client name starts on (contextForToken).
+	 * Two windows of the same client therefore share it: one that reconnects
+	 * starts where the other last switched to. A `?instance=` pin in the client's
+	 * URL overrides it, and the tools' `instance_id` refuses a call that would
+	 * land on the other home.
 	 *
 	 * Sessions are not permanent: an idle one is reaped, a transport can
 	 * reconnect, and the service can restart. Each of those builds a fresh

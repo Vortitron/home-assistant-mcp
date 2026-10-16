@@ -4,7 +4,9 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { loadConfig } from "../src/config.js";
 import { createLogger } from "../src/logger.js";
 import { HaApiError, type HaRestClient } from "../src/ha/restClient.js";
-import type { HaWsClient } from "../src/ha/wsClient.js";
+import { commandTimeoutMs, type HaWsClient } from "../src/ha/wsClient.js";
+import { SLOW_SUPERVISOR_TIMEOUT_SECONDS, defaultSupervisorTimeout, supervisorLogTarget } from "../src/tools/addons.js";
+import { imageTypeFor } from "../src/tools/configFiles.js";
 import { createUnavailableEsphomeClient, type EsphomeClient, type EsphomeCommandRequest } from "../src/esphome/client.js";
 import { createNodeRedClient } from "../src/nodered/client.js";
 import { createVomeHomeClient, type VomeHomeClient } from "../src/vomehome/client.js";
@@ -2343,6 +2345,167 @@ describe("ha_edit_config_file", () => {
 		});
 		expect(jsonOf(result)).toMatchObject({ rolled_back: true });
 		expect(writes.at(-1)).toBe(FILE);
+		vi.unstubAllGlobals();
+	});
+});
+
+describe("ha_supervisor_api: logs and slow calls (16 Oct gap notes)", () => {
+	const WRITE = { HA_ALLOW_WRITE: "true", HA_ALLOW_CONFIG_WRITE: "true" };
+
+	it("reads a log endpoint through the log route, not supervisor/api", async () => {
+		const sendCommand = vi.fn();
+		const getSupervisorLog = vi.fn(async () => "line one\nline two\n");
+		const server = buildHarness({ ws: { sendCommand }, rest: { getSupervisorLog } });
+		const result = await server.call("ha_supervisor_api", { endpoint: "/addons/core_mosquitto/logs" });
+		expect(result.isError).toBeFalsy();
+		expect(getSupervisorLog).toHaveBeenCalledWith("addon", "core_mosquitto");
+		expect(sendCommand).not.toHaveBeenCalled();
+		await server.call("ha_supervisor_api", { endpoint: "/core/logs" });
+		expect(getSupervisorLog).toHaveBeenLastCalledWith("core", undefined);
+		const follow = await server.call("ha_supervisor_api", { endpoint: "/addons/core_mosquitto/logs/follow" });
+		expect(follow.isError).toBe(true);
+		expect(sendCommand).not.toHaveBeenCalled();
+	});
+
+	it("asks Home Assistant to wait longer for an add-on stop, and only then", async () => {
+		const sendCommand = vi.fn(async () => ({ result: "ok" }));
+		const server = buildHarness({ env: WRITE, ws: { sendCommand } });
+		await server.call("ha_supervisor_api", { endpoint: "/addons/core_mosquitto/stop", method: "post" });
+		expect(sendCommand).toHaveBeenLastCalledWith({
+			type: "supervisor/api",
+			endpoint: "/addons/core_mosquitto/stop",
+			method: "post",
+			timeout: SLOW_SUPERVISOR_TIMEOUT_SECONDS
+		});
+		await server.call("ha_supervisor_api", { endpoint: "/addons" });
+		expect(sendCommand).toHaveBeenLastCalledWith({ type: "supervisor/api", endpoint: "/addons", method: "get" });
+		await server.call("ha_supervisor_api", { endpoint: "/addons/x/options", method: "post", data: {}, timeout_seconds: 30 });
+		expect(sendCommand).toHaveBeenLastCalledWith({
+			type: "supervisor/api", endpoint: "/addons/x/options", method: "post", data: {}, timeout: 30
+		});
+	});
+
+	it("says where the add-on stands when a stop still times out", async () => {
+		const sendCommand = vi.fn(async (command: Record<string, unknown>) => {
+			if (String(command.endpoint).endsWith("/stop")) {
+				throw new Error('VomeHome broker POST /ws/command responded 502: {"error": {"code": "unknown_error"}}');
+			}
+			return { state: "stopped" };
+		});
+		const server = buildHarness({ env: WRITE, ws: { sendCommand } });
+		const result = await server.call("ha_supervisor_api", { endpoint: "/addons/a0d7b954_nodered/stop", method: "post" });
+		expect(result.isError).toBe(true);
+		expect(JSON.stringify(result.content)).toContain('\\"stopped\\"');
+	});
+
+	it("parses log endpoints and waits for a command's own timeout", () => {
+		expect(supervisorLogTarget("/supervisor/logs")).toEqual({ target: "supervisor" });
+		expect(supervisorLogTarget("/addons/x/logs/boots/-1")).toBe("unsupported");
+		expect(supervisorLogTarget("/addons/x/info")).toBeNull();
+		expect(supervisorLogTarget("/store/logs")).toBeNull();
+		expect(defaultSupervisorTimeout("/store/addons/x/install", "post")).toBe(SLOW_SUPERVISOR_TIMEOUT_SECONDS);
+		expect(defaultSupervisorTimeout("/addons/x/stop", "get")).toBeUndefined();
+		expect(commandTimeoutMs({ type: "x" }, 15000)).toBe(15000);
+		expect(commandTimeoutMs({ type: "x", timeout: 50 }, 15000)).toBe(65000);
+		expect(commandTimeoutMs({ type: "x", timeout: 1 }, 30000)).toBe(30000);
+	});
+});
+
+describe("ha_update_device and ha_expose_entities", () => {
+	const WRITE = { HA_ALLOW_WRITE: "true", HA_ALLOW_CONFIG_WRITE: "true" };
+
+	it("renames and moves a device with only the fields given", async () => {
+		const sendCommand = vi.fn(async () => ({ id: "d1" }));
+		const server = buildHarness({ env: WRITE, ws: { sendCommand } });
+		await server.call("ha_update_device", { device_id: "d1", name: "Bedroom proxy BT", area_id: "bedroom" });
+		expect(sendCommand).toHaveBeenCalledWith({
+			type: "config/device_registry/update", device_id: "d1", name_by_user: "Bedroom proxy BT", area_id: "bedroom"
+		});
+		expect((await server.call("ha_update_device", { device_id: "d1" })).isError).toBe(true);
+		const readOnly = buildHarness({ ws: { sendCommand } });
+		expect((await readOnly.call("ha_update_device", { device_id: "d1", name: "x" })).isError).toBe(true);
+		expect(sendCommand).toHaveBeenCalledTimes(1);
+	});
+
+	it("lists exposure without write access, and changing it needs config-write", async () => {
+		const sendCommand = vi.fn(async (command: Record<string, unknown>) =>
+			command.type === "homeassistant/expose_entity/list"
+				? { exposed_entities: { "light.a": { conversation: true }, "lock.door": { conversation: false } } }
+				: null
+		);
+		const readOnly = buildHarness({ ws: { sendCommand } });
+		const listed = await readOnly.call("ha_expose_entities", {});
+		expect(JSON.stringify(listed.content)).toContain("light.a");
+		expect(JSON.stringify(listed.content)).not.toContain("lock.door");
+		expect((await readOnly.call("ha_expose_entities", { entity_ids: ["light.a"], should_expose: false })).isError).toBe(true);
+		const server = buildHarness({ env: WRITE, ws: { sendCommand } });
+		await server.call("ha_expose_entities", { entity_ids: ["light.a"], should_expose: false });
+		expect(sendCommand).toHaveBeenLastCalledWith({
+			type: "homeassistant/expose_entity", assistants: ["conversation"], entity_ids: ["light.a"], should_expose: false
+		});
+	});
+});
+
+describe("ha_config_flow reconfigure", () => {
+	it("starts a reconfigure flow for an entry, finding its domain", async () => {
+		const BROKERED = {
+			HA_TOKEN: "", VOMEHOME_TOKEN: "vh_test", VOMEHOME_INSTANCE_ID: "rly-1",
+			HA_ALLOW_WRITE: "true", HA_ALLOW_CONFIG_WRITE: "true"
+		};
+		const bodies: unknown[] = [];
+		vi.stubGlobal("fetch", vi.fn(async (input: unknown, init?: any) => {
+			const url = String(input);
+			if (url.endsWith("/config/config_entries/entry")) {
+				return new Response(JSON.stringify([{ entry_id: "e1", domain: "mqtt" }]), { status: 200 });
+			}
+			bodies.push(JSON.parse(init.body));
+			return new Response(JSON.stringify({ type: "form", flow_id: "f1", step_id: "reconfigure" }), { status: 200 });
+		}));
+		const server = buildHarness({ env: BROKERED });
+		const result = await server.call("ha_config_flow", { entry_id: "e1" });
+		expect(result.isError).toBeFalsy();
+		expect(bodies).toEqual([{ handler: "mqtt", show_advanced_options: false, entry_id: "e1" }]);
+		vi.unstubAllGlobals();
+	});
+});
+
+describe("ha_move_config_file and the media tools", () => {
+	const BROKERED = {
+		HA_TOKEN: "", VOMEHOME_TOKEN: "vh_test", VOMEHOME_INSTANCE_ID: "rly-1",
+		HA_ALLOW_WRITE: "true", HA_ALLOW_CONFIG_WRITE: "true"
+	};
+
+	it("moves on the named home only, and says when the component is too old", async () => {
+		const urls: string[] = [];
+		let reply = new Response(JSON.stringify({ moved: true }), { status: 200 });
+		vi.stubGlobal("fetch", vi.fn(async (input: unknown) => {
+			urls.push(String(input));
+			return reply;
+		}));
+		const server = buildHarness({ env: BROKERED });
+		const wrong = await server.call("ha_move_config_file", { instance_id: "other", path: "a.yaml", to: "b.yaml" });
+		expect(wrong.isError).toBe(true);
+		expect(urls).toEqual([]);
+		await server.call("ha_move_config_file", { instance_id: "rly-1", path: "esphome/frontpath/x.yaml", to: "esphome/x.yaml" });
+		expect(urls[0]).toContain("/ha/files/move?path=esphome%2Ffrontpath%2Fx.yaml&to=esphome%2Fx.yaml&overwrite=0");
+		reply = new Response(JSON.stringify({ error: "Refusing a non-allowlisted file operation" }), { status: 400 });
+		const old = await server.call("ha_move_config_file", { instance_id: "rly-1", path: "a.yaml", to: "b.yaml" });
+		expect(JSON.stringify(old.content)).toContain("0.9.51");
+		vi.unstubAllGlobals();
+	});
+
+	it("returns a media image as an image", async () => {
+		const urls: string[] = [];
+		vi.stubGlobal("fetch", vi.fn(async (input: unknown) => {
+			urls.push(String(input));
+			return new Response(JSON.stringify({ content: "aGVsbG8=", encoding: "base64" }), { status: 200 });
+		}));
+		const server = buildHarness({ env: BROKERED });
+		const result = await server.call("ha_read_media_file", { path: "snapshots/door.jpg" });
+		expect(urls[0]).toContain("/ha/media/read?path=snapshots%2Fdoor.jpg&encoding=base64");
+		expect(result.content[0]).toEqual({ type: "image", data: "aGVsbG8=", mimeType: "image/jpeg" });
+		expect(imageTypeFor("a/b.PNG")).toBe("image/png");
+		expect(imageTypeFor("a/b.mp4")).toBeNull();
 		vi.unstubAllGlobals();
 	});
 });

@@ -59,8 +59,16 @@ async function filesRequest<T>(
 	return (text ? JSON.parse(text) : undefined) as T;
 }
 
-/** A component from before an operation existed refuses it by name. */
-const OLD_COMPONENT = /non-allowlisted|update the vome/i;
+/**
+ * A component from before an operation existed refuses it by name; the portal
+ * marks that `update_required: "component"`. `"relay"` means Vome's own
+ * relay service is behind, and nothing in the home needs changing.
+ */
+const OLD_COMPONENT = /non-allowlisted|update_required"?\s*:\s*"component"/i;
+const OLD_RELAY = /update_required"?\s*:\s*"relay"/i;
+const RELAY_BEHIND =
+	"Vome's relay service does not support this yet. Nothing in the home needs changing; " +
+	"it works once Vome's next update is out.";
 
 const IMAGE_TYPES: Record<string, string> = {
 	jpg: "image/jpeg",
@@ -525,6 +533,7 @@ export function registerConfigFileTools(server: McpServer, ctx: ToolContext): vo
 					return jsonResult(await filesRequest(ctx, `/move${query}`, { method: "POST" }));
 				} catch (error) {
 					const message = error instanceof Error ? error.message : String(error);
+					if (OLD_RELAY.test(message)) return errorResult(RELAY_BEHIND);
 					if (OLD_COMPONENT.test(message)) {
 						return errorResult(
 							"This home's Vome component predates moving files. Update the Vome add-on " +
@@ -613,7 +622,8 @@ export function registerConfigFileTools(server: McpServer, ctx: ToolContext): vo
 
 function mediaError(error: unknown): CallToolResult {
 	const message = error instanceof Error ? error.message : String(error);
-	if (OLD_COMPONENT.test(message) || /\b501\b/.test(message)) {
+	if (OLD_RELAY.test(message)) return errorResult(RELAY_BEHIND);
+	if (OLD_COMPONENT.test(message)) {
 		return errorResult(
 			"This home's Vome component predates reading /media. Update the Vome add-on (0.3.66 or " +
 				`later) or the integration (0.9.51 or later), then try again. (${message.slice(0, 200)})`

@@ -2488,7 +2488,7 @@ describe("ha_move_config_file and the media tools", () => {
 		expect(urls).toEqual([]);
 		await server.call("ha_move_config_file", { instance_id: "rly-1", path: "esphome/frontpath/x.yaml", to: "esphome/x.yaml" });
 		expect(urls[0]).toContain("/ha/files/move?path=esphome%2Ffrontpath%2Fx.yaml&to=esphome%2Fx.yaml&overwrite=0");
-		reply = new Response(JSON.stringify({ error: "Refusing a non-allowlisted file operation" }), { status: 400 });
+		reply = new Response(JSON.stringify({ error: "too old", update_required: "component" }), { status: 501 });
 		const old = await server.call("ha_move_config_file", { instance_id: "rly-1", path: "a.yaml", to: "b.yaml" });
 		expect(JSON.stringify(old.content)).toContain("0.9.51");
 		vi.unstubAllGlobals();

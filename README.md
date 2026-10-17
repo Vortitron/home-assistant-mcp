@@ -71,6 +71,7 @@ policy (see [Safety](#safety)).
 | `ha_view_snapshot` | Everything a dashboard view shows in one call: states, rendered templates, history in few points, camera frames. For dashboard clients. |
 | `ha_watch_states` | Wait for state changes instead of polling: the home's Vome component sends them as they happen (through VomeHome). |
 | `ha_get_logbook` | Human-readable logbook entries. |
+| `ha_get_energy_prefs` | The Energy dashboard's setup (grid, solar, battery, gas, water, tracked devices) with the dashboard's own validation. |
 | `ha_list_traces` | Recent automation/script runs and how each one stopped. |
 | `ha_get_trace` | Step-by-step detail for one run, with `failed_at` naming the blocking step. |
 
@@ -100,6 +101,7 @@ policy (see [Safety](#safety)).
 | `ha_update_entity` | Rename, re-id, move, re-icon, disable or hide an entity in the registry (needs `HA_ALLOW_CONFIG_WRITE`). |
 | `ha_update_device` | Rename a device, move it to an area, disable it or set its labels (needs `HA_ALLOW_CONFIG_WRITE`). |
 | `ha_expose_entities` | List or change what Assist, Alexa and Google Assistant can see and control; listing needs only read (changing needs `HA_ALLOW_CONFIG_WRITE`). |
+| `ha_set_energy_prefs` | Change the Energy dashboard's setup; each list passed replaces that list whole, then it is validated (needs `HA_ALLOW_CONFIG_WRITE`). |
 | `ha_remove_entity` | Remove an orphaned registry entry (needs `HA_ALLOW_CONFIG_WRITE`). |
 | `ha_matter_reinterview` | The Matter device page's Re-interview, for a device whose endpoints changed after a firmware update (needs `HA_ALLOW_CONFIG_WRITE`). |
 | `ha_trigger_automation` | Manually run an automation now. |

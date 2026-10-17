@@ -2509,3 +2509,42 @@ describe("ha_move_config_file and the media tools", () => {
 		vi.unstubAllGlobals();
 	});
 });
+
+describe("Energy dashboard tools", () => {
+	const WRITE = { HA_ALLOW_WRITE: "true", HA_ALLOW_CONFIG_WRITE: "true" };
+
+	it("reads the setup with its validation, and says when there is none", async () => {
+		const sendCommand = vi.fn(async (command: Record<string, unknown>) =>
+			command.type === "energy/get_prefs"
+				? { energy_sources: [{ type: "solar", stat_energy_from: "sensor.pv" }], device_consumption: [] }
+				: { energy_sources: [], device_consumption: [] }
+		);
+		const server = buildHarness({ ws: { sendCommand } });
+		const result = await server.call("ha_get_energy_prefs", {});
+		expect(JSON.stringify(result.content)).toContain("sensor.pv");
+		expect(sendCommand).toHaveBeenCalledWith({ type: "energy/validate" });
+
+		const empty = buildHarness({
+			ws: {
+				sendCommand: vi.fn(async (command: Record<string, unknown>) => {
+					if (command.type === "energy/get_prefs") throw new Error("not_found: No prefs");
+					return {};
+				})
+			}
+		});
+		expect(JSON.stringify((await empty.call("ha_get_energy_prefs", {})).content)).toContain('\\"configured\\": false');
+	});
+
+	it("saves only the lists given, and only with config-write", async () => {
+		const sendCommand = vi.fn(async () => ({}));
+		const readOnly = buildHarness({ ws: { sendCommand } });
+		expect((await readOnly.call("ha_set_energy_prefs", { device_consumption: [] })).isError).toBe(true);
+		expect(sendCommand).not.toHaveBeenCalled();
+		const server = buildHarness({ env: WRITE, ws: { sendCommand } });
+		expect((await server.call("ha_set_energy_prefs", {})).isError).toBe(true);
+		const devices = [{ stat_consumption: "sensor.washer_energy", name: "Washer" }];
+		await server.call("ha_set_energy_prefs", { device_consumption: devices });
+		expect(sendCommand).toHaveBeenCalledWith({ type: "energy/save_prefs", device_consumption: devices });
+		expect(sendCommand).toHaveBeenLastCalledWith({ type: "energy/validate" });
+	});
+});

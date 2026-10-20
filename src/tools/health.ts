@@ -31,6 +31,63 @@ function findHealthSensor(states: HaState[]): HaState | undefined {
 		.sort((a, b) => Number(b.attributes?.generated_at ?? 0) - Number(a.attributes?.generated_at ?? 0))[0];
 }
 
+/**
+ * The sensor with no report on it: Home Assistant restarted since the last
+ * check and forgot the report (integrations before 0.9.53 never asked for it
+ * back). It is still "unavailable" rather than absent, so the home is not
+ * one without a score — Vome has it, and the integration's own action fetches it.
+ */
+function findEmptyHealthSensor(states: HaState[]): HaState | undefined {
+	return states.find(
+		(state) =>
+			state.entity_id.startsWith("sensor.") &&
+			/health_score$/.test(state.entity_id) &&
+			(state.state === "unavailable" || state.state === "unknown")
+	);
+}
+
+/** A report shaped as the sensor's attributes, from the integration's health_score_get action. */
+function reportFromAction(response: unknown): Record<string, unknown> | undefined {
+	const body = (response ?? {}) as Record<string, unknown>;
+	const inner = (body.service_response ?? body) as Record<string, unknown>;
+	const report = inner.report as Record<string, unknown> | null | undefined;
+	if (!report || typeof report !== "object" || !Array.isArray(report.findings)) {
+		return undefined;
+	}
+	return {
+		...report,
+		saved_to_account: inner.saved_to_account ?? report.saved_to_account,
+		health_url: inner.health_url ?? report.health_url,
+		keep_it_url: inner.keep_it_url ?? report.keep_it_url,
+		deleted_in_seconds: inner.deleted_in_seconds ?? report.deleted_in_seconds
+	};
+}
+
+function reportBody(entityId: string, state: string, attributes: Record<string, unknown>, restored: boolean) {
+	const generated = Number(attributes.generated_at);
+	const score = Number(state);
+	return {
+		found: true,
+		entity_id: entityId,
+		score: Number.isFinite(score) ? score : null,
+		summary: attributes.summary ?? "",
+		generated_at: Number.isFinite(generated) && generated > 0 ? new Date(generated * 1000).toISOString() : null,
+		categories: attributes.categories ?? [],
+		findings: attributes.findings ?? [],
+		saved_to_account: attributes.saved_to_account ?? null,
+		...(attributes.health_url ? { health_url: attributes.health_url } : {}),
+		...(attributes.keep_it_url ? { keep_it_url: attributes.keep_it_url } : {}),
+		...(attributes.deleted_in_seconds !== undefined ? { deleted_in_seconds: attributes.deleted_in_seconds } : {}),
+		...(restored
+			? {
+					note:
+						"Home Assistant had forgotten this report after a restart; it was fetched back from Vome through " +
+						"the integration's health_score_get action. Updating the Vome integration makes that automatic."
+				}
+			: {})
+	};
+}
+
 export function registerHealthTools(server: McpServer, ctx: ToolContext): void {
 	server.registerTool(
 		"vome_health_report",
@@ -48,25 +105,31 @@ export function registerHealthTools(server: McpServer, ctx: ToolContext): void {
 		},
 		async () =>
 			runTool(ctx.logger, "vome_health_report", async () => {
-				const sensor = findHealthSensor(await ctx.rest.getStates());
-				if (!sensor) {
+				const states = await ctx.rest.getStates();
+				const sensor = findHealthSensor(states);
+				if (sensor) {
+					return jsonResult(reportBody(sensor.entity_id, sensor.state, sensor.attributes ?? {}, false));
+				}
+				const empty = findEmptyHealthSensor(states);
+				if (!empty) {
 					return jsonResult({ found: false, note: `No health score on this home yet. ${INTEGRATION_NOTE}` });
 				}
-				const attributes = sensor.attributes ?? {};
-				const generated = Number(attributes.generated_at);
-				const score = Number(sensor.state);
+				// The sensor is there with nothing on it: a restart emptied it. Vome
+				// still has the report, and the integration's action fetches it back.
+				try {
+					const report = reportFromAction(await ctx.rest.callService("vomesync", "health_score_get", {}));
+					if (report) {
+						return jsonResult(reportBody(empty.entity_id, String(report.score ?? ""), report, true));
+					}
+				} catch (error) {
+					ctx.logger.debug(`health_score_get could not fetch the report back: ${String(error)}`);
+				}
 				return jsonResult({
-					found: true,
-					entity_id: sensor.entity_id,
-					score: Number.isFinite(score) ? score : null,
-					summary: attributes.summary ?? "",
-					generated_at: Number.isFinite(generated) && generated > 0 ? new Date(generated * 1000).toISOString() : null,
-					categories: attributes.categories ?? [],
-					findings: attributes.findings ?? [],
-					saved_to_account: attributes.saved_to_account ?? null,
-					...(attributes.health_url ? { health_url: attributes.health_url } : {}),
-					...(attributes.keep_it_url ? { keep_it_url: attributes.keep_it_url } : {}),
-					...(attributes.deleted_in_seconds !== undefined ? { deleted_in_seconds: attributes.deleted_in_seconds } : {})
+					found: false,
+					entity_id: empty.entity_id,
+					note:
+						"The health score sensor is there but empty: Home Assistant restarted since the last check and " +
+						"forgot the report, and Vome could not be asked for it back. Run vome_health_check for a fresh one."
 				});
 			})
 	);

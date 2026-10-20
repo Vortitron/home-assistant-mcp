@@ -1999,6 +1999,40 @@ describe("vome health", () => {
 		expect(body.note).toMatch(/vome_health_check/);
 	});
 
+	it("fetches a forgotten report back when the sensor is there but empty", async () => {
+		// GamlaBio, 17–20 Oct 2026: HA restarted, the sensor sat on "unavailable",
+		// and the tool said the home had no score while Vome held one.
+		const emptySensor = { entity_id: "sensor.vome_vome_health_score", state: "unavailable", attributes: { unit_of_measurement: "/100" } };
+		const calls: string[] = [];
+		const rest = {
+			getStates: async () => [other, emptySensor],
+			callService: async (domain: string, service: string) => {
+				calls.push(`${domain}.${service}`);
+				return { service_response: { report: sensor.attributes, saved_to_account: true, health_url: "https://vome.io/h" } };
+			}
+		} as never;
+		const body = jsonOf(await buildHarness({ rest }).call("vome_health_report"));
+		expect(calls).toEqual(["vomesync.health_score_get"]);
+		expect(body.found).toBe(true);
+		expect(body.findings[0].title).toBe("7 entities are flooding the recorder");
+		expect(body.health_url).toBe("https://vome.io/h");
+		expect(body.note).toMatch(/restart/);
+	});
+
+	it("says the sensor is empty, not that there is no score, when Vome cannot be asked", async () => {
+		const emptySensor = { entity_id: "sensor.vome_vome_health_score", state: "unavailable", attributes: {} };
+		const rest = {
+			getStates: async () => [emptySensor],
+			callService: async () => {
+				throw new Error("502");
+			}
+		} as never;
+		const body = jsonOf(await buildHarness({ rest }).call("vome_health_report"));
+		expect(body.found).toBe(false);
+		expect(body.entity_id).toBe("sensor.vome_vome_health_score");
+		expect(body.note).toMatch(/restarted/);
+	});
+
 	it("runs a check through the integration's own action, and only with write access", async () => {
 		const calls: string[] = [];
 		const rest = {

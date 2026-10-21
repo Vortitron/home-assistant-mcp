@@ -62,6 +62,9 @@ function brokerErrorDetail(body: string): string {
 	return body.slice(0, 200);
 }
 
+/** Polls in a row that may fail (time out, a 502) before a build is given up on. */
+export const MAX_MISSED_POLLS = 4;
+
 export function createBrokeredEsphomeDashboardClient(
 	config: Config,
 	logger: Logger,
@@ -167,6 +170,7 @@ export function createBrokeredEsphomeDashboardClient(
 		let truncated = false;
 		let cursor = 0;
 		let wait = POLL_MIN_MS;
+		let missedPolls = 0;
 		for (;;) {
 			if (Date.now() >= deadline) {
 				// Leave nothing running on the home just because we stopped watching.
@@ -184,9 +188,21 @@ export function createBrokeredEsphomeDashboardClient(
 			}
 			await new Promise((resolve) => setTimeout(resolve, wait));
 			wait = Math.min(wait * 2, POLL_MAX_MS);
-			const poll = await broker<StreamPoll>(
-				`/stream/${encodeURIComponent(jobId)}?cursor=${cursor}`
-			);
+			let poll: StreamPoll;
+			try {
+				poll = await broker<StreamPoll>(`/stream/${encodeURIComponent(jobId)}?cursor=${cursor}`);
+				missedPolls = 0;
+			} catch (error) {
+				// One slow poll is not a failed build: the job runs on the home
+				// whatever this side does, and the next poll picks up from the same
+				// cursor. Only a run of them means the broker is really gone.
+				missedPolls += 1;
+				if (missedPolls >= MAX_MISSED_POLLS) {
+					throw error;
+				}
+				logger.debug(`ESPHome poll ${missedPolls}/${MAX_MISSED_POLLS} failed, retrying: ${String(error)}`);
+				continue;
+			}
 			activityLog.addLines(jobId, poll?.lines ?? []);
 			request.onProgress?.(lines.length + (poll?.lines?.length ?? 0), (poll?.lines ?? []).at(-1) ?? lines.at(-1) ?? null);
 			for (const line of poll?.lines ?? []) {

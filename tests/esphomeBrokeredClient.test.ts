@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadConfig } from "../src/config.js";
 import { createLogger } from "../src/logger.js";
-import { createBrokeredEsphomeDashboardClient } from "../src/esphome/brokeredDashboardClient.js";
+import { MAX_MISSED_POLLS, createBrokeredEsphomeDashboardClient } from "../src/esphome/brokeredDashboardClient.js";
 
 const logger = createLogger("error");
 
@@ -116,6 +116,36 @@ describe("createBrokeredEsphomeDashboardClient", () => {
 		});
 		expect(String(fetchMock.mock.calls[2]![0])).toContain("cursor=1");
 	});
+
+	it("rides out a poll that fails, picking up from the same cursor", async () => {
+		// GamlaBio, 21 Oct 2026: one slow poll (the compile box still pairing)
+		// failed the whole upload while the job carried on.
+		const fetchMock = vi
+			.fn()
+			.mockResolvedValueOnce(jsonResponse({ job_id: "priming:abc" }))
+			.mockResolvedValueOnce(jsonResponse({ lines: ["Waiting for the compile box to pair…\n"], cursor: 1, done: false }))
+			.mockResolvedValueOnce(new Response("upstream timeout", { status: 504 }))
+			.mockResolvedValueOnce(jsonResponse({ lines: ["Done\n"], cursor: 2, done: true, exit_code: 0 }));
+		vi.stubGlobal("fetch", fetchMock);
+
+		const result = await client().runCommand({ command: "upload", configuration: "lr.yaml" });
+
+		expect(result.exitCode).toBe(0);
+		expect(result.output).toBe("Waiting for the compile box to pair…\nDone\n");
+		expect(String(fetchMock.mock.calls[2]![0])).toContain("cursor=1");
+		expect(String(fetchMock.mock.calls[3]![0])).toContain("cursor=1");
+	});
+
+	it("gives up after a run of failed polls", async () => {
+		const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse({ job_id: "job-1" }));
+		for (let i = 0; i < MAX_MISSED_POLLS; i += 1) {
+			fetchMock.mockResolvedValueOnce(new Response("bad gateway", { status: 502 }));
+		}
+		vi.stubGlobal("fetch", fetchMock);
+
+		await expect(client().runCommand({ command: "compile", configuration: "lr.yaml" })).rejects.toThrow(/502/);
+		expect(fetchMock).toHaveBeenCalledTimes(1 + MAX_MISSED_POLLS);
+	}, 15000);
 
 	it("reports a job that ended without an exit code as a failure", async () => {
 		const fetchMock = vi

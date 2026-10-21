@@ -72,6 +72,22 @@ describe("createBrokeredHaRestClient", () => {
 		});
 	});
 
+	it("asks the portal to wait longer for a slow service, capped at 50 s", async () => {
+		// ai_task.generate_data with an image takes 5–20 s; the 15 s default lost
+		// its answer (GamlaBio, 20 Oct 2026).
+		const fetchMock = vi.fn(async () => jsonResponse([]));
+		vi.stubGlobal("fetch", fetchMock);
+
+		await client().callService("ai_task", "generate_data", { task_name: "x" }, undefined, { timeoutSeconds: 40 });
+		await client().callService("ai_task", "generate_data", {}, undefined, { timeoutSeconds: 500 });
+		await client().callService("light", "turn_on", {});
+
+		const urls = fetchMock.mock.calls.map((call) => call[0]);
+		expect(urls[0]).toBe("https://vome.io/api/v1/instances/srv-1/ha/services/ai_task/generate_data?timeout=40");
+		expect(urls[1]).toBe("https://vome.io/api/v1/instances/srv-1/ha/services/ai_task/generate_data?timeout=50");
+		expect(urls[2]).toBe("https://vome.io/api/v1/instances/srv-1/ha/services/light/turn_on");
+	});
+
 	it("renders templates as text via the broker", async () => {
 		const fetchMock = vi.fn(async () => new Response("4", { status: 200 }));
 		vi.stubGlobal("fetch", fetchMock);

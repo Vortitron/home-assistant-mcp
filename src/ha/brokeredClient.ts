@@ -1,6 +1,6 @@
 import type { Config } from "../config.js";
 import type { Logger } from "../logger.js";
-import { HaApiError, binaryResult, type StateWatchGrant } from "./restClient.js";
+import { HaApiError, binaryResult, serviceTimeoutSeconds, type ServiceCallOptions, type StateWatchGrant } from "./restClient.js";
 import type { HaImage, HaRestClient, HaServiceCallResult, HistoryParams, LogbookParams } from "./restClient.js";
 import { commandTimeoutMs, type HaWsClient } from "./wsClient.js";
 import type {
@@ -133,8 +133,10 @@ export function createBrokeredHaRestClient(
 		domain: string,
 		service: string,
 		data: Record<string, unknown> = {},
-		target?: HaTarget
+		target?: HaTarget,
+		options?: ServiceCallOptions
 	): Promise<HaServiceCallResult> {
+		const seconds = serviceTimeoutSeconds(options);
 		const body: Record<string, unknown> = { ...data };
 		if (target) {
 			for (const [key, value] of Object.entries(target)) {
@@ -145,9 +147,13 @@ export function createBrokeredHaRestClient(
 		}
 		// The broker retries with ?return_response itself when HA asks for it,
 		// so this can be either shape.
+		// A longer wait is asked of the portal (?timeout=, which it carries to
+		// the home), and this side waits a few seconds past it so the home's own
+		// answer, even a timeout error, gets back.
+		const query = seconds === undefined ? "" : `?timeout=${seconds}`;
 		return broker<HaServiceCallResult>(
-			`/services/${encodeURIComponent(domain)}/${encodeURIComponent(service)}`,
-			{ method: "POST", body }
+			`/services/${encodeURIComponent(domain)}/${encodeURIComponent(service)}${query}`,
+			{ method: "POST", body, ...(seconds === undefined ? {} : { timeoutMs: (seconds + 8) * 1000 }) }
 		);
 	}
 

@@ -75,6 +75,29 @@ export interface HaRequestOptions {
 	/** "binary" resolves to an {@link HaImage} rather than parsed text. */
 	expect?: "json" | "text" | "binary";
 	query?: Record<string, string | number | boolean | undefined>;
+	/** Overrides config.timeoutMs for a call known to run longer. */
+	timeoutMs?: number;
+}
+
+/** Per-call options for a service call. */
+export interface ServiceCallOptions {
+	/**
+	 * How long to wait for the service to answer, in seconds. For actions that
+	 * take a while (ai_task.generate_data with an image, a script that waits).
+	 * At most {@link SERVICE_MAX_TIMEOUT_SECONDS}: the public proxy in front of
+	 * the portal ends a request at 60 s.
+	 */
+	timeoutSeconds?: number;
+}
+
+export const SERVICE_MAX_TIMEOUT_SECONDS = 50;
+
+export function serviceTimeoutSeconds(options?: ServiceCallOptions): number | undefined {
+	const asked = options?.timeoutSeconds;
+	if (asked === undefined || !Number.isFinite(asked) || asked <= 0) {
+		return undefined;
+	}
+	return Math.min(Math.ceil(asked), SERVICE_MAX_TIMEOUT_SECONDS);
 }
 
 export interface HistoryParams {
@@ -103,7 +126,8 @@ export interface HaRestClient {
 		domain: string,
 		service: string,
 		data?: Record<string, unknown>,
-		target?: HaTarget
+		target?: HaTarget,
+		options?: ServiceCallOptions
 	): Promise<HaServiceCallResult>;
 	renderTemplate(template: string, variables?: Record<string, unknown>): Promise<string>;
 	checkConfig(): Promise<HaCheckConfigResult>;
@@ -163,7 +187,7 @@ export function createHaRestClient(
 		const method = options.method ?? "GET";
 		const url = `${config.haUrl}${path}${buildQuery(options.query)}`;
 		const controller = new AbortController();
-		const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
+		const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? config.timeoutMs);
 		logger.debug(`HA ${method} ${path}`);
 		try {
 			const response = await fetch(url, {
@@ -216,8 +240,11 @@ export function createHaRestClient(
 		domain: string,
 		service: string,
 		data: Record<string, unknown> = {},
-		target?: HaTarget
+		target?: HaTarget,
+		options?: ServiceCallOptions
 	): Promise<HaServiceCallResult> {
+		const seconds = serviceTimeoutSeconds(options);
+		const timeoutMs = seconds === undefined ? undefined : seconds * 1000;
 		const body: Record<string, unknown> = { ...data };
 		if (target) {
 			for (const [key, value] of Object.entries(target)) {
@@ -228,7 +255,7 @@ export function createHaRestClient(
 		}
 		const path = `/api/services/${encodeURIComponent(domain)}/${encodeURIComponent(service)}`;
 		try {
-			return await request<HaServiceCallResult>(path, { method: "POST", body });
+			return await request<HaServiceCallResult>(path, { method: "POST", body, timeoutMs });
 		} catch (error) {
 			// Services that return data (vomesync.subscribe_switch, ...) refuse
 			// a plain call. Retry once asking for the response, as the VomeHome
@@ -236,7 +263,12 @@ export function createHaRestClient(
 			if (!wantsReturnResponse(error)) {
 				throw error;
 			}
-			return request<HaServiceCallResult>(path, { method: "POST", body, query: { return_response: "true" } });
+			return request<HaServiceCallResult>(path, {
+				method: "POST",
+				body,
+				query: { return_response: "true" },
+				timeoutMs
+			});
 		}
 	}
 

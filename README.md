@@ -102,6 +102,8 @@ policy (see [Safety](#safety)).
 | `ha_update_device` | Rename a device, move it to an area, disable it or set its labels (needs `HA_ALLOW_CONFIG_WRITE`). |
 | `ha_expose_entities` | List or change what Assist, Alexa and Google Assistant can see and control; listing needs only read (changing needs `HA_ALLOW_CONFIG_WRITE`). |
 | `ha_set_energy_prefs` | Change the Energy dashboard's setup; each list passed replaces that list whole, then it is validated (needs `HA_ALLOW_CONFIG_WRITE`). |
+| `ha_get_statistics` | Read long-term statistics (what the Energy dashboard draws) per 5 minutes to month; `largest_changes` lists the biggest buckets, like the Outliers button. |
+| `ha_adjust_statistic` | Correct one 5-minute bucket of a statistic, by new value or by adjustment, as Developer Tools → Statistics does (needs `HA_ALLOW_CONFIG_WRITE`). |
 | `ha_remove_entity` | Remove an orphaned registry entry (needs `HA_ALLOW_CONFIG_WRITE`). |
 | `ha_matter_reinterview` | The Matter device page's Re-interview, for a device whose endpoints changed after a firmware update (needs `HA_ALLOW_CONFIG_WRITE`). |
 | `ha_trigger_automation` | Manually run an automation now. |

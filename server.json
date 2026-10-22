@@ -6,12 +6,12 @@
     "url": "https://github.com/Vortitron/home-assistant-mcp",
     "source": "github"
   },
-  "version": "0.13.2",
+  "version": "0.14.0",
   "packages": [
     {
       "registryType": "npm",
       "identifier": "@vortitron/home-assistant-mcp",
-      "version": "0.13.2",
+      "version": "0.14.0",
       "transport": {
         "type": "stdio"
       },

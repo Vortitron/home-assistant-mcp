@@ -2582,3 +2582,75 @@ describe("Energy dashboard tools", () => {
 		expect(sendCommand).toHaveBeenLastCalledWith({ type: "energy/validate" });
 	});
 });
+
+describe("Long-term statistics tools", () => {
+	const WRITE = { HA_ALLOW_WRITE: "true", HA_ALLOW_CONFIG_WRITE: "true" };
+	// GamlaBio, 22 Oct 2026: Sam's cloud power read 183 kW for fifteen minutes.
+	const glitch = Date.parse("2026-10-22T13:30:00Z");
+	const rows = [
+		{ start: glitch - 600000, end: glitch - 300000, change: 0.06 },
+		{ start: glitch, end: glitch + 300000, change: 15.46 },
+		{ start: glitch - 300000, end: glitch, change: 15.25 }
+	];
+
+	it("lists the biggest buckets first, like the Outliers button", async () => {
+		const sendCommand = vi.fn(async () => ({ "sensor.sam_energy": rows }));
+		const server = buildHarness({ ws: { sendCommand } });
+		const body = jsonOf(
+			await server.call("ha_get_statistics", {
+				statistic_ids: ["sensor.sam_energy"],
+				start_time: "2026-10-22T00:00:00Z",
+				period: "5minute",
+				largest_changes: 2
+			})
+		);
+		expect(sendCommand).toHaveBeenCalledWith(
+			expect.objectContaining({ type: "recorder/statistics_during_period", period: "5minute", types: ["change"] })
+		);
+		expect(body.statistics["sensor.sam_energy"]).toEqual([
+			{ start: "2026-10-22T13:30:00.000Z", end: "2026-10-22T13:35:00.000Z", change: 15.46 },
+			{ start: "2026-10-22T13:25:00.000Z", end: "2026-10-22T13:30:00.000Z", change: 15.25 }
+		]);
+	});
+
+	it("sets a bucket to a new value by adjusting the sum by the difference, only with config-write", async () => {
+		const commands: Array<Record<string, unknown>> = [];
+		let adjusted = false;
+		const sendCommand = vi.fn(async (command: Record<string, unknown>) => {
+			commands.push(command);
+			if (command.type === "recorder/get_statistics_metadata") {
+				return [{ statistic_id: "sensor.sam_energy", statistics_unit_of_measurement: "kWh" }];
+			}
+			if (command.type === "recorder/adjust_sum_statistics") {
+				adjusted = true;
+				return null;
+			}
+			return { "sensor.sam_energy": [{ start: glitch, change: adjusted ? 0.06 : 15.46 }] };
+		});
+		const readOnly = buildHarness({ ws: { sendCommand } });
+		expect(
+			(await readOnly.call("ha_adjust_statistic", { statistic_id: "sensor.sam_energy", start_time: "2026-10-22T13:30:00Z", new_value: 0.06 })).isError
+		).toBe(true);
+		expect(sendCommand).not.toHaveBeenCalled();
+
+		const server = buildHarness({ env: WRITE, ws: { sendCommand } });
+		const body = jsonOf(
+			await server.call("ha_adjust_statistic", { statistic_id: "sensor.sam_energy", start_time: "2026-10-22T15:30:00+02:00", new_value: 0.06 })
+		);
+		const adjust = commands.find((command) => command.type === "recorder/adjust_sum_statistics")!;
+		expect(adjust.start_time).toBe("2026-10-22T13:30:00.000Z");
+		expect(adjust.adjustment_unit_of_measurement).toBe("kWh");
+		expect(Number(adjust.adjustment)).toBeCloseTo(-15.4, 6);
+		expect(body).toMatchObject({ adjusted: true, before: 15.46, after: 0.06 });
+	});
+
+	it("refuses a time that is not a bucket start, and needs exactly one of new_value or adjustment", async () => {
+		const sendCommand = vi.fn(async () => [{ statistic_id: "sensor.sam_energy", statistics_unit_of_measurement: "kWh" }]);
+		const server = buildHarness({ env: WRITE, ws: { sendCommand } });
+		const off = await server.call("ha_adjust_statistic", { statistic_id: "sensor.sam_energy", start_time: "2026-10-22T13:31:00Z", adjustment: -1 });
+		expect(off.isError).toBe(true);
+		const both = await server.call("ha_adjust_statistic", { statistic_id: "sensor.sam_energy", start_time: "2026-10-22T13:30:00Z" });
+		expect(both.isError).toBe(true);
+		expect(sendCommand).not.toHaveBeenCalled();
+	});
+});

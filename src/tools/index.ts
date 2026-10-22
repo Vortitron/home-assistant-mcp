@@ -29,6 +29,7 @@ import { registerHealthTools } from "./health.js";
 import { registerSnapshotTools } from "./snapshot.js";
 import { registerWatchTools } from "./watch.js";
 import { registerEnergyTools } from "./energy.js";
+import { registerStatisticsTools } from "./statistics.js";
 
 /**
  * Registers every tool group on the given server.
@@ -68,4 +69,5 @@ export function registerAllTools(rawServer: McpServer, ctx: ToolContext): void {
 	registerSnapshotTools(server, ctx);
 	registerWatchTools(server, ctx);
 	registerEnergyTools(server, ctx);
+	registerStatisticsTools(server, ctx);
 }

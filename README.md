@@ -294,7 +294,7 @@ Typical developer flow: `vomehome_create_instance` → wait until running → `h
 
 ## Install
 
-Requires **Node.js ≥ 18.18** (Node 20+ recommended). There is nothing to install
+Requires **Node.js ≥ 20**. There is nothing to install
 by hand — your editor launches the server on demand with `npx`, so the same
 config works on every machine (no absolute paths).
 

@@ -2654,3 +2654,131 @@ describe("Long-term statistics tools", () => {
 		expect(sendCommand).not.toHaveBeenCalled();
 	});
 });
+
+describe("people", () => {
+	const WRITE = { HA_ALLOW_WRITE: "true", HA_ALLOW_CONFIG_WRITE: "true" };
+	const SOFIE = {
+		id: "sofie",
+		name: "Sofie",
+		user_id: "u-sofie",
+		device_trackers: ["device_tracker.s21", "device_tracker.sofie_watch"],
+		picture: null
+	};
+	const YAML_PERSON = { id: "gran", name: "Gran", device_trackers: [] };
+
+	function peopleWs(onWrite: (cmd: Record<string, unknown>) => unknown = (cmd) => ({ ...SOFIE, ...cmd, id: (cmd.person_id as string) ?? "new-id" })) {
+		return vi.fn(async (cmd: Record<string, unknown>) => {
+			if (cmd.type === "person/list") {
+				return {
+					storage: [SOFIE, { id: "andy", name: "Andy", device_trackers: ["device_tracker.sofie_watch"] }],
+					config: [YAML_PERSON]
+				};
+			}
+			return onWrite(cmd);
+		});
+	}
+
+	it("lists stored and YAML people, marking which can be edited", async () => {
+		const server = buildHarness({ ws: { sendCommand: peopleWs() } });
+		const body = jsonOf(await server.call("ha_list_people"));
+		expect(body.people.map((p: any) => [p.name, p.editable])).toEqual([
+			["Sofie", true],
+			["Andy", true],
+			["Gran", false]
+		]);
+		expect(body.people[0].device_trackers).toEqual(SOFIE.device_trackers);
+	});
+
+	it("takes one tracker off a person and leaves the rest", async () => {
+		// The case that found the gap: an old phone off Sofie, her watch kept.
+		const sendCommand = peopleWs();
+		const server = buildHarness({ env: WRITE, ws: { sendCommand } });
+		const body = jsonOf(
+			await server.call("ha_set_person", {
+				person_id: "sofie",
+				remove_device_trackers: ["device_tracker.s21"],
+				add_device_trackers: ["device_tracker.s25"]
+			})
+		);
+		expect(sendCommand).toHaveBeenCalledWith({
+			type: "person/update",
+			person_id: "sofie",
+			device_trackers: ["device_tracker.sofie_watch", "device_tracker.s25"]
+		});
+		expect(body.created).toBe(false);
+		// The watch is on Andy too: allowed, but said.
+		expect(body.also_tracking_someone_else).toEqual({ "device_tracker.sofie_watch": ["Andy"] });
+	});
+
+	it("changes only the fields given", async () => {
+		const sendCommand = peopleWs();
+		const server = buildHarness({ env: WRITE, ws: { sendCommand } });
+		await server.call("ha_set_person", { person_id: "sofie", user_id: null });
+		expect(sendCommand).toHaveBeenLastCalledWith({ type: "person/update", person_id: "sofie", user_id: null });
+	});
+
+	it("creates a person with a name and trackers", async () => {
+		const sendCommand = peopleWs();
+		const server = buildHarness({ env: WRITE, ws: { sendCommand } });
+		const body = jsonOf(
+			await server.call("ha_set_person", { name: "Guest", device_trackers: ["device_tracker.guest_phone"] })
+		);
+		expect(sendCommand).toHaveBeenLastCalledWith({
+			type: "person/create",
+			name: "Guest",
+			device_trackers: ["device_tracker.guest_phone"]
+		});
+		expect(body.created).toBe(true);
+	});
+
+	it("refuses a new person without a name, and trackers that are not device_tracker entities", async () => {
+		const sendCommand = peopleWs();
+		const server = buildHarness({ env: WRITE, ws: { sendCommand } });
+		expect((await server.call("ha_set_person", { device_trackers: [] })).isError).toBe(true);
+		const wrong = await server.call("ha_set_person", {
+			person_id: "sofie",
+			add_device_trackers: ["sensor.s21_battery"]
+		});
+		expect(wrong.isError).toBe(true);
+		expect(textOf(wrong)).toMatch(/sensor\.s21_battery/);
+		expect(sendCommand).not.toHaveBeenCalledWith(expect.objectContaining({ type: "person/update" }));
+	});
+
+	it("refuses to edit or delete a configuration.yaml person, and says why", async () => {
+		const sendCommand = peopleWs();
+		const server = buildHarness({ env: WRITE, ws: { sendCommand } });
+		for (const [tool, args] of [
+			["ha_set_person", { person_id: "gran", name: "Granny" }],
+			["ha_delete_person", { person_id: "gran" }]
+		] as const) {
+			const result = await server.call(tool, args);
+			expect(result.isError).toBe(true);
+			expect(textOf(result)).toMatch(/configuration\.yaml/);
+		}
+		expect(sendCommand.mock.calls.every(([cmd]) => cmd.type === "person/list")).toBe(true);
+	});
+
+	it("deletes a stored person by id, and refuses an unknown one", async () => {
+		const sendCommand = peopleWs(() => null);
+		const server = buildHarness({ env: WRITE, ws: { sendCommand } });
+		expect(jsonOf(await server.call("ha_delete_person", { person_id: "sofie" }))).toEqual({
+			deleted: true,
+			person_id: "sofie",
+			name: "Sofie"
+		});
+		expect(sendCommand).toHaveBeenLastCalledWith({ type: "person/delete", person_id: "sofie" });
+		expect((await server.call("ha_delete_person", { person_id: "nobody" })).isError).toBe(true);
+	});
+
+	it("refuses every change without config-write", async () => {
+		const sendCommand = peopleWs();
+		const server = buildHarness({ ws: { sendCommand } });
+		for (const [tool, args] of [
+			["ha_set_person", { person_id: "sofie", remove_device_trackers: ["device_tracker.s21"] }],
+			["ha_delete_person", { person_id: "sofie" }]
+		] as const) {
+			expect((await server.call(tool, args)).isError).toBe(true);
+		}
+		expect(sendCommand).not.toHaveBeenCalled();
+	});
+});

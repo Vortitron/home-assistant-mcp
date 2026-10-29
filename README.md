@@ -243,6 +243,14 @@ Supervisor tools above. Adding a repository only registers it; call
 `ha_hacs_download_repository` afterwards to install it, and restart Home
 Assistant if it's a new integration or add-on domain.
 
+### People
+
+| Tool | Description |
+| --- | --- |
+| `ha_list_people` | List the people (Settings → People): linked user, device trackers, and whether each can be edited here (not if defined in configuration.yaml). |
+| `ha_set_person` | Create or change a person: name, linked user, picture and device trackers. `add_device_trackers` / `remove_device_trackers` swap one tracker at a time, such as an old phone for a new one. Needs `HA_ALLOW_CONFIG_WRITE`. |
+| `ha_delete_person` | Delete a person; its user and trackers stay. Needs `HA_ALLOW_CONFIG_WRITE`. |
+
 ### Users
 
 | Tool | Description |

@@ -10,6 +10,7 @@ import type {
 	HaTarget
 } from "./types.js";
 import type { HaWsClient } from "./wsClient.js";
+import { PROBE_TIMEOUT_MS, explainRestart } from "./restart.js";
 
 /**
  * Thrown for any non-2xx Home Assistant REST response. Carries the HTTP status
@@ -69,6 +70,26 @@ export class HaApiError extends Error {
 		this.name = "HaApiError";
 		this.status = status;
 		this.body = body;
+	}
+}
+
+/**
+ * A call that failed because Home Assistant is restarting (or not answering
+ * the way it does while it restarts), with the failure explained. See
+ * `ha/restart.ts`. Status 503 so code that treats a 404 as "no such thing"
+ * does not mistake a restart's nginx 404 page for an answer.
+ */
+export class HaRestartingError extends HaApiError {
+	/** Core state Home Assistant reported (e.g. "STARTING"), or null when it did not answer at all. */
+	readonly coreState: string | null;
+	/** The original failure, briefly, for debugging. */
+	readonly original: string;
+
+	constructor(message: string, coreState: string | null, original: string) {
+		super(message, 503, "");
+		this.name = "HaRestartingError";
+		this.coreState = coreState;
+		this.original = original;
 	}
 }
 
@@ -208,7 +229,21 @@ export function createHaRestClient(
 	logger: Logger,
 	wsClient?: HaWsClient
 ): HaRestClient {
+	/**
+	 * A request whose failure, if it looks like a restart, is checked once
+	 * against /api/config and explained (see ha/restart.ts).
+	 */
 	async function request<T>(path: string, options: HaRequestOptions = {}): Promise<T> {
+		try {
+			return await rawRequest<T>(path, options);
+		} catch (error) {
+			const probe =
+				path === "/api/config" ? null : () => rawRequest<HaConfig>("/api/config", { timeoutMs: PROBE_TIMEOUT_MS });
+			throw await explainRestart(error, probe, { network: true });
+		}
+	}
+
+	async function rawRequest<T>(path: string, options: HaRequestOptions = {}): Promise<T> {
 		const method = options.method ?? "GET";
 		const url = `${config.haUrl}${path}${buildQuery(options.query)}`;
 		const controller = new AbortController();

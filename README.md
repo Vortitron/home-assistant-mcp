@@ -62,6 +62,7 @@ policy (see [Safety](#safety)).
 | `ha_list_automations` | Automations with entity_id, unique id, state, last-triggered. |
 | `ha_get_automation` | Full automation config (triggers/conditions/actions) for an automation made in the editor. One written in a YAML package or included file is named as such, with what to search for to find its file. |
 | `ha_check_config` | Validate the configuration (Check configuration). |
+| `ha_wait_until_running` | Wait (up to 120 s) for Home Assistant to finish restarting, checking its core state every 5 s. While it restarts, the other tools say "Home Assistant is restarting (core state: …)" or "not answering — it may be restarting" instead of a raw 502, nginx 404 or WebSocket error. |
 | `ha_get_system_log` | **Deduplicated, structured errors** — level, logger, source, count, first/last seen. Start here. |
 | `ha_get_error_log` | Tail of the raw Home Assistant error log. |
 | `ha_get_supervisor_log` | Add-on / Core / Supervisor / host logs (HAOS or Supervised). |

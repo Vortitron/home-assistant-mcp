@@ -2,7 +2,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { Config } from "../config.js";
 import type { Logger } from "../logger.js";
 import type { HaRestClient } from "../ha/restClient.js";
-import { HaApiError } from "../ha/restClient.js";
+import { HaApiError, HaRestartingError } from "../ha/restClient.js";
 import { VomeHomeError } from "../vomehome/client.js";
 import type { HaWsClient } from "../ha/wsClient.js";
 import type { EsphomeClient } from "../esphome/client.js";
@@ -41,6 +41,10 @@ export function errorResult(message: string): CallToolResult {
 }
 
 export function toErrorMessage(error: unknown): string {
+	// Already says what happened and carries the original detail itself.
+	if (error instanceof HaRestartingError) {
+		return error.message;
+	}
 	if (error instanceof HaApiError || error instanceof VomeHomeError || error instanceof NodeRedError) {
 		const body = error.body ? ` Body: ${error.body.slice(0, 800)}` : "";
 		return `${error.message}${error.status ? ` (status ${error.status})` : ""}.${body}`;

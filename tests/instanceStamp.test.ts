@@ -8,7 +8,7 @@ import {
 	withInstanceStamp
 } from "../src/tools/instanceStamp.js";
 import type { ToolContext } from "../src/tools/helpers.js";
-import { HaApiError } from "../src/ha/restClient.js";
+import { HaApiError, HaRestartingError } from "../src/ha/restClient.js";
 
 /**
  * Every reply must say which Home Assistant answered it.
@@ -65,6 +65,33 @@ describe("the stamp names the home, not just the id", () => {
 		const text = appendStamp({ content: [] }, await createIdentityReader(ctx)()).content.at(-1)?.text ?? "";
 		expect(text).toContain("UNVERIFIED");
 		expect(text).toContain("Do not assume");
+	});
+
+	it("says a restart is a restart, not an unverified identity", async () => {
+		// "identity UNVERIFIED — do not assume this reply came from the
+		// instance you meant" on every reply while a home restarts taught
+		// agents to distrust the stamp, or to ignore it.
+		const ctx = {
+			instances: { activeId: () => "748d339f" },
+			rest: {
+				getConfig: async () => {
+					throw new HaRestartingError("Home Assistant is not answering — it may be restarting", null, "502");
+				}
+			}
+		} as unknown as ToolContext;
+		const text = appendStamp({ content: [] }, await createIdentityReader(ctx)()).content.at(-1)?.text ?? "";
+		expect(text).toContain("target=748d339f");
+		expect(text).toMatch(/Home Assistant is restarting or not answering; identity not checked/);
+		expect(text).not.toContain("UNVERIFIED");
+	});
+
+	it("notes a home that answered while still starting", async () => {
+		const identity = createIdentityReader(ctxWith({ location_name: "Home", version: "2026.11.0", state: "STARTING" }));
+		const text = appendStamp({ content: [] }, await identity()).content.at(-1)?.text ?? "";
+		expect(text).toContain('home="Home"');
+		expect(text).toContain("core=STARTING");
+		const running = createIdentityReader(ctxWith({ location_name: "Home", state: "RUNNING" }));
+		expect(appendStamp({ content: [] }, await running()).content.at(-1)?.text).not.toContain("core=");
 	});
 
 	it("does not disturb a payload a caller parses", async () => {

@@ -5,6 +5,8 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { evaluateConfigWrite } from "../safety.js";
+import { HaApiError, HaRestartingError } from "../ha/restClient.js";
+import { explainRestart } from "../ha/restart.js";
 import { errorResult, jsonResult, runTool, textResult, type ToolContext } from "./helpers.js";
 
 /**
@@ -57,7 +59,11 @@ async function filesRequest<T>(
 	});
 	const text = await response.text();
 	if (!response.ok) {
-		throw new Error(`${init.method} ${path} failed (${response.status}): ${text.slice(0, 400)}`);
+		const message = `${init.method} ${path} failed (${response.status}): ${text.slice(0, 400)}`;
+		// Files ride the same route as everything else, so a restart fails
+		// them the same way; say so rather than show the relay's 502.
+		const explained = await explainRestart(new HaApiError(message, response.status, text), () => ctx.rest.getConfig());
+		throw explained instanceof HaRestartingError ? explained : new Error(message);
 	}
 	return (text ? JSON.parse(text) : undefined) as T;
 }
@@ -521,7 +527,8 @@ export function registerConfigFileTools(server: McpServer, ctx: ToolContext): vo
 				"servers and cannot see your files; there this tool reads nothing and answers with the equivalent " +
 				"REST upload (curl) to run where the file is.\n\n" +
 				"Requires the ha:files scope. A successful write does not apply the change: restart Home Assistant " +
-				"or reload the relevant domain where that matters (files under www/ are served at /local/ at once).",
+				"or reload the relevant domain where that matters. Files under www/ are served at /local/ straight away, " +
+				"unless the www folder itself is new since Home Assistant started: then it needs one restart first.",
 			inputSchema: {
 				instance_id: z
 					.string()

@@ -3,7 +3,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { loadConfig } from "../src/config.js";
 import { createLogger } from "../src/logger.js";
-import { HaApiError, type HaRestClient } from "../src/ha/restClient.js";
+import { HaApiError, HaRestartingError, type HaRestClient } from "../src/ha/restClient.js";
 import { commandTimeoutMs, type HaWsClient } from "../src/ha/wsClient.js";
 import { SLOW_SUPERVISOR_TIMEOUT_SECONDS, defaultSupervisorTimeout, supervisorLogTarget } from "../src/tools/addons.js";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -1640,6 +1640,33 @@ describe("ha_upload_file", () => {
 		expect(text).toContain(`file=@${local}`);
 		expect(text).not.toContain("secret on the server");
 		expect(fetchMock).not.toHaveBeenCalled();
+	});
+});
+
+describe("tools while Home Assistant restarts", () => {
+	it("say it is restarting instead of showing the raw failure", async () => {
+		const getStates = vi.fn(async () => {
+			throw new HaRestartingError("Home Assistant is restarting (core state: NOT_RUNNING). Retry in about 60 seconds.", "NOT_RUNNING", "502");
+		});
+		const server = buildHarness({ rest: { getStates } });
+		const text = textOf(await server.call("ha_list_entities", {}));
+		expect(text).toMatch(/^Tool 'ha_list_entities' failed: Home Assistant is restarting \(core state: NOT_RUNNING\)/);
+		expect(text).not.toMatch(/status 503/);
+	});
+
+	it("config files say so too, after one check of the core state", async () => {
+		vi.stubGlobal("fetch", vi.fn(async () =>
+			new Response(JSON.stringify({ error: "Home Assistant is offline (no relay connection)." }), { status: 502 })
+		));
+		const getConfig = vi.fn(async () => ({ state: "STARTING" }));
+		const server = buildHarness({
+			env: { HA_TOKEN: "", VOMEHOME_TOKEN: "vh_test", VOMEHOME_INSTANCE_ID: "rly-1" },
+			rest: { getConfig }
+		});
+		const text = textOf(await server.call("ha_list_config_files", {}));
+		expect(text).toMatch(/Home Assistant is restarting \(core state: STARTING\)/);
+		expect(getConfig).toHaveBeenCalled();
+		vi.unstubAllGlobals();
 	});
 });
 

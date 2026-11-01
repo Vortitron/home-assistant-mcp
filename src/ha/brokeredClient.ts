@@ -10,6 +10,7 @@ import {
 } from "./restClient.js";
 import type { HaImage, HaRestClient, HaServiceCallResult, HistoryParams, LogbookParams } from "./restClient.js";
 import { commandTimeoutMs, type HaWsClient } from "./wsClient.js";
+import { PROBE_TIMEOUT_MS, explainRestart } from "./restart.js";
 import type {
 	HaApiStatus,
 	HaArea,
@@ -93,7 +94,21 @@ export function createBrokeredHaRestClient(
 ): HaRestClient {
 	const base = `${config.vomehome.apiUrl}/api/v1/instances/${encodeURIComponent(instanceId)}/ha`;
 
+	/**
+	 * A broker call whose failure, if it looks like the home restarting, is
+	 * checked once against the home's /api/config and explained (see
+	 * ha/restart.ts). Network errors reaching Vome itself are left alone.
+	 */
 	async function broker<T>(path: string, options: BrokerRequestOptions = {}): Promise<T> {
+		try {
+			return await rawBroker<T>(path, options);
+		} catch (error) {
+			const probe = path === "/config" ? null : () => rawBroker<HaConfig>("/config", { timeoutMs: PROBE_TIMEOUT_MS });
+			throw await explainRestart(error, probe);
+		}
+	}
+
+	async function rawBroker<T>(path: string, options: BrokerRequestOptions = {}): Promise<T> {
 		const method = options.method ?? "GET";
 		const url = `${base}${path}`;
 		const controller = new AbortController();

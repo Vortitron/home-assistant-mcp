@@ -2,6 +2,8 @@ import { z } from "zod";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ToolContext } from "./helpers.js";
+import { HaRestartingError } from "../ha/restClient.js";
+import { isNotRunning } from "../ha/restart.js";
 
 /**
  * Stamp every tool reply with which Home Assistant answered it.
@@ -42,7 +44,15 @@ interface Identity {
 	home?: string;
 	version?: string;
 	components?: number;
+	/** Core state, only when it is not RUNNING (Home Assistant answered while still starting). */
+	core?: string;
 	error?: string;
+	/**
+	 * The identity read failed the way a restart fails. Not an identity
+	 * problem, and said so in those words: "UNVERIFIED" on every reply while a
+	 * home restarts taught agents to distrust (or ignore) the stamp.
+	 */
+	restarting?: boolean;
 }
 
 interface CacheEntry {
@@ -54,6 +64,12 @@ interface CacheEntry {
 export const STAMP_PREFIX = "[vome-instance]";
 
 function renderStamp(identity: Identity): string {
+	if (identity.restarting) {
+		return (
+			`${STAMP_PREFIX} target=${identity.id} — Home Assistant is restarting or not answering; ` +
+			`identity not checked.`
+		);
+	}
 	if (identity.error) {
 		return (
 			`${STAMP_PREFIX} target=${identity.id} — identity UNVERIFIED ` +
@@ -64,6 +80,7 @@ function renderStamp(identity: Identity): string {
 	if (identity.home !== undefined) bits.push(`home=${JSON.stringify(identity.home)}`);
 	if (identity.version !== undefined) bits.push(`ha=${identity.version}`);
 	if (identity.components !== undefined) bits.push(`components=${identity.components}`);
+	if (identity.core !== undefined) bits.push(`core=${identity.core}`);
 	return `${STAMP_PREFIX} ${bits.join(" ")}`;
 }
 
@@ -89,19 +106,25 @@ export function createIdentityReader(ctx: ToolContext): () => Promise<Identity> 
 				location_name?: string;
 				version?: string;
 				components?: unknown[];
+				state?: unknown;
 			};
 			result = {
 				id,
 				home: config?.location_name,
 				version: config?.version,
-				components: Array.isArray(config?.components) ? config.components.length : undefined
+				components: Array.isArray(config?.components) ? config.components.length : undefined,
+				...(isNotRunning(config?.state) ? { core: config.state } : {})
 			};
 		} catch (error) {
 			// Never let the stamp fail the tool it is describing. An
 			// unverified stamp that says so is more use than no stamp: it
 			// tells the reader the reply cannot be trusted to be from the
 			// instance they asked for.
-			result = { id, error: error instanceof Error ? error.message : String(error) };
+			result = {
+				id,
+				error: error instanceof Error ? error.message : String(error),
+				...(error instanceof HaRestartingError ? { restarting: true } : {})
+			};
 			// Logged, because the reader only sees the stamp: a run of
 			// unverified replies on 14 Oct left no trace of why.
 			ctx.logger?.warn(`Instance stamp: could not read ${id}'s identity: ${describe(error)}`);

@@ -72,6 +72,19 @@ services. Portal side (`portal/ha_proxy_api.py`) needed a new route too —
 the same alphabet (already noted where the options-flow route reuses it for
 the same reason).
 
+Restarts (`ha/restart.ts`, November 2026): while Home Assistant restarts every
+route fails its own way (nginx's HTML 404 on a hosted VM, the portal's 502, "no
+relay connection", "WebSocket upgrade failed: 404", a refused connection). The
+direct REST/WS clients, the brokered client and the config-file route run each
+restart-shaped failure through `explainRestart`: one `/api/config` check, then
+`HaRestartingError` ("restarting (core state: …)" when HA answers not-RUNNING,
+"not answering — it may be restarting" when it doesn't answer either), else the
+original error. Status 503, so 404-as-"not found" logic never sees a restart's
+nginx page. The instance stamp says "restarting or not answering; identity not
+checked" rather than UNVERIFIED. `ha_wait_until_running` polls up to 120 s.
+A home offline for good looks the same as a restart from here, hence the hedged
+wording when there is no core state to go on.
+
 Logs/diagnostics (`tools/logs.ts`) prefers Home Assistant's *structured* error
 store (`system_log/list` over WS) to the raw log tail: deduplicated records with
 level/logger/source/count, tracebacks reduced to their final line unless

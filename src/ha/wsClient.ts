@@ -2,6 +2,7 @@ import WebSocket from "ws";
 import type { Config } from "../config.js";
 import type { Logger } from "../logger.js";
 import type { HaArea, HaDevice, HaEntityRegistryEntry } from "./types.js";
+import { PROBE_TIMEOUT_MS, explainRestart } from "./restart.js";
 
 /**
  * A command that names its own `timeout` (seconds — Home Assistant's
@@ -161,7 +162,33 @@ export function createHaWsClient(config: Config, logger: Logger): HaWsClient {
 		return connecting;
 	}
 
+	/** Home Assistant's /api/config over REST: the one check made when a command fails like a restart. */
+	async function probeCore(): Promise<{ state?: unknown }> {
+		const controller = new AbortController();
+		const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
+		try {
+			const response = await fetch(`${config.haUrl}/api/config`, {
+				headers: { Authorization: `Bearer ${config.haToken}` },
+				signal: controller.signal
+			});
+			if (!response.ok) {
+				throw new Error(`Unexpected server response: ${response.status}`);
+			}
+			return (await response.json()) as { state?: unknown };
+		} finally {
+			clearTimeout(timer);
+		}
+	}
+
 	async function sendCommand<T>(command: Record<string, unknown>): Promise<T> {
+		try {
+			return await rawSendCommand<T>(command);
+		} catch (error) {
+			throw await explainRestart(error, probeCore, { network: true });
+		}
+	}
+
+	async function rawSendCommand<T>(command: Record<string, unknown>): Promise<T> {
 		const ws = await connect();
 		const id = nextId++;
 		return new Promise<T>((resolve, reject) => {

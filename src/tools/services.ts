@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { SafetyConfig } from "../config.js";
 import type { HaTarget } from "../ha/types.js";
-import { SERVICE_MAX_TIMEOUT_SECONDS, splitServiceResult } from "../ha/restClient.js";
+import { RESPONSE_BY_DEFAULT_DOMAINS, SERVICE_MAX_TIMEOUT_SECONDS, splitServiceResult } from "../ha/restClient.js";
 import { evaluateDomainWrite, extractDomain } from "../safety.js";
 import { errorResult, jsonResult, runTool, type ToolContext } from "./helpers.js";
 
@@ -109,7 +109,7 @@ export function registerServiceTools(server: McpServer, ctx: ToolContext): void 
 		{
 			title: "Call a service",
 			description:
-				"Call a Home Assistant service to change state (e.g. domain='light', service='turn_on', data={ brightness_pct: 60 }, target={ entity_id: 'light.kitchen' }). Refused unless writes are enabled, and blocked for denied domains. Returns the entities that changed, and service_response for services that return data.",
+				"Call a Home Assistant service to change state (e.g. domain='light', service='turn_on', data={ brightness_pct: 60 }, target={ entity_id: 'light.kitchen' }). Refused unless writes are enabled, and blocked for denied domains. Returns the entities that changed, and service_response for services that return data (shell_command's stdout, stderr and returncode included).",
 			inputSchema: {
 				domain: z.string().describe("Service domain, e.g. 'light', 'switch', 'climate'."),
 				service: z.string().describe("Service name, e.g. 'turn_on', 'set_temperature'."),
@@ -135,11 +135,20 @@ export function registerServiceTools(server: McpServer, ctx: ToolContext): void 
 					.describe(
 						"How long to wait for the service to answer (default 15 s, at most 50). For slow actions: " +
 							"ai_task.generate_data with an image attached, a script that waits, a cloud call."
+					),
+				return_response: z
+					.boolean()
+					.optional()
+					.describe(
+						"Ask for the service's own response (service_response in the result). On by default for " +
+							"shell_command, whose stdout, stderr and returncode come back this way; set it for a " +
+							"script or other service whose response is optional. A service with no response is " +
+							"called without it."
 					)
 			},
 			annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true }
 		},
-		async ({ domain, service, data, target, timeout_seconds }) =>
+		async ({ domain, service, data, target, timeout_seconds, return_response }) =>
 			runTool(ctx.logger, "ha_call_service", async () => {
 				// Per-instance write policy (deny/allow domains stay global).
 				const safety = ctx.instances.currentSafety();
@@ -172,7 +181,10 @@ export function registerServiceTools(server: McpServer, ctx: ToolContext): void 
 					);
 				}
 				const { changed, response } = splitServiceResult(
-					await ctx.rest.callService(domain, service, data ?? {}, target, { timeoutSeconds: timeout_seconds })
+					await ctx.rest.callService(domain, service, data ?? {}, target, {
+						timeoutSeconds: timeout_seconds,
+						returnResponse: return_response ?? RESPONSE_BY_DEFAULT_DOMAINS.has(domain)
+					})
 				);
 				return jsonResult({
 					called: `${domain}.${service}`,

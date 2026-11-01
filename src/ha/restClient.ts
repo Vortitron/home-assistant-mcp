@@ -37,6 +37,22 @@ export function splitServiceResult(raw: unknown): { changed: HaState[]; response
 	return { changed: [] };
 }
 
+/** HA's 400 for ?return_response on a service that has no response. */
+export function refusesReturnResponse(error: unknown): boolean {
+	return (
+		error instanceof HaApiError &&
+		error.status === 400 &&
+		/does not (support|return) responses/i.test(`${error.body} ${error.message}`)
+	);
+}
+
+/**
+ * Services whose response is optional and is the point of calling them, so
+ * it is asked for unless the caller says otherwise: shell_command's stdout
+ * was otherwise lost (GamlaBio, Oct 2026).
+ */
+export const RESPONSE_BY_DEFAULT_DOMAINS: ReadonlySet<string> = new Set(["shell_command"]);
+
 /** HA's 400 for a service that only works with ?return_response. */
 export function wantsReturnResponse(error: unknown): boolean {
 	return error instanceof HaApiError && error.status === 400 && /return_response/.test(error.body);
@@ -88,6 +104,12 @@ export interface ServiceCallOptions {
 	 * the portal ends a request at 60 s.
 	 */
 	timeoutSeconds?: number;
+	/**
+	 * Ask for the service's own response (HA's ?return_response). shell_command
+	 * returns stdout, stderr and returncode only this way. A service with no
+	 * response refuses the flag; the call is then made without it.
+	 */
+	returnResponse?: boolean;
 }
 
 export const SERVICE_MAX_TIMEOUT_SECONDS = 50;
@@ -254,6 +276,21 @@ export function createHaRestClient(
 			}
 		}
 		const path = `/api/services/${encodeURIComponent(domain)}/${encodeURIComponent(service)}`;
+		if (options?.returnResponse) {
+			try {
+				return await request<HaServiceCallResult>(path, {
+					method: "POST",
+					body,
+					query: { return_response: "true" },
+					timeoutMs
+				});
+			} catch (error) {
+				if (!refusesReturnResponse(error)) {
+					throw error;
+				}
+				return request<HaServiceCallResult>(path, { method: "POST", body, timeoutMs });
+			}
+		}
 		try {
 			return await request<HaServiceCallResult>(path, { method: "POST", body, timeoutMs });
 		} catch (error) {

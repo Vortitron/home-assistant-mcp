@@ -232,7 +232,7 @@ be revoked early at any time.
 | Tool | Description |
 | --- | --- |
 | `ha_hacs_info` | HACS version, stage, and whether it has pending background tasks. |
-| `ha_hacs_list_repositories` | List repositories HACS knows about (optionally filtered by category). |
+| `ha_hacs_list_repositories` | List repositories the store knows about. Installed ones only by default, trimmed to id, name, category, installed/available version and `pending_update`; `installed_only: false` or `search` looks through the catalogue, `categories` and `limit` (default 100) narrow it, `full: true` returns raw rows. |
 | `ha_hacs_add_repository` | Add a custom repository by `owner/repo` and category. Confirms by re-listing, since HACS acks even a failed add. Needs `HA_ALLOW_CONFIG_WRITE`. |
 | `ha_hacs_download_repository` | Install (or update) a tracked repository — the step that actually writes its files. Needs `HA_ALLOW_CONFIG_WRITE`. |
 | `ha_hacs_remove_repository` | Uninstall a repository's files and stop tracking it. Needs `HA_ALLOW_CONFIG_WRITE`. |

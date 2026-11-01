@@ -1363,7 +1363,9 @@ describe("hacs", () => {
 	});
 
 	it("lists repositories, optionally filtered by category", async () => {
-		const sendCommand = preMarketplace(async () => [{ id: "1", full_name: "me/repo", category: "integration" }]);
+		const sendCommand = preMarketplace(async () => [
+			{ id: "1", full_name: "me/repo", category: "integration", installed: true }
+		]);
 		const server = buildHarness({ ws: { sendCommand } });
 
 		const body = jsonOf(await server.call("ha_hacs_list_repositories", { categories: ["integration"] }));
@@ -1371,6 +1373,112 @@ describe("hacs", () => {
 		expect(sendCommand).toHaveBeenCalledWith({
 			type: "hacs/repositories/list",
 			categories: ["integration"]
+		});
+	});
+
+	describe("listing a big catalogue (the 4 MB reply)", () => {
+		// A raw HACS row: everything the store knows, most of it noise for an agent.
+		const raw = (id: number, installed: boolean, extra: Record<string, unknown> = {}) => ({
+			id: String(id),
+			name: `Repo ${id}`,
+			full_name: `owner/repo-${id}`,
+			category: id % 2 ? "integration" : "plugin",
+			installed,
+			custom: false,
+			description: "x".repeat(400),
+			topics: ["home-assistant", "hacs"],
+			authors: ["@someone"],
+			stars: 1234,
+			downloads: 99,
+			installed_version: installed ? "1.0.0" : null,
+			available_version: "1.1.0",
+			pending_upgrade: installed,
+			...extra
+		});
+		const catalogue = [
+			...Array.from({ length: 3000 }, (_, i) => raw(i + 10, false)),
+			raw(1, true),
+			raw(2, true, { pending_upgrade: false, available_version: "1.0.0" })
+		];
+
+		it("returns only installed repositories by default, trimmed to the useful fields", async () => {
+			const sendCommand = preMarketplace(async () => catalogue);
+			const server = buildHarness({ ws: { sendCommand } });
+
+			const result = await server.call("ha_hacs_list_repositories", {});
+			const body = jsonOf(result);
+			expect(body.total_known).toBe(3002);
+			expect(body.installed).toBe(2);
+			expect(body.count).toBe(2);
+			expect(body.filters.installed_only).toBe(true);
+			expect(body.note).toMatch(/3000 repositories .* not installed/);
+			expect(body.repositories[0]).toEqual({
+				id: "1",
+				name: "Repo 1",
+				full_name: "owner/repo-1",
+				category: "integration",
+				installed: true,
+				installed_version: "1.0.0",
+				available_version: "1.1.0",
+				pending_update: true,
+				custom: false
+			});
+			expect(body.repositories[1].pending_update).toBe(false);
+			expect(textOf(result).length).toBeLessThan(2000);
+		});
+
+		it("searches the whole catalogue when given a search, bounded by limit", async () => {
+			const sendCommand = preMarketplace(async () => catalogue);
+			const server = buildHarness({ ws: { sendCommand } });
+
+			const body = jsonOf(await server.call("ha_hacs_list_repositories", { search: "REPO-30", limit: 5 }));
+			expect(body.filters.installed_only).toBe(false);
+			expect(body.matched).toBe(21); // repo-30, repo-300..309, repo-3000..3009
+			expect(body.count).toBe(5);
+			expect(body.truncated).toBe(true);
+			expect(body.note).toMatch(/first 5 of 21/);
+			expect(body.repositories[0].description).toBeUndefined();
+		});
+
+		it("still lists everything with installed_only=false, and raw rows with full=true", async () => {
+			const sendCommand = preMarketplace(async () => catalogue);
+			const server = buildHarness({ ws: { sendCommand } });
+
+			const all = jsonOf(await server.call("ha_hacs_list_repositories", { installed_only: false }));
+			expect(all.matched).toBe(3002);
+			expect(all.count).toBe(100);
+
+			const fullRows = jsonOf(await server.call("ha_hacs_list_repositories", { full: true }));
+			expect(fullRows.repositories[0].description).toHaveLength(400);
+		});
+
+		it("works the same on the Marketplace, whose rows may name versions differently", async () => {
+			const sendCommand = vi.fn(async (command: Record<string, unknown>) => {
+				if (command.type === "marketplace/repositories/list") {
+					return [
+						{ id: "7", full_name: "me/card", category: "plugin", installed: true, version_installed: "2.0", latest_version: "2.1" },
+						{ id: "8", full_name: "me/other", category: "plugin", installed: false }
+					];
+				}
+				return { version: "2026.11.0" };
+			});
+			const server = buildHarness({ ws: { sendCommand } });
+
+			const body = jsonOf(await server.call("ha_hacs_list_repositories", {}));
+			expect(body.store).toBe("marketplace");
+			expect(body.repositories).toEqual([
+				{
+					id: "7",
+					name: "me/card",
+					full_name: "me/card",
+					category: "plugin",
+					installed: true,
+					installed_version: "2.0",
+					available_version: "2.1",
+					pending_update: true
+				}
+			]);
+			expect(sendCommand).not.toHaveBeenCalledWith(expect.objectContaining({ type: "hacs/repositories/list" }));
 		});
 	});
 

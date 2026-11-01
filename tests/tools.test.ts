@@ -1043,6 +1043,31 @@ describe("config files", () => {
 	});
 });
 
+describe("ha_list_config_files paging and totals", () => {
+	const BROKERED = { HA_TOKEN: "", VOMEHOME_TOKEN: "vh_test", VOMEHOME_INSTANCE_ID: "rly-1" };
+
+	it("asks the home for one folder and filters, pages and totals what came back", async () => {
+		const entries = [
+			{ name: "packages", path: "packages", is_dir: true, size: null },
+			...Array.from({ length: 499 }, (_, i) => ({ name: `f${i}.yaml`, path: `f${i}.yaml`, is_dir: false, size: 2 }))
+		];
+		const fetchMock = vi.fn(async () => new Response(JSON.stringify({ path: "", entries, truncated: true }), { status: 200 }));
+		vi.stubGlobal("fetch", fetchMock);
+		const server = buildHarness({ env: BROKERED });
+
+		const body = jsonOf(await server.call("ha_list_config_files", { glob: "f1*.yaml", offset: 10, limit: 5 }));
+		expect(String((fetchMock.mock.calls[0] as unknown[])[0])).toMatch(/\/ha\/files\/list\?path=$/);
+		expect(body.total_entries).toBe(500);
+		expect(body.total_bytes).toBe(998);
+		expect(body.truncated).toBe(true);
+		expect(body.note).toMatch(/first 500 entries/);
+		expect(body.matched).toBe(111); // f1, f10-f19, f100-f199
+		expect(body.entries).toHaveLength(5);
+		expect(body.next_offset).toBe(15);
+		vi.unstubAllGlobals();
+	});
+});
+
 describe("ha_write_config_file names its target", () => {
 	const BROKERED = {
 		HA_TOKEN: "",

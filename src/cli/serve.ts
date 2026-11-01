@@ -30,7 +30,8 @@ import { createToolContext } from "../context.js";
 import { createVomeHomeClient, VomeHomeError } from "../vomehome/client.js";
 import { registerAllTools } from "../tools/index.js";
 import { SERVER_NAME, SERVER_VERSION } from "../version.js";
-import { createInstanceMemory, stateDirectoryFromEnv } from "./instanceMemory.js";
+import { createInstanceMemory, stateDirectoryFromEnv, type RememberedInstance } from "./instanceMemory.js";
+import type { InstanceChoice } from "../tools/helpers.js";
 
 /** A problem with the caller's token, reported as 401/403 rather than 500. */
 class TokenError extends Error {
@@ -77,6 +78,8 @@ interface Session {
 	tokenKey: string;
 	/** The instance this session is currently targeting. */
 	activeId: () => string;
+	/** The instance the caller explicitly switched to, or null (see InstanceManager.chosenId). */
+	chosenId: () => string | null;
 	/** The instance it started on, so an explicit switch can be told from the default. */
 	startedOn: string;
 	lastSeen: number;
@@ -322,16 +325,27 @@ export async function startMcpHttpServer(args: ServeArgs, logger: Logger): Promi
 		if (pinned && !ids.includes(pinned)) {
 			logger.warn(`${clientName} pins instance ${pinned}, which this token cannot reach; ignoring the pin`);
 		}
-		const active =
+		// Whether the instance is online is checked on the first tool call, not
+		// here (instanceCheck.ts): it needs the portal's slower live probe, and
+		// a session should open fast. `source` tells that check whether the
+		// start was somebody's choice (kept, with a warning) or just the first
+		// on the list (swapped for an online one, and said so).
+		const choice: InstanceChoice =
 			pinned && ids.includes(pinned)
-				? pinned
+				? { source: "pinned" }
 				: remembered && ids.includes(remembered.instanceId)
-					? remembered.instanceId
+					? { source: "remembered" }
+					: { source: "default" };
+		const active =
+			choice.source === "pinned"
+				? (pinned as string)
+				: choice.source === "remembered"
+					? (remembered as RememberedInstance).instanceId
 					: (ids[0] as string);
-		if (remembered && active === remembered.instanceId && ids[0] !== active) {
+		if (choice.source === "remembered" && ids[0] !== active) {
 			logger.debug(`Restored active instance ${active} for a reconnecting ${clientName}`);
 		}
-		return createToolContext(loadConfig(sessionEnv(token, active, ids)), logger);
+		return createToolContext(loadConfig(sessionEnv(token, active, ids)), logger, { instanceChoice: choice });
 	}
 
 	async function dropSession(sessionId: string): Promise<void> {
@@ -365,6 +379,7 @@ export async function startMcpHttpServer(args: ServeArgs, logger: Logger): Promi
 					tokenHash: hashToken(token),
 					tokenKey: memoryKey,
 					activeId: () => ctx.instances.activeId(),
+					chosenId: () => ctx.instances.chosenId(),
 					startedOn: ctx.instances.activeId(),
 					lastSeen: Date.now()
 				});
@@ -433,9 +448,12 @@ export async function startMcpHttpServer(args: ServeArgs, logger: Logger): Promi
 				// token overwrote each other continuously and a third inherited
 				// whichever wrote last. Reading it back after the request is
 				// still how a vomehome_use_instance is noticed, without the
-				// transport needing to know that tool exists.
-				const now = existing.activeId();
-				if (now !== existing.startedOn) {
+				// transport needing to know that tool exists. Only an explicit
+				// switch counts: when the session moved itself off an offline
+				// default (instanceCheck.ts), nobody chose where it landed, so
+				// that must not become the next session's start.
+				const now = existing.chosenId();
+				if (now !== null && now !== existing.startedOn) {
 					lastActiveByToken.set(existing.tokenKey, now);
 				}
 				return;

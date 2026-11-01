@@ -17,9 +17,13 @@ import { createUnavailableEsphomeClient } from "./esphome/client.js";
 import { createNodeRedClient } from "./nodered/client.js";
 import { createVomeHomeClient } from "./vomehome/client.js";
 import { createInstanceManager } from "./vomehome/instances.js";
-import type { ToolContext } from "./tools/helpers.js";
+import type { InstanceChoice, ToolContext } from "./tools/helpers.js";
 
-export function createToolContext(config: Config, logger: Logger): ToolContext {
+export function createToolContext(
+	config: Config,
+	logger: Logger,
+	options: { instanceChoice?: InstanceChoice } = {}
+): ToolContext {
 	// Direct mode gets a single HA client; brokered mode routes per-instance via
 	// the manager. Either way `instances.rest` is the stable client the tools use.
 	// A small ref breaks the circular init (ws callbacks need the manager before
@@ -55,7 +59,8 @@ export function createToolContext(config: Config, logger: Logger): ToolContext {
 		esphome,
 		nodered,
 		vomehome,
-		instances
+		instances,
+		...(config.brokered && options.instanceChoice ? { instanceChoice: options.instanceChoice } : {})
 	};
 }
 

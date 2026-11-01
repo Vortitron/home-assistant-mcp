@@ -76,6 +76,18 @@ describe("createVomeHomeClient", () => {
 		expect((init as RequestInit).headers).toMatchObject({ Authorization: "Bearer pat-123" });
 	});
 
+	it("asks for the live probe with ?live=1 and keeps the instance's kind", async () => {
+		const fetchMock = vi.fn(async () =>
+			jsonResponse({ instances: [{ id: "rly-1", kind: "relay", live: { reachable: false, ha_state: null } }] })
+		);
+		vi.stubGlobal("fetch", fetchMock);
+
+		const instances = await enabledClient().listInstances({ live: true });
+
+		expect(fetchMock.mock.calls[0]![0]).toBe("https://vome.io/api/v1/instances?live=1");
+		expect(instances[0]).toMatchObject({ id: "rly-1", kind: "relay", live: { reachable: false } });
+	});
+
 	it("POSTs a reboot to the instance restart endpoint", async () => {
 		const fetchMock = vi.fn(async () => jsonResponse({ success: true, message: "Server restarting…" }));
 		vi.stubGlobal("fetch", fetchMock);

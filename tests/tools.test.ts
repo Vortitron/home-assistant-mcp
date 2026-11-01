@@ -1191,6 +1191,31 @@ describe("config files", () => {
 	});
 });
 
+describe("ha_list_config_files paging and totals", () => {
+	const BROKERED = { HA_TOKEN: "", VOMEHOME_TOKEN: "vh_test", VOMEHOME_INSTANCE_ID: "rly-1" };
+
+	it("asks the home for one folder and filters, pages and totals what came back", async () => {
+		const entries = [
+			{ name: "packages", path: "packages", is_dir: true, size: null },
+			...Array.from({ length: 499 }, (_, i) => ({ name: `f${i}.yaml`, path: `f${i}.yaml`, is_dir: false, size: 2 }))
+		];
+		const fetchMock = vi.fn(async () => new Response(JSON.stringify({ path: "", entries, truncated: true }), { status: 200 }));
+		vi.stubGlobal("fetch", fetchMock);
+		const server = buildHarness({ env: BROKERED });
+
+		const body = jsonOf(await server.call("ha_list_config_files", { glob: "f1*.yaml", offset: 10, limit: 5 }));
+		expect(String((fetchMock.mock.calls[0] as unknown[])[0])).toMatch(/\/ha\/files\/list\?path=$/);
+		expect(body.total_entries).toBe(500);
+		expect(body.total_bytes).toBe(998);
+		expect(body.truncated).toBe(true);
+		expect(body.note).toMatch(/first 500 entries/);
+		expect(body.matched).toBe(111); // f1, f10-f19, f100-f199
+		expect(body.entries).toHaveLength(5);
+		expect(body.next_offset).toBe(15);
+		vi.unstubAllGlobals();
+	});
+});
+
 describe("ha_write_config_file names its target", () => {
 	const BROKERED = {
 		HA_TOKEN: "",
@@ -1711,7 +1736,9 @@ describe("hacs", () => {
 	});
 
 	it("lists repositories, optionally filtered by category", async () => {
-		const sendCommand = preMarketplace(async () => [{ id: "1", full_name: "me/repo", category: "integration" }]);
+		const sendCommand = preMarketplace(async () => [
+			{ id: "1", full_name: "me/repo", category: "integration", installed: true }
+		]);
 		const server = buildHarness({ ws: { sendCommand } });
 
 		const body = jsonOf(await server.call("ha_hacs_list_repositories", { categories: ["integration"] }));
@@ -1719,6 +1746,112 @@ describe("hacs", () => {
 		expect(sendCommand).toHaveBeenCalledWith({
 			type: "hacs/repositories/list",
 			categories: ["integration"]
+		});
+	});
+
+	describe("listing a big catalogue (the 4 MB reply)", () => {
+		// A raw HACS row: everything the store knows, most of it noise for an agent.
+		const raw = (id: number, installed: boolean, extra: Record<string, unknown> = {}) => ({
+			id: String(id),
+			name: `Repo ${id}`,
+			full_name: `owner/repo-${id}`,
+			category: id % 2 ? "integration" : "plugin",
+			installed,
+			custom: false,
+			description: "x".repeat(400),
+			topics: ["home-assistant", "hacs"],
+			authors: ["@someone"],
+			stars: 1234,
+			downloads: 99,
+			installed_version: installed ? "1.0.0" : null,
+			available_version: "1.1.0",
+			pending_upgrade: installed,
+			...extra
+		});
+		const catalogue = [
+			...Array.from({ length: 3000 }, (_, i) => raw(i + 10, false)),
+			raw(1, true),
+			raw(2, true, { pending_upgrade: false, available_version: "1.0.0" })
+		];
+
+		it("returns only installed repositories by default, trimmed to the useful fields", async () => {
+			const sendCommand = preMarketplace(async () => catalogue);
+			const server = buildHarness({ ws: { sendCommand } });
+
+			const result = await server.call("ha_hacs_list_repositories", {});
+			const body = jsonOf(result);
+			expect(body.total_known).toBe(3002);
+			expect(body.installed).toBe(2);
+			expect(body.count).toBe(2);
+			expect(body.filters.installed_only).toBe(true);
+			expect(body.note).toMatch(/3000 repositories .* not installed/);
+			expect(body.repositories[0]).toEqual({
+				id: "1",
+				name: "Repo 1",
+				full_name: "owner/repo-1",
+				category: "integration",
+				installed: true,
+				installed_version: "1.0.0",
+				available_version: "1.1.0",
+				pending_update: true,
+				custom: false
+			});
+			expect(body.repositories[1].pending_update).toBe(false);
+			expect(textOf(result).length).toBeLessThan(2000);
+		});
+
+		it("searches the whole catalogue when given a search, bounded by limit", async () => {
+			const sendCommand = preMarketplace(async () => catalogue);
+			const server = buildHarness({ ws: { sendCommand } });
+
+			const body = jsonOf(await server.call("ha_hacs_list_repositories", { search: "REPO-30", limit: 5 }));
+			expect(body.filters.installed_only).toBe(false);
+			expect(body.matched).toBe(21); // repo-30, repo-300..309, repo-3000..3009
+			expect(body.count).toBe(5);
+			expect(body.truncated).toBe(true);
+			expect(body.note).toMatch(/first 5 of 21/);
+			expect(body.repositories[0].description).toBeUndefined();
+		});
+
+		it("still lists everything with installed_only=false, and raw rows with full=true", async () => {
+			const sendCommand = preMarketplace(async () => catalogue);
+			const server = buildHarness({ ws: { sendCommand } });
+
+			const all = jsonOf(await server.call("ha_hacs_list_repositories", { installed_only: false }));
+			expect(all.matched).toBe(3002);
+			expect(all.count).toBe(100);
+
+			const fullRows = jsonOf(await server.call("ha_hacs_list_repositories", { full: true }));
+			expect(fullRows.repositories[0].description).toHaveLength(400);
+		});
+
+		it("works the same on the Marketplace, whose rows may name versions differently", async () => {
+			const sendCommand = vi.fn(async (command: Record<string, unknown>) => {
+				if (command.type === "marketplace/repositories/list") {
+					return [
+						{ id: "7", full_name: "me/card", category: "plugin", installed: true, version_installed: "2.0", latest_version: "2.1" },
+						{ id: "8", full_name: "me/other", category: "plugin", installed: false }
+					];
+				}
+				return { version: "2026.11.0" };
+			});
+			const server = buildHarness({ ws: { sendCommand } });
+
+			const body = jsonOf(await server.call("ha_hacs_list_repositories", {}));
+			expect(body.store).toBe("marketplace");
+			expect(body.repositories).toEqual([
+				{
+					id: "7",
+					name: "me/card",
+					full_name: "me/card",
+					category: "plugin",
+					installed: true,
+					installed_version: "2.0",
+					available_version: "2.1",
+					pending_update: true
+				}
+			]);
+			expect(sendCommand).not.toHaveBeenCalledWith(expect.objectContaining({ type: "hacs/repositories/list" }));
 		});
 	});
 
@@ -2596,6 +2729,64 @@ describe("open-ended history and logbook windows", () => {
 
 		await server.call("ha_get_history", { entity_ids: ["sensor.x"] });
 		expect((getHistory.mock.calls[2] as any)[0].endTime).toBeUndefined();
+	});
+});
+
+describe("ha_get_logbook filters and limit", () => {
+	/* A night on GamlaBio came back as about 100k rows, with no way to ask for
+	   only the Vome entries or only what mentioned a word. */
+	const night = [
+		...Array.from({ length: 2000 }, (_, i) => ({
+			when: new Date(Date.UTC(2026, 9, 31, 22, 0, i)).toISOString(),
+			name: "Hall sensor",
+			message: "detected motion",
+			entity_id: "binary_sensor.hall",
+			domain: "binary_sensor"
+		})),
+		{ when: "2026-10-31T23:30:00.000Z", name: "Vome", message: "changed configuration.yaml", domain: "vomesync" },
+		{ when: "2026-10-31T23:40:00.000Z", name: "Night heat", message: "triggered by time", entity_id: "automation.night_heat" }
+	];
+
+	it("bounds the reply to the newest entries and says where to continue", async () => {
+		const getLogbook = vi.fn(async () => night);
+		const server = buildHarness({ rest: { getLogbook } as any });
+
+		const body = jsonOf(await server.call("ha_get_logbook", { start_time: "2026-10-31T22:00:00Z", limit: 10 }));
+		expect(body.count).toBe(10);
+		expect(body.count_before_limit).toBe(2002);
+		expect(body.fetched).toBe(2002);
+		expect(body.truncated).toBe(true);
+		expect(body.entries[9].name).toBe("Night heat");
+		expect(body.entries[0].when < body.entries[9].when).toBe(true);
+		expect(body.older_entries_end_time).toBe(body.entries[0].when);
+		expect(body.note).toMatch(/1992 older matching entries/);
+	});
+
+	it("defaults to 500 entries", async () => {
+		const getLogbook = vi.fn(async () => night);
+		const server = buildHarness({ rest: { getLogbook } as any });
+		const body = jsonOf(await server.call("ha_get_logbook", {}));
+		expect(body.count).toBe(500);
+		expect(body.truncated).toBe(true);
+	});
+
+	it("filters by name, domain and text", async () => {
+		const getLogbook = vi.fn(async () => night);
+		const server = buildHarness({ rest: { getLogbook } as any });
+
+		const vome = jsonOf(await server.call("ha_get_logbook", { name: "vome" }));
+		expect(vome.entries.map((e: any) => e.message)).toEqual(["changed configuration.yaml"]);
+		expect(vome.truncated).toBe(false);
+		expect(vome.older_entries_end_time).toBeUndefined();
+
+		// No domain field: taken from the entity_id.
+		const automations = jsonOf(await server.call("ha_get_logbook", { domain: "automation" }));
+		expect(automations.entries.map((e: any) => e.name)).toEqual(["Night heat"]);
+
+		const text = jsonOf(await server.call("ha_get_logbook", { contains: "CONFIGURATION" }));
+		expect(text.count).toBe(1);
+		const byEntity = jsonOf(await server.call("ha_get_logbook", { contains: "night_heat" }));
+		expect(byEntity.count).toBe(1);
 	});
 });
 

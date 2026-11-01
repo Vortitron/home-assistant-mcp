@@ -20,6 +20,8 @@ const silentLogger: Logger = {
 const GOOD_TOKEN = "vh_good_token";
 /** Flipped by a test to simulate a grant being revoked between sessions. */
 let revokeSecondInstance = false;
+/** Instances whose relay the fake portal reports as not connected. */
+const offlineInstances = new Set<string>();
 const NO_INSTANCE_TOKEN = "vh_scopeless_token";
 /** Every config-file request the fake portal saw. */
 const filesRequests: string[] = [];
@@ -48,17 +50,22 @@ async function makeFakePortal(): Promise<FakePortal> {
 			json(401, { error: "bad token" });
 			return;
 		}
-		if (req.url === "/api/v1/instances") {
+		if (req.url === "/api/v1/instances" || req.url === "/api/v1/instances?live=1") {
+			const rows =
+				token === NO_INSTANCE_TOKEN
+					? []
+					: revokeSecondInstance
+						? [{ id: "inst-one", name: "Home", status: "running", kind: "relay" }]
+						: [
+								{ id: "inst-one", name: "Home", status: "running", kind: "relay" },
+								{ id: "inst-two", name: "Cottage", status: "running", kind: "relay" }
+							];
+			// ?live=1 adds the portal's probe, as relay_live() reports it.
+			const live = req.url.endsWith("?live=1");
 			json(200, {
-				instances:
-					token === NO_INSTANCE_TOKEN
-						? []
-						: revokeSecondInstance
-							? [{ id: "inst-one", name: "Home", status: "running" }]
-							: [
-									{ id: "inst-one", name: "Home", status: "running" },
-									{ id: "inst-two", name: "Cottage", status: "running" }
-								]
+				instances: rows.map((row) =>
+					live ? { ...row, live: { reachable: !offlineInstances.has(row.id), ha_state: null, ha_health: null } } : row
+				)
 			});
 			return;
 		}
@@ -164,6 +171,7 @@ describe("MCP HTTP server", () => {
 
 	beforeEach(async () => {
 		revokeSecondInstance = false;
+		offlineInstances.clear();
 		portal = await makeFakePortal();
 		server = await startMcpHttpServer(serveArgs(portal.url), silentLogger);
 		endpoint = `http://127.0.0.1:${server.port}/mcp`;
@@ -384,6 +392,92 @@ describe("MCP HTTP server", () => {
 		const client = await connectTo(`${endpoint}?instance=inst-elsewhere`);
 		expect(await activeOf(client)).toBe("inst-one");
 		await client.close();
+	});
+
+	describe("an offline starting instance", () => {
+		/**
+		 * Reported after a week of use: a retired relay instance, long
+		 * disconnected, was the remembered target, so a session's first calls
+		 * failed with 502s and nothing said why.
+		 */
+		const textsOf = (result: Awaited<ReturnType<Client["callTool"]>>): string[] =>
+			(result.content as { text: string }[]).map((block) => block.text);
+		const noticeOf = (result: Awaited<ReturnType<Client["callTool"]>>): string =>
+			textsOf(result).find((text) => text.startsWith("[vome-notice]")) ?? "";
+
+		it("keeps a remembered choice that is offline, and says so loudly", async () => {
+			const first = await connectTo(endpoint);
+			await first.callTool({ name: "vomehome_use_instance", arguments: { instance_id: "inst-two" } });
+			await first.close();
+
+			offlineInstances.add("inst-two");
+			const again = await connectTo(endpoint);
+			const listed = await again.callTool({ name: "vomehome_list_instances", arguments: {} });
+			const body = JSON.parse(textsOf(listed)[0] ?? "{}");
+			// Not moved to another home behind the agent's back...
+			expect(body.active_instance).toBe("inst-two");
+			// ...but told, on the very first reply.
+			expect(noticeOf(listed)).toMatch(/WARNING: this session is targeting inst-two \("Cottage"\), which is OFFLINE/);
+			expect(noticeOf(listed)).toMatch(/relay is not connected/);
+			expect(noticeOf(listed)).toMatch(/remembered from an earlier session/);
+			expect(noticeOf(listed)).toMatch(/Online now: inst-one \("Home"\)/);
+			// And the list itself flags it.
+			const two = body.instances.find((row: { id: string }) => row.id === "inst-two");
+			expect(two).toMatchObject({ offline: true, kind: "relay", live: { reachable: false } });
+			expect(body.instances.find((row: { id: string }) => row.id === "inst-one").offline).toBeUndefined();
+			expect(body.note).toMatch(/active instance inst-two is OFFLINE/);
+
+			// A successful later reply is not nagged again.
+			const second = await again.callTool({ name: "vomehome_list_instances", arguments: {} });
+			expect(noticeOf(second)).toBe("");
+			await again.close();
+		});
+
+		it("keeps a pinned instance that is offline, with the same warning", async () => {
+			offlineInstances.add("inst-two");
+			const pinned = await connectTo(`${endpoint}?instance=inst-two`);
+			const result = await pinned.callTool({ name: "ha_get_config", arguments: {} });
+			expect(textsOf(result)[0]).toContain("Test Cottage");
+			expect(noticeOf(result)).toMatch(/pinned with \?instance=/);
+			await pinned.close();
+		});
+
+		it("moves off an offline default nobody chose, says so, and does not remember it", async () => {
+			offlineInstances.add("inst-one");
+			const client = await connectTo(endpoint);
+			const result = await client.callTool({ name: "ha_get_config", arguments: {} });
+			// The call itself landed on the online home, and the stamp says where.
+			expect(textsOf(result)[0]).toContain("Test Cottage");
+			expect(textsOf(result).some((text) => text.includes("target=inst-two"))).toBe(true);
+			expect(noticeOf(result)).toMatch(/started on inst-two \("Cottage"\), not inst-one \("Home"\)/);
+			expect(noticeOf(result)).toMatch(/nobody had chosen it/);
+			await client.close();
+
+			// The fallback was not the caller's choice, so it is not where the next session starts.
+			offlineInstances.clear();
+			const next = await connectTo(endpoint);
+			expect(await activeOf(next)).toBe("inst-one");
+			await next.close();
+		});
+
+		it("does not second-guess a session whose first call chooses the instance", async () => {
+			offlineInstances.add("inst-one");
+			const client = await connectTo(endpoint);
+			const chosen = await client.callTool({ name: "vomehome_use_instance", arguments: { instance_id: "inst-one" } });
+			expect(noticeOf(chosen)).toBe("");
+			expect(await activeOf(client)).toBe("inst-one");
+			await client.close();
+		});
+
+		it("refuses a first call that names the offline default after the fallback, rather than answering from the other home", async () => {
+			offlineInstances.add("inst-one");
+			const client = await connectTo(endpoint);
+			const result = await client.callTool({ name: "ha_get_config", arguments: { instance_id: "inst-one" } });
+			expect(result.isError).toBe(true);
+			expect(textsOf(result)[0]).toMatch(/targeting "inst-two", but the call names "inst-one"/);
+			expect(noticeOf(result)).toMatch(/switch with vomehome_use_instance/);
+			await client.close();
+		});
 	});
 
 	it("sends progress while an ESPHome build runs, so the client keeps waiting", async () => {

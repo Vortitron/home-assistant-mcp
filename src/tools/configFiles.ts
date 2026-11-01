@@ -8,6 +8,7 @@ import { evaluateConfigWrite } from "../safety.js";
 import { HaApiError, HaRestartingError } from "../ha/restClient.js";
 import { explainRestart } from "../ha/restart.js";
 import { errorResult, jsonResult, runTool, textResult, type ToolContext } from "./helpers.js";
+import { COMPONENT_MAX_ENTRIES, DEFAULT_LIST_LIMIT, shapeListing, type ComponentListing } from "./configListing.js";
 
 /**
  * Files under Home Assistant's config directory — configuration.yaml and its
@@ -395,21 +396,47 @@ export function registerConfigFileTools(server: McpServer, ctx: ToolContext): vo
 			title: "List files in the config directory",
 			description:
 				"List a directory under Home Assistant's config directory. Omit 'path' for the root, " +
-				"where configuration.yaml lives.\n\n" +
+				"where configuration.yaml lives. One folder at a time, folders first: the reply gives " +
+				"total_entries, total_bytes (this folder's own files; subfolders are not counted) and " +
+				"pages with offset/limit. 'glob' filters by name ('*.yaml') or path ('www/**/*.js').\n\n" +
+				"The home lists at most 500 entries of one folder; when it stops there the reply says " +
+				"truncated: true, and the way to see the rest is to list a subfolder.\n\n" +
 				"Requires the ha:files scope, which covers reads as well as writes because these files " +
 				"hold credentials. Home Assistant's internal .storage is never listed.",
 			inputSchema: {
 				path: z
 					.string()
 					.optional()
-					.describe("Directory relative to the config root, e.g. 'packages'. Omit for the root.")
+					.describe("Directory relative to the config root, e.g. 'packages'. Omit for the root."),
+				glob: z
+					.string()
+					.optional()
+					.describe(
+						"Only entries matching this pattern, case-insensitive. Without a '/' it matches the name " +
+							"('*.yaml', 'automations*'); with one, the path ('**/*.html'). Supports * ? ** and {a,b}. " +
+							"Applies to this folder's entries only; it does not search subfolders."
+					),
+				offset: z
+					.number()
+					.int()
+					.min(0)
+					.optional()
+					.describe("Skip this many (matching) entries; use next_offset from the previous reply."),
+				limit: z
+					.number()
+					.int()
+					.positive()
+					.max(COMPONENT_MAX_ENTRIES)
+					.optional()
+					.describe(`Entries to return (default ${DEFAULT_LIST_LIMIT}).`)
 			},
 			annotations: { readOnlyHint: true, openWorldHint: true }
 		},
-		async ({ path }) =>
+		async ({ path, glob, offset, limit }) =>
 			runTool(ctx.logger, "ha_list_config_files", async () => {
 				const query = `?path=${encodeURIComponent(path ?? "")}`;
-				return jsonResult(await filesRequest(ctx, `/list${query}`, { method: "GET" }));
+				const listing = await filesRequest<ComponentListing>(ctx, `/list${query}`, { method: "GET" });
+				return jsonResult(shapeListing(listing, path ?? "", { glob, offset, limit }));
 			})
 	);
 

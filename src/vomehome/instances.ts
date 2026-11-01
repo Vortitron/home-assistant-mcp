@@ -58,6 +58,18 @@ export interface InstanceManager {
 	 * before the request is sent.
 	 */
 	registerCreated(id: string, label?: string): InstanceAccess;
+	/**
+	 * The instance this session explicitly moved to (with `use` or by creating
+	 * one), or null while it is still on the one it started on. The hosted
+	 * server remembers only this, so a fallback the session made on its own
+	 * is never saved as somebody's choice.
+	 */
+	chosenId(): string | null;
+	/**
+	 * Move the session to `id` without counting it as the caller's choice:
+	 * used when the starting default is offline and nobody picked it.
+	 */
+	fallBackTo(id: string): ResolvedTarget;
 }
 
 export function createInstanceManager(
@@ -83,6 +95,8 @@ export function createInstanceManager(
 	let active = brokered
 		? config.vomehome.instanceId || config.vomehome.instances[0]?.id || ""
 		: DIRECT_ID;
+
+	let chosen: string | null = null;
 
 	const clientCache = new Map<string, HaRestClient>();
 
@@ -151,6 +165,14 @@ export function createInstanceManager(
 	}
 
 	function use(instanceId: string): ResolvedTarget {
+		const target = switchTo(instanceId);
+		if (brokered) {
+			chosen = target.id;
+		}
+		return target;
+	}
+
+	function switchTo(instanceId: string): ResolvedTarget {
 		const id = (instanceId ?? "").trim();
 		if (!id) {
 			throw new HaApiError("instance_id is required.", 0, "");
@@ -177,6 +199,7 @@ export function createInstanceManager(
 		registry.set(id, entry);
 		if (brokered) {
 			active = id;
+			chosen = id;
 			clientCache.delete(id);
 		}
 		logger.debug(`Registered created instance ${id} with full access (now active)`);
@@ -226,6 +249,8 @@ export function createInstanceManager(
 		currentSafety: () => safetyFor(active),
 		currentRest,
 		use,
-		registerCreated
+		registerCreated,
+		chosenId: () => chosen,
+		fallBackTo: switchTo
 	};
 }

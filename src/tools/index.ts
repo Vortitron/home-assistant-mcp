@@ -1,6 +1,7 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ToolContext } from "./helpers.js";
 import { withInstanceStamp } from "./instanceStamp.js";
+import { withStartingInstanceCheck } from "./instanceCheck.js";
 import { registerStateTools } from "./states.js";
 import { registerServiceTools } from "./services.js";
 import { registerRegistryTools } from "./registry.js";
@@ -38,10 +39,12 @@ import { registerPeopleTools } from "./people.js";
  * The server is wrapped first so that every tool's reply carries the identity
  * of the Home Assistant that answered it — see ``instanceStamp``. Wrapping
  * here rather than at each call site means a tool added later cannot forget
- * to say where it ran.
+ * to say where it ran. Inside that, the first call checks the starting
+ * instance is online (see ``instanceCheck``); it sits inside so it runs
+ * before the stamp's ``instance_id`` guard.
  */
 export function registerAllTools(rawServer: McpServer, ctx: ToolContext): void {
-	const server = withInstanceStamp(rawServer, ctx);
+	const server = withInstanceStamp(withStartingInstanceCheck(rawServer, ctx), ctx);
 	registerSystemTools(server, ctx);
 	registerStateTools(server, ctx);
 	registerServiceTools(server, ctx);

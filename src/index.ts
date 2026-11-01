@@ -47,7 +47,11 @@ async function main(): Promise<void> {
 		process.exit(1);
 	}
 
-	const ctx = createToolContext(config, logger);
+	// VOMEHOME_INSTANCE_ID is the operator naming a home; without it the first
+	// of VOMEHOME_INSTANCES is just where the list starts.
+	const ctx = createToolContext(config, logger, {
+		instanceChoice: { source: (process.env.VOMEHOME_INSTANCE_ID ?? "").trim() ? "configured" : "default" }
+	});
 	const { ws } = ctx;
 
 	const server = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION });

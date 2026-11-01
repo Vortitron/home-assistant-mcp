@@ -71,7 +71,7 @@ policy (see [Safety](#safety)).
 | `ha_camera_frame` | A camera still decoded and shrunk to a small grid of RGB pixels, for clients that draw pictures in text. |
 | `ha_view_snapshot` | Everything a dashboard view shows in one call: states, rendered templates, history in few points, camera frames. For dashboard clients. |
 | `ha_watch_states` | Wait for state changes instead of polling: the home's Vome component sends them as they happen (through VomeHome). |
-| `ha_get_logbook` | Human-readable logbook entries. |
+| `ha_get_logbook` | Human-readable logbook entries, filtered by `entity_id`, `contains` (message, name or entity_id), `name` (e.g. `Vome`) and `domain`. At most `limit` (default 500) come back, the newest, with `count_before_limit`, `truncated` and `older_entries_end_time` to read further back. |
 | `ha_get_energy_prefs` | The Energy dashboard's setup (grid, solar, battery, gas, water, tracked devices) with the dashboard's own validation. |
 | `ha_list_traces` | Recent automation/script runs and how each one stopped. |
 | `ha_get_trace` | Step-by-step detail for one run, with `failed_at` naming the blocking step. |
@@ -95,7 +95,7 @@ policy (see [Safety](#safety)).
 | `ha_upload_file` | Copy a file already on disk (a web page, an image, a package) into the config directory: read from the MCP server's own filesystem, sent as text or base64 as it needs, at most 2 MiB, written and checked like `ha_write_config_file`. Local (npx) servers only — the hosted MCP can't see your files and answers with the equivalent `curl` upload (needs `ha:files`). |
 | `ha_delete_config_file` | Delete one file under the config directory. Never a directory, and never `configuration.yaml`, `secrets.yaml` or Home Assistant's database. Names its target home like a write (needs `ha:files`, and Vome add-on 0.3.55 / integration 0.9.39 on the home). |
 | `ha_edit_config_file` | Change part of a text file in place: exact find-and-replace edits that must each match once, then the same check-and-restore as a write. For a three-line change to a large file (needs `ha:files`). |
-| `ha_list_config_files` | List a directory under the config directory (needs `ha:files`). |
+| `ha_list_config_files` | List a directory under the config directory, folders first: `glob` filters by name (`*.yaml`) or path (`**/*.html`), `offset`/`limit` page (default 200), and the reply gives `total_entries`, `total_bytes` (this folder's own files, not subfolders) and `truncated` when the home stopped at its 500-entry cap (needs `ha:files`). |
 | `ha_move_config_file` | Move or rename one file under the config directory, creating folders on the way; never overwrites unless asked. Names its target home like a write (needs `ha:files`, and Vome add-on 0.3.66 / integration 0.9.51). |
 | `ha_delete_helper` | Delete a stored helper. Refuses when the id looks shared with a `configuration.yaml` helper, because Home Assistant would take that entity down with it. |
 | `ha_delete_automation` | Delete an automation (also needs `HA_ALLOW_CONFIG_WRITE`). |
@@ -182,7 +182,7 @@ stays behind a full browser login on the portal.
 
 | Tool | Description |
 | --- | --- |
-| `vomehome_list_instances` | List your HA instances with status, tier, URL, live health, the **active** instance and per-instance client write/config access. |
+| `vomehome_list_instances` | List your HA instances with kind (hosted, relay, external), status, tier, URL, live health, the **active** instance and per-instance client write/config access. One the portal cannot reach right now (a disconnected relay, a retired home) is marked `offline: true` with a note. |
 | `vomehome_get_instance` | Details + live status for one instance. |
 | `vomehome_use_instance` | Switch which instance the `ha_*` tools target (multi-instance — see [Several instances from one token](#several-instances-from-one-token)). |
 | `vomehome_reboot_instance` | Reboot an instance's VM (write-gated). |
@@ -234,7 +234,7 @@ be revoked early at any time.
 | Tool | Description |
 | --- | --- |
 | `ha_hacs_info` | HACS version, stage, and whether it has pending background tasks. |
-| `ha_hacs_list_repositories` | List repositories HACS knows about (optionally filtered by category). |
+| `ha_hacs_list_repositories` | List repositories the store knows about. Installed ones only by default, trimmed to id, name, category, installed/available version and `pending_update`; `installed_only: false` or `search` looks through the catalogue, `categories` and `limit` (default 100) narrow it, `full: true` returns raw rows. |
 | `ha_hacs_add_repository` | Add a custom repository by `owner/repo` and category. Confirms by re-listing, since HACS acks even a failed add. Needs `HA_ALLOW_CONFIG_WRITE`. |
 | `ha_hacs_download_repository` | Install (or update) a tracked repository — the step that actually writes its files. Needs `HA_ALLOW_CONFIG_WRITE`. |
 | `ha_hacs_remove_repository` | Uninstall a repository's files and stop tracking it. Needs `HA_ALLOW_CONFIG_WRITE`. |
@@ -637,6 +637,15 @@ always start on a particular home, pin it in the URL:
 
 The pin is where sessions start, not a lock: `vomehome_use_instance` still
 switches. It only counts while your token can reach that instance.
+
+On a session's first tool call the MCP asks the portal whether the starting
+instance is online. If it is offline and was somebody's choice (a pin, a
+remembered switch, or `VOMEHOME_INSTANCE_ID`), the session stays on it and the
+reply carries a `[vome-notice] WARNING` naming the instances that are online;
+the warning comes back on error replies until you switch. If nobody chose it
+(it was just first on the account), the session starts on the first online
+instance instead and the reply says so. That fallback is not remembered as a
+choice.
 
 ### Verify
 

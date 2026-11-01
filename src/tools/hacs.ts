@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { evaluateConfigWrite } from "../safety.js";
-import { errorResult, jsonResult, runTool, type ToolContext } from "./helpers.js";
+import { errorResult, jsonResult, runTool, truncate, type ToolContext } from "./helpers.js";
 
 /**
  * The community store: HACS, or from Home Assistant 2026.11 the Marketplace
@@ -36,6 +36,48 @@ interface HacsRepositoryRow {
 	installed: boolean;
 	name?: string;
 	[key: string]: unknown;
+}
+
+/** Rows returned by ha_hacs_list_repositories unless the caller asks for more. */
+const DEFAULT_REPOSITORY_LIMIT = 100;
+
+/** The first of these keys the row has, so HACS's and the Marketplace's names both work. */
+function firstOf(row: Record<string, unknown>, keys: string[]): unknown {
+	for (const key of keys) {
+		if (row[key] !== undefined && row[key] !== null && row[key] !== "") {
+			return row[key];
+		}
+	}
+	return undefined;
+}
+
+/**
+ * The fields an agent acts on. A raw row carries the description, topics,
+ * authors, stars, download counts and more: across a catalogue of thousands
+ * that was a 4 MB reply, almost none of which answers "what is installed and
+ * what has an update".
+ */
+export function summariseRepository(row: HacsRepositoryRow): Record<string, unknown> {
+	const raw = row as Record<string, unknown>;
+	const out: Record<string, unknown> = {
+		id: row.id,
+		name: row.name ?? row.full_name,
+		full_name: row.full_name,
+		category: row.category,
+		installed: row.installed === true
+	};
+	const installedVersion = firstOf(raw, ["installed_version", "version_installed"]);
+	const availableVersion = firstOf(raw, ["available_version", "latest_version", "version_available"]);
+	const pending = firstOf(raw, ["pending_upgrade", "pending_update", "update_available"]);
+	if (installedVersion !== undefined) out.installed_version = installedVersion;
+	if (availableVersion !== undefined) out.available_version = availableVersion;
+	if (pending !== undefined) {
+		out.pending_update = pending === true;
+	} else if (row.installed === true && installedVersion !== undefined && availableVersion !== undefined) {
+		out.pending_update = String(installedVersion) !== String(availableVersion);
+	}
+	if (typeof raw.custom === "boolean") out.custom = raw.custom;
+	return out;
 }
 
 type Store = "marketplace" | "hacs";
@@ -183,23 +225,78 @@ export function registerHacsTools(server: McpServer, ctx: ToolContext): void {
 		{
 			title: "List community store repositories",
 			description:
-				"List repositories the community store (the Marketplace, or HACS before 2026.11) knows about — " +
-				"both custom and catalogue ones it has fetched metadata for. Each row includes id, full_name, category, installed, and whether it's custom. " +
-				"Use this to find a repository's id before calling ha_hacs_download_repository or " +
-				"ha_hacs_remove_repository.",
+				"List repositories the community store (the Marketplace, or HACS before 2026.11) knows about. " +
+				"By default only INSTALLED ones, trimmed to the useful fields (id, name, full_name, category, " +
+				"installed, installed_version, available_version, pending_update, custom): the full catalogue " +
+				"is thousands of repositories and came back as megabytes. Pass installed_only=false (or a " +
+				"'search') to look through the catalogue too, and full=true for the store's raw rows. " +
+				"ha_hacs_download_repository and ha_hacs_remove_repository take an 'owner/repo' name as well " +
+				"as an id, so a catalogue repository can be installed without listing it first.",
 			inputSchema: {
 				categories: z
 					.array(z.string())
 					.optional()
-					.describe("Filter to these categories (e.g. ['integration']). Omit for all.")
+					.describe("Filter to these categories (e.g. ['integration']). Omit for all."),
+				installed_only: z
+					.boolean()
+					.optional()
+					.describe(
+						"Only repositories installed in this home. Default true, or false when 'search' is given " +
+							"(searching is usually for something to install)."
+					),
+				search: z
+					.string()
+					.optional()
+					.describe("Case-insensitive substring matched against full_name and name, e.g. 'mushroom'."),
+				limit: z
+					.number()
+					.int()
+					.positive()
+					.optional()
+					.describe(`Maximum repositories to return (default ${DEFAULT_REPOSITORY_LIMIT}).`),
+				full: z
+					.boolean()
+					.optional()
+					.describe("Return the store's raw rows instead of the trimmed fields (large: descriptions, topics, ...).")
 			},
 			annotations: { readOnlyHint: true, openWorldHint: true }
 		},
-		async ({ categories }) =>
+		async ({ categories, installed_only, search, limit, full }) =>
 			runTool(ctx.logger, "ha_hacs_list_repositories", async () => {
 				const store = await openStore(ctx);
 				const repositories = await listRepositories(store, categories);
-				return jsonResult({ store: store.store, count: repositories.length, repositories });
+				const needle = search?.trim().toLowerCase() ?? "";
+				const installedOnly = installed_only ?? needle.length === 0;
+				const matched = repositories.filter(
+					(row) =>
+						(!installedOnly || row.installed === true) &&
+						(!needle ||
+							String(row.full_name ?? "").toLowerCase().includes(needle) ||
+							String(row.name ?? "").toLowerCase().includes(needle))
+				);
+				const page = truncate(matched, limit ?? DEFAULT_REPOSITORY_LIMIT);
+				const installedCount = repositories.filter((row) => row.installed === true).length;
+				const hints: string[] = [];
+				if (installedOnly && repositories.length > installedCount) {
+					hints.push(
+						`${repositories.length - installedCount} repositories the store knows about are not installed and ` +
+							"are left out; pass installed_only=false, or a 'search', to see them."
+					);
+				}
+				if (page.truncated) {
+					hints.push(`Only the first ${page.returned} of ${page.total} matches are shown; narrow with 'search' or 'categories', or raise 'limit'.`);
+				}
+				return jsonResult({
+					store: store.store,
+					total_known: repositories.length,
+					installed: installedCount,
+					filters: { installed_only: installedOnly, search: search ?? null, categories: categories ?? null },
+					count: page.returned,
+					matched: page.total,
+					truncated: page.truncated,
+					...(hints.length > 0 ? { note: hints.join(" ") } : {}),
+					repositories: full ? page.items : page.items.map(summariseRepository)
+				});
 			})
 	);
 

@@ -2384,6 +2384,64 @@ describe("open-ended history and logbook windows", () => {
 	});
 });
 
+describe("ha_get_logbook filters and limit", () => {
+	/* A night on GamlaBio came back as about 100k rows, with no way to ask for
+	   only the Vome entries or only what mentioned a word. */
+	const night = [
+		...Array.from({ length: 2000 }, (_, i) => ({
+			when: new Date(Date.UTC(2026, 9, 31, 22, 0, i)).toISOString(),
+			name: "Hall sensor",
+			message: "detected motion",
+			entity_id: "binary_sensor.hall",
+			domain: "binary_sensor"
+		})),
+		{ when: "2026-10-31T23:30:00.000Z", name: "Vome", message: "changed configuration.yaml", domain: "vomesync" },
+		{ when: "2026-10-31T23:40:00.000Z", name: "Night heat", message: "triggered by time", entity_id: "automation.night_heat" }
+	];
+
+	it("bounds the reply to the newest entries and says where to continue", async () => {
+		const getLogbook = vi.fn(async () => night);
+		const server = buildHarness({ rest: { getLogbook } as any });
+
+		const body = jsonOf(await server.call("ha_get_logbook", { start_time: "2026-10-31T22:00:00Z", limit: 10 }));
+		expect(body.count).toBe(10);
+		expect(body.count_before_limit).toBe(2002);
+		expect(body.fetched).toBe(2002);
+		expect(body.truncated).toBe(true);
+		expect(body.entries[9].name).toBe("Night heat");
+		expect(body.entries[0].when < body.entries[9].when).toBe(true);
+		expect(body.older_entries_end_time).toBe(body.entries[0].when);
+		expect(body.note).toMatch(/1992 older matching entries/);
+	});
+
+	it("defaults to 500 entries", async () => {
+		const getLogbook = vi.fn(async () => night);
+		const server = buildHarness({ rest: { getLogbook } as any });
+		const body = jsonOf(await server.call("ha_get_logbook", {}));
+		expect(body.count).toBe(500);
+		expect(body.truncated).toBe(true);
+	});
+
+	it("filters by name, domain and text", async () => {
+		const getLogbook = vi.fn(async () => night);
+		const server = buildHarness({ rest: { getLogbook } as any });
+
+		const vome = jsonOf(await server.call("ha_get_logbook", { name: "vome" }));
+		expect(vome.entries.map((e: any) => e.message)).toEqual(["changed configuration.yaml"]);
+		expect(vome.truncated).toBe(false);
+		expect(vome.older_entries_end_time).toBeUndefined();
+
+		// No domain field: taken from the entity_id.
+		const automations = jsonOf(await server.call("ha_get_logbook", { domain: "automation" }));
+		expect(automations.entries.map((e: any) => e.name)).toEqual(["Night heat"]);
+
+		const text = jsonOf(await server.call("ha_get_logbook", { contains: "CONFIGURATION" }));
+		expect(text.count).toBe(1);
+		const byEntity = jsonOf(await server.call("ha_get_logbook", { contains: "night_heat" }));
+		expect(byEntity.count).toBe(1);
+	});
+});
+
 describe("scripts", () => {
 	const WRITE = { HA_ALLOW_WRITE: "true", HA_ALLOW_CONFIG_WRITE: "true" };
 

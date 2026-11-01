@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { HaApiError } from "../ha/restClient.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { HaSystemLogEntry } from "../ha/types.js";
+import type { HaLogbookEntry, HaSystemLogEntry } from "../ha/types.js";
 import { evaluateDiagnosticWrite } from "../safety.js";
 import {
 	errorResult,
@@ -14,6 +14,58 @@ import {
 
 const DEFAULT_TAIL_LINES = 200;
 const DEFAULT_SYSTEM_LOG_LIMIT = 25;
+
+const DEFAULT_LOGBOOK_LIMIT = 500;
+
+interface LogbookFilters {
+	contains?: string;
+	name?: string;
+	domain?: string;
+}
+
+/** The entry's domain, or the one its entity_id implies. */
+function logbookDomain(entry: HaLogbookEntry): string {
+	if (typeof entry.domain === "string" && entry.domain) {
+		return entry.domain;
+	}
+	const entityId = typeof entry.entity_id === "string" ? entry.entity_id : "";
+	return entityId.includes(".") ? (entityId.split(".")[0] as string) : "";
+}
+
+export function matchesLogbookFilters(entry: HaLogbookEntry, filters: LogbookFilters): boolean {
+	const lower = (value: unknown): string => (typeof value === "string" ? value.toLowerCase() : "");
+	if (filters.name && lower(entry.name) !== filters.name.trim().toLowerCase()) {
+		return false;
+	}
+	if (filters.domain && logbookDomain(entry).toLowerCase() !== filters.domain.trim().toLowerCase()) {
+		return false;
+	}
+	if (filters.contains) {
+		const needle = filters.contains.toLowerCase();
+		if (![entry.message, entry.name, entry.entity_id].some((field) => lower(field).includes(needle))) {
+			return false;
+		}
+	}
+	return true;
+}
+
+/** An entry's time in ms: REST gives ISO strings, the WebSocket API epoch seconds. */
+function logbookTime(when: unknown): number {
+	if (typeof when === "number") return when * 1000;
+	return typeof when === "string" ? Date.parse(when) : NaN;
+}
+
+/** Oldest first, which is how Home Assistant returns them; sorted only when every entry has a time. */
+function inTimeOrder(entries: HaLogbookEntry[]): HaLogbookEntry[] {
+	const times = entries.map((entry) => logbookTime(entry.when));
+	if (times.some((time) => Number.isNaN(time))) {
+		return entries;
+	}
+	return entries
+		.map((entry, index) => ({ entry, time: times[index] as number, index }))
+		.sort((a, b) => a.time - b.time || a.index - b.index)
+		.map(({ entry }) => entry);
+}
 
 /** Log levels ordered least → most severe, for "at least this level" filtering. */
 const LEVELS = ["debug", "info", "warning", "error", "critical"] as const;
@@ -406,23 +458,73 @@ export function registerLogTools(server: McpServer, ctx: ToolContext): void {
 			title: "Get logbook",
 			description:
 				"Return human-readable logbook entries (what happened and when), optionally filtered to a single entity and time window. " +
-				"Times are ISO 8601; with a start_time and no end_time it runs up to now (Home Assistant on its own would stop 24 hours after the start).",
+				"Times are ISO 8601; with a start_time and no end_time it runs up to now (Home Assistant on its own would stop 24 hours after the start). " +
+				`A busy home logs tens of thousands of entries a night, so filter with contains / name / domain, and at most 'limit' (default ${DEFAULT_LOGBOOK_LIMIT}) entries come back: ` +
+				"the newest ones, in time order. When more matched, truncated is true and older_entries_end_time says where to continue (pass it as end_time).",
 			inputSchema: {
-				entity_id: z.string().optional().describe("Restrict to a single entity_id."),
+				entity_id: z.string().optional().describe("Restrict to a single entity_id (filtered by Home Assistant itself)."),
 				start_time: z.string().optional().describe("ISO 8601 start timestamp."),
-				end_time: z.string().optional().describe("ISO 8601 end timestamp.")
+				end_time: z.string().optional().describe("ISO 8601 end timestamp."),
+				contains: z
+					.string()
+					.optional()
+					.describe("Case-insensitive substring matched against the entry's message, name and entity_id."),
+				name: z
+					.string()
+					.optional()
+					.describe("Only entries with exactly this logbook name, case-insensitive, e.g. 'Vome' or 'Kitchen light'."),
+				domain: z
+					.string()
+					.optional()
+					.describe("Only entries from this domain, e.g. 'automation' or 'light' (the entry's domain, else its entity_id's)."),
+				limit: z
+					.number()
+					.int()
+					.positive()
+					.optional()
+					.describe(`Maximum entries to return, the newest ones (default ${DEFAULT_LOGBOOK_LIMIT}).`)
 			},
 			annotations: { readOnlyHint: true, openWorldHint: true }
 		},
-		async ({ entity_id, start_time, end_time }) =>
+		async ({ entity_id, start_time, end_time, contains, name, domain, limit }) =>
 			runTool(ctx.logger, "ha_get_logbook", async () => {
-				const entries = await ctx.rest.getLogbook({
+				const fetched = await ctx.rest.getLogbook({
 					entityId: entity_id,
 					startTime: start_time,
 					// Same 24-hour default as history; see ha_get_history.
 					endTime: end_time ?? (start_time ? new Date().toISOString() : undefined)
 				});
-				return jsonResult({ count: entries.length, entries });
+				const all = Array.isArray(fetched) ? fetched : [];
+				const filters = { contains, name, domain };
+				const matched = inTimeOrder(all.filter((entry) => matchesLogbookFilters(entry, filters)));
+				const max = Math.max(1, limit ?? DEFAULT_LOGBOOK_LIMIT);
+				// Keep the newest: "what just happened" is the usual question, and
+				// older_entries_end_time lets the caller walk back from there.
+				const entries = matched.length > max ? matched.slice(matched.length - max) : matched;
+				const truncated = matched.length > entries.length;
+				const oldestTime = logbookTime(entries[0]?.when);
+				const oldestKept = Number.isNaN(oldestTime) ? undefined : new Date(oldestTime).toISOString();
+				return jsonResult({
+					count: entries.length,
+					count_before_limit: matched.length,
+					fetched: all.length,
+					truncated,
+					filters: {
+						entity_id: entity_id ?? null,
+						contains: contains ?? null,
+						name: name ?? null,
+						domain: domain ?? null
+					},
+					...(truncated
+						? {
+								older_entries_end_time: oldestKept ?? null,
+								note:
+									`${matched.length - entries.length} older matching entries were left out. Narrow the window or the ` +
+									"filters, or call again with end_time set to older_entries_end_time to read further back."
+							}
+						: {}),
+					entries
+				});
 			})
 	);
 }

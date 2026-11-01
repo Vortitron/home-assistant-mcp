@@ -70,7 +70,7 @@ policy (see [Safety](#safety)).
 | `ha_camera_frame` | A camera still decoded and shrunk to a small grid of RGB pixels, for clients that draw pictures in text. |
 | `ha_view_snapshot` | Everything a dashboard view shows in one call: states, rendered templates, history in few points, camera frames. For dashboard clients. |
 | `ha_watch_states` | Wait for state changes instead of polling: the home's Vome component sends them as they happen (through VomeHome). |
-| `ha_get_logbook` | Human-readable logbook entries. |
+| `ha_get_logbook` | Human-readable logbook entries, filtered by `entity_id`, `contains` (message, name or entity_id), `name` (e.g. `Vome`) and `domain`. At most `limit` (default 500) come back, the newest, with `count_before_limit`, `truncated` and `older_entries_end_time` to read further back. |
 | `ha_get_energy_prefs` | The Energy dashboard's setup (grid, solar, battery, gas, water, tracked devices) with the dashboard's own validation. |
 | `ha_list_traces` | Recent automation/script runs and how each one stopped. |
 | `ha_get_trace` | Step-by-step detail for one run, with `failed_at` naming the blocking step. |

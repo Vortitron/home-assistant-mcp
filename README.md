@@ -180,7 +180,7 @@ stays behind a full browser login on the portal.
 
 | Tool | Description |
 | --- | --- |
-| `vomehome_list_instances` | List your HA instances with status, tier, URL, live health, the **active** instance and per-instance client write/config access. |
+| `vomehome_list_instances` | List your HA instances with kind (hosted, relay, external), status, tier, URL, live health, the **active** instance and per-instance client write/config access. One the portal cannot reach right now (a disconnected relay, a retired home) is marked `offline: true` with a note. |
 | `vomehome_get_instance` | Details + live status for one instance. |
 | `vomehome_use_instance` | Switch which instance the `ha_*` tools target (multi-instance — see [Several instances from one token](#several-instances-from-one-token)). |
 | `vomehome_reboot_instance` | Reboot an instance's VM (write-gated). |
@@ -635,6 +635,15 @@ always start on a particular home, pin it in the URL:
 
 The pin is where sessions start, not a lock: `vomehome_use_instance` still
 switches. It only counts while your token can reach that instance.
+
+On a session's first tool call the MCP asks the portal whether the starting
+instance is online. If it is offline and was somebody's choice (a pin, a
+remembered switch, or `VOMEHOME_INSTANCE_ID`), the session stays on it and the
+reply carries a `[vome-notice] WARNING` naming the instances that are online;
+the warning comes back on error replies until you switch. If nobody chose it
+(it was just first on the account), the session starts on the first online
+instance instead and the reply says so. That fallback is not remembered as a
+choice.
 
 ### Verify
 

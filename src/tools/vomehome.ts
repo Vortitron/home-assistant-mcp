@@ -3,6 +3,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { evaluateConfigWrite } from "../safety.js";
 import type { GuestLinkSummary, VomeHomeInstance } from "../vomehome/client.js";
 import { errorResult, jsonResult, runTool, type ToolContext } from "./helpers.js";
+import { isOffline, offlineReason } from "./instanceCheck.js";
 
 /**
  * Tools for the VomeHome portal: list a user's managed Home Assistant
@@ -16,6 +17,7 @@ function serialiseInstance(instance: VomeHomeInstance): Record<string, unknown> 
 	const out: Record<string, unknown> = { id: instance.id };
 	if (instance.name !== undefined) out.name = instance.name;
 	if (instance.status !== undefined) out.status = instance.status;
+	if (instance.kind !== undefined) out.kind = instance.kind;
 	if (instance.tier !== undefined) out.tier = instance.tier;
 	if (instance.haUrl !== undefined) out.ha_url = instance.haUrl;
 	if (instance.customDomain !== undefined) out.custom_domain = instance.customDomain;
@@ -26,6 +28,12 @@ function serialiseInstance(instance: VomeHomeInstance): Record<string, unknown> 
 		if (instance.live.haState !== undefined) live.ha_state = instance.live.haState;
 		if (instance.live.haHealth !== undefined) live.ha_health = instance.live.haHealth;
 		out.live = live;
+	}
+	if (isOffline(instance)) {
+		out.offline = true;
+		out.offline_note =
+			`Offline: ${offlineReason(instance)}. Home Assistant calls to it fail until it is back. ` +
+			"If this home was replaced or retired (an old relay link, say), remove it in the Vome portal.";
 	}
 	return out;
 }
@@ -52,18 +60,41 @@ export function registerVomeHomeTools(server: McpServer, ctx: ToolContext): void
 		{
 			title: "List VomeHome instances",
 			description:
-				"List the Home Assistant instances on your VomeHome account, with status, tier, HA URL and (where available) live health. Requires VOMEHOME_TOKEN.",
+				"List the Home Assistant instances on your VomeHome account, with kind (hosted VM, relay or external), status, tier, HA URL and live health. " +
+				"An instance the portal cannot reach right now -- a relay whose component is not connected, say, or a retired home still on the account -- is marked offline: true with a note; don't target it. " +
+				"The portal does not report when an instance was last seen, so 'offline' means right now, not for how long. Requires VOMEHOME_TOKEN.",
 			inputSchema: {},
 			annotations: { readOnlyHint: true, openWorldHint: true }
 		},
 		async () =>
 			runTool(ctx.logger, "vomehome_list_instances", async () => {
-				const instances = await ctx.vomehome.listInstances();
+				let live = true;
+				let instances;
+				try {
+					instances = await ctx.vomehome.listInstances({ live: true });
+				} catch (error) {
+					// The live probe touches every home and can be slow; the plain list
+					// is still worth having, with the gap said out loud.
+					ctx.logger.warn(`Live instance list failed, listing without it: ${error instanceof Error ? error.message : String(error)}`);
+					instances = await ctx.vomehome.listInstances();
+					live = false;
+				}
 				const active = ctx.instances.activeId();
+				const activeRow = instances.find((instance) => instance.id === active);
+				const notes = [
+					"client_access shows the MCP's per-instance write/config flags (from VOMEHOME_INSTANCES, the default instance, or auto-granted on create). The server-side token scopes still apply on top."
+				];
+				if (!live) {
+					notes.push("Live status could not be read this time, so offline instances are not flagged.");
+				}
+				if (activeRow && isOffline(activeRow)) {
+					notes.push(`The active instance ${active} is OFFLINE; switch with vomehome_use_instance to one that is not.`);
+				}
 				return jsonResult({
 					count: instances.length,
 					active_instance: active,
-					note: "client_access shows the MCP's per-instance write/config flags (from VOMEHOME_INSTANCES, the default instance, or auto-granted on create). The server-side token scopes still apply on top.",
+					offline_count: instances.filter(isOffline).length,
+					note: notes.join(" "),
 					instances: instances.map((instance) => {
 						const access = ctx.instances.access(instance.id);
 						return {

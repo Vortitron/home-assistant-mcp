@@ -26,6 +26,22 @@ export interface ToolContext {
 	vomehome: VomeHomeClient;
 	/** Multi-instance access manager: active instance + per-instance write/config. */
 	instances: InstanceManager;
+	/**
+	 * How the session's starting instance was picked, when a server set it up
+	 * (stdio from the environment, the hosted server per session). Present, it
+	 * turns on the first-call check that the instance is actually online
+	 * (`instanceCheck.ts`); tests that build a context by hand leave it out.
+	 */
+	instanceChoice?: InstanceChoice;
+}
+
+/**
+ * Where the starting instance came from. Only "default" -- the first one the
+ * account lists, which nobody picked -- may be swapped for an online one;
+ * the others are somebody's choice and are kept, with a warning if offline.
+ */
+export interface InstanceChoice {
+	source: "pinned" | "remembered" | "configured" | "default";
 }
 
 export function textResult(text: string): CallToolResult {

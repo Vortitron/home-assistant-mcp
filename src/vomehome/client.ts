@@ -26,6 +26,8 @@ export interface VomeHomeInstance {
 	id: string;
 	name?: string;
 	status?: string;
+	/** How the portal reaches it: "vome" (hosted VM), "relay" (the home dials in) or "external". */
+	kind?: string;
 	tier?: string;
 	haUrl?: string;
 	customDomain?: string;
@@ -79,7 +81,12 @@ export interface GuestLinkSummary {
 
 export interface VomeHomeClient {
 	isEnabled(): boolean;
-	listInstances(): Promise<VomeHomeInstance[]>;
+	/**
+	 * The account's instances. ``live: true`` asks the portal to probe each one
+	 * (``?live=1``): slower, but the only way to tell an offline home, such as a
+	 * relay whose component is no longer connected, from a working one.
+	 */
+	listInstances(options?: { live?: boolean }): Promise<VomeHomeInstance[]>;
 	getInstance(id: string): Promise<VomeHomeInstance>;
 	restartInstance(id: string): Promise<VomeHomeActionResult>;
 	createInstance(input: CreateInstanceInput): Promise<CreatedVomeHomeInstance>;
@@ -178,6 +185,7 @@ export function normaliseInstance(raw: unknown): VomeHomeInstance {
 		id,
 		name: asString(raw.name),
 		status: asString(raw.status),
+		kind: asString(raw.kind),
 		tier: asString(raw.tier),
 		haUrl: asString(raw.ha_url) ?? asString(raw.haUrl),
 		customDomain: asString(raw.custom_domain) ?? asString(raw.customDomain),
@@ -238,8 +246,10 @@ export function createVomeHomeClient(config: Config, logger: Logger): VomeHomeCl
 		}
 	}
 
-	async function listInstances(): Promise<VomeHomeInstance[]> {
-		const payload = await request<{ instances?: unknown }>(INSTANCES_PATH);
+	async function listInstances(options: { live?: boolean } = {}): Promise<VomeHomeInstance[]> {
+		const payload = await request<{ instances?: unknown }>(
+			options.live ? `${INSTANCES_PATH}?live=1` : INSTANCES_PATH
+		);
 		const list = Array.isArray(payload?.instances) ? payload.instances : [];
 		return list.map(normaliseInstance);
 	}

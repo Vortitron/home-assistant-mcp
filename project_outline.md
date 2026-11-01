@@ -192,11 +192,21 @@ are **implemented** there (PAT system + instances API + brokered HA proxy). All
 require `Authorization: Bearer <pat>`, are CSRF-exempt, and are scoped to the
 token's user and (where relevant) re-check instance ownership.
 
+Offline starting instance (`tools/instanceCheck.ts`, November 2026): on a
+session's first tool call the MCP lists instances with `?live=1`. An offline
+start that somebody chose (`?instance=` pin, remembered switch,
+`VOMEHOME_INSTANCE_ID`) is kept and the reply gets a `[vome-notice]` warning;
+an offline default nobody chose falls back to the first online declared
+instance via `InstanceManager.fallBackTo`, which does not set `chosenId()`,
+so the hosted server (which now remembers only `chosenId()`) never saves the
+fallback. It wraps inside the instance stamp so the stamp's `instance_id`
+guard sees the fallback. `vomehome_list_instances` marks `offline: true`.
+
 Instance management (`portal/instances_api.py`):
 
 | Method | Path | Scope | Response |
 | --- | --- | --- | --- |
-| GET | `/api/v1/instances` | `instances:read` | `{ instances: [{ id, name, status, tier, ha_url, custom_domain, created_at, live? }] }` |
+| GET | `/api/v1/instances[?live=1]` | `instances:read` | `{ instances: [{ id, name, status, kind, tier, ha_url, custom_domain, created_at, live? }] }` — `live` (`reachable`, `ha_state`, `ha_health`) only with `?live=1`; no last-seen time |
 | GET | `/api/v1/instances/{id}` | `instances:read` | `{ instance: {…} }` |
 | POST | `/api/v1/instances/{id}/restart` | `instances:write` | `{ success, message }` |
 | POST | `/api/v1/instances` | `instances:write` | `{ instance: { id, name, status, granted_scopes? } }` — creating PAT is granted full HA access on the new instance |

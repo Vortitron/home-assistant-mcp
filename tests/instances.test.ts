@@ -159,6 +159,16 @@ describe("createInstanceManager (brokered)", () => {
 		expect(mgr.currentSafety()).toMatchObject({ allowWrite: true, allowConfigWrite: true });
 	});
 
+	it("records only an explicit switch as the session's choice", () => {
+		const m = createInstanceManager(loadConfig(BROKER_ENV), logger);
+		expect(m.chosenId()).toBeNull();
+		m.fallBackTo("sbx-plc");
+		expect(m.activeId()).toBe("sbx-plc");
+		expect(m.chosenId()).toBeNull();
+		m.use("rly-house");
+		expect(m.chosenId()).toBe("rly-house");
+	});
+
 	it("routes the rest proxy to whichever instance is active", async () => {
 		const fetchMock = vi.fn(async () => jsonResponse([{ entity_id: "light.k", state: "on", attributes: {} }]));
 		vi.stubGlobal("fetch", fetchMock);
@@ -238,6 +248,33 @@ describe("vomehome multi-instance tools", () => {
 		const sbx = payload.instances.find((i: any) => i.id === "sbx-plc");
 		expect(house).toMatchObject({ active: true, client_access: { write: true, config: false, declared: true } });
 		expect(sbx).toMatchObject({ active: false, client_access: { write: true, config: true, declared: true } });
+	});
+
+	it("flags an instance the portal reports offline, and asks for the live probe", async () => {
+		const listInstances = vi.fn(async () => [
+			{ id: "rly-house", name: "House", kind: "relay", live: { reachable: false } },
+			{ id: "sbx-plc", name: "PLC sandbox", kind: "vome", live: { reachable: true, haState: "running" } }
+		]);
+		const server = brokeredHarness({ listInstances });
+		const payload = jsonOf(await server.call("vomehome_list_instances"));
+		expect(listInstances).toHaveBeenCalledWith({ live: true });
+		expect(payload.offline_count).toBe(1);
+		const house = payload.instances.find((i: any) => i.id === "rly-house");
+		expect(house).toMatchObject({ offline: true, kind: "relay" });
+		expect(house.offline_note).toMatch(/relay is not connected/);
+		expect(payload.instances.find((i: any) => i.id === "sbx-plc").offline).toBeUndefined();
+		expect(payload.note).toMatch(/active instance rly-house is OFFLINE/);
+	});
+
+	it("still lists instances when the live probe fails, and says it could not flag offline ones", async () => {
+		const listInstances = vi.fn(async (options?: { live?: boolean }) => {
+			if (options?.live) throw new Error("timed out");
+			return [{ id: "rly-house", name: "House" }];
+		});
+		const server = brokeredHarness({ listInstances });
+		const payload = jsonOf(await server.call("vomehome_list_instances"));
+		expect(payload.count).toBe(1);
+		expect(payload.note).toMatch(/Live status could not be read/);
 	});
 
 	it("switches the active instance via vomehome_use_instance", async () => {

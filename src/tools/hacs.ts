@@ -139,6 +139,28 @@ async function listRepositories(store: StoreSession, categories?: string[]): Pro
 	return Array.isArray(result) ? (result as HacsRepositoryRow[]) : [];
 }
 
+const DEFAULT_LIST_LIMIT = 50;
+const SLIM_FIELDS = [
+	"id",
+	"full_name",
+	"name",
+	"category",
+	"installed",
+	"installed_version",
+	"available_version",
+	"custom",
+	"pending_upgrade"
+] as const;
+
+/** The fields an agent picks a repository by; the rest is catalogue detail. */
+export function slimRow(row: HacsRepositoryRow): Record<string, unknown> {
+	const out: Record<string, unknown> = {};
+	for (const key of SLIM_FIELDS) {
+		if (row[key] !== undefined) out[key] = row[key];
+	}
+	return out;
+}
+
 /** Resolve a caller-supplied repository reference (an id or "owner/repo") to its row. */
 async function resolveRepository(store: StoreSession, ref: string): Promise<HacsRepositoryRow | null> {
 	const repositories = await listRepositories(store);
@@ -184,22 +206,47 @@ export function registerHacsTools(server: McpServer, ctx: ToolContext): void {
 			title: "List community store repositories",
 			description:
 				"List repositories the community store (the Marketplace, or HACS before 2026.11) knows about — " +
-				"both custom and catalogue ones it has fetched metadata for. Each row includes id, full_name, category, installed, and whether it's custom. " +
-				"Use this to find a repository's id before calling ha_hacs_download_repository or " +
-				"ha_hacs_remove_repository.",
+				"both custom and catalogue ones it has fetched metadata for. Each row is trimmed to id, full_name, " +
+				"name, category, installed, versions, custom and pending_upgrade: the full catalogue with every " +
+				"field ran to 4 MB. Filter with query / installed_only and page with limit / offset; total says " +
+				"how many matched. Use this to find a repository's id before calling ha_hacs_download_repository " +
+				"or ha_hacs_remove_repository.",
 			inputSchema: {
 				categories: z
 					.array(z.string())
 					.optional()
-					.describe("Filter to these categories (e.g. ['integration']). Omit for all.")
+					.describe("Filter to these categories (e.g. ['integration']). Omit for all."),
+				query: z
+					.string()
+					.optional()
+					.describe("Only repositories whose full_name or name contains this (case-insensitive)."),
+				installed_only: z.boolean().optional().describe("Only installed repositories."),
+				limit: z.number().int().positive().max(500).optional().describe("Rows to return (default 50)."),
+				offset: z.number().int().min(0).optional().describe("Rows to skip, for the next page.")
 			},
 			annotations: { readOnlyHint: true, openWorldHint: true }
 		},
-		async ({ categories }) =>
+		async ({ categories, query, installed_only, limit, offset }) =>
 			runTool(ctx.logger, "ha_hacs_list_repositories", async () => {
 				const store = await openStore(ctx);
-				const repositories = await listRepositories(store, categories);
-				return jsonResult({ store: store.store, count: repositories.length, repositories });
+				const needle = (query ?? "").trim().toLowerCase();
+				const matched = (await listRepositories(store, categories)).filter(
+					(row) =>
+						(!installed_only || row.installed) &&
+						(!needle ||
+							(row.full_name ?? "").toLowerCase().includes(needle) ||
+							String(row.name ?? "").toLowerCase().includes(needle))
+				);
+				const start = offset ?? 0;
+				const page = matched.slice(start, start + (limit ?? DEFAULT_LIST_LIMIT)).map(slimRow);
+				return jsonResult({
+					store: store.store,
+					total: matched.length,
+					offset: start,
+					count: page.length,
+					...(start + page.length < matched.length ? { next_offset: start + page.length } : {}),
+					repositories: page
+				});
 			})
 	);
 

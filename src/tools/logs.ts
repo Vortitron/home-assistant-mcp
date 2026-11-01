@@ -410,11 +410,26 @@ export function registerLogTools(server: McpServer, ctx: ToolContext): void {
 			inputSchema: {
 				entity_id: z.string().optional().describe("Restrict to a single entity_id."),
 				start_time: z.string().optional().describe("ISO 8601 start timestamp."),
-				end_time: z.string().optional().describe("ISO 8601 end timestamp.")
+				end_time: z.string().optional().describe("ISO 8601 end timestamp."),
+				search: z
+					.string()
+					.optional()
+					.describe(
+						"Only entries whose name, message, entity_id or context (what triggered it) contains this " +
+							"text, case-insensitive. E.g. 'Saga' or 'triggered by'."
+					),
+				domain: z.string().optional().describe("Only entries for entities in this domain, e.g. 'automation'."),
+				limit: z
+					.number()
+					.int()
+					.positive()
+					.max(5000)
+					.optional()
+					.describe("Return at most this many entries, keeping the newest (default 500).")
 			},
 			annotations: { readOnlyHint: true, openWorldHint: true }
 		},
-		async ({ entity_id, start_time, end_time }) =>
+		async ({ entity_id, start_time, end_time, search, domain, limit }) =>
 			runTool(ctx.logger, "ha_get_logbook", async () => {
 				const entries = await ctx.rest.getLogbook({
 					entityId: entity_id,
@@ -422,7 +437,41 @@ export function registerLogTools(server: McpServer, ctx: ToolContext): void {
 					// Same 24-hour default as history; see ha_get_history.
 					endTime: end_time ?? (start_time ? new Date().toISOString() : undefined)
 				});
-				return jsonResult({ count: entries.length, entries });
+				const matched = filterLogbook(entries, search, domain);
+				const cap = limit ?? DEFAULT_LOGBOOK_LIMIT;
+				// Still oldest first; a cap keeps the newest, which is usually what was asked about.
+				const kept = matched.slice(-cap);
+				return jsonResult({
+					total: matched.length,
+					count: kept.length,
+					...(kept.length < matched.length
+						? { truncated: true, note: "Older entries left out; narrow the time window or raise limit." }
+						: {}),
+					entries: kept
+				});
 			})
 	);
+}
+
+const DEFAULT_LOGBOOK_LIMIT = 500;
+
+/**
+ * The logbook filtered by text and domain. Home Assistant can only narrow it
+ * by entity, so a day of a busy home was every entry or nothing (GamlaBio,
+ * Oct 2026).
+ */
+export function filterLogbook<T extends Record<string, unknown>>(
+	entries: T[],
+	search?: string,
+	domain?: string
+): T[] {
+	const needle = (search ?? "").trim().toLowerCase();
+	const prefix = domain ? `${domain.trim()}.` : "";
+	return entries.filter((entry) => {
+		const entityId = String(entry.entity_id ?? "");
+		if (prefix && !entityId.startsWith(prefix) && entry.domain !== domain) return false;
+		if (!needle) return true;
+		return [entry.name, entry.message, entityId, entry.context_name, entry.context_entity_id, entry.context_event_type]
+			.some((value) => typeof value === "string" && value.toLowerCase().includes(needle));
+	});
 }

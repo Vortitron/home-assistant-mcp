@@ -79,7 +79,8 @@ export interface GuestLinkSummary {
 
 export interface VomeHomeClient {
 	isEnabled(): boolean;
-	listInstances(): Promise<VomeHomeInstance[]>;
+	/** With `live`, each instance carries the portal's live probe (slower: one look per instance). */
+	listInstances(options?: { live?: boolean }): Promise<VomeHomeInstance[]>;
 	getInstance(id: string): Promise<VomeHomeInstance>;
 	restartInstance(id: string): Promise<VomeHomeActionResult>;
 	createInstance(input: CreateInstanceInput): Promise<CreatedVomeHomeInstance>;
@@ -238,8 +239,8 @@ export function createVomeHomeClient(config: Config, logger: Logger): VomeHomeCl
 		}
 	}
 
-	async function listInstances(): Promise<VomeHomeInstance[]> {
-		const payload = await request<{ instances?: unknown }>(INSTANCES_PATH);
+	async function listInstances(options: { live?: boolean } = {}): Promise<VomeHomeInstance[]> {
+		const payload = await request<{ instances?: unknown }>(`${INSTANCES_PATH}${options.live ? "?live=1" : ""}`);
 		const list = Array.isArray(payload?.instances) ? payload.instances : [];
 		return list.map(normaliseInstance);
 	}

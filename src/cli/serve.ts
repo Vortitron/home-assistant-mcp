@@ -79,6 +79,10 @@ interface Session {
 	activeId: () => string;
 	/** The instance it started on, so an explicit switch can be told from the default. */
 	startedOn: string;
+	/** Memory key for this session id, so it can be revived on the same home (see revive). */
+	sessionKey: string;
+	/** The instance last written under sessionKey. */
+	recorded: string;
 	lastSeen: number;
 }
 
@@ -208,6 +212,23 @@ function readBody(req: http.IncomingMessage): Promise<unknown> {
 	});
 }
 
+/**
+ * Puts a fresh transport into the state an initialize would have left it in,
+ * under an existing session id. The SDK has no public way to do this, so it
+ * sets the web-standard transport's own fields, and says false if they are not
+ * where this SDK version kept them; serve.test.ts revives a session for real,
+ * so an SDK change that moves them fails the build rather than the client.
+ */
+function markInitialized(transport: StreamableHTTPServerTransport, sessionId: string): boolean {
+	const inner = (transport as unknown as { _webStandardTransport?: Record<string, unknown> })._webStandardTransport;
+	if (!inner || inner._initialized !== false) {
+		return false;
+	}
+	inner.sessionId = sessionId;
+	inner._initialized = true;
+	return true;
+}
+
 /** A listening MCP HTTP server, so callers (and tests) can shut it down. */
 export interface RunningMcpServer {
 	/** Actual bound port — resolves an ephemeral `port: 0` to a real number. */
@@ -301,7 +322,8 @@ export async function startMcpHttpServer(args: ServeArgs, logger: Logger): Promi
 		// Bootstrap config: the VomeHome client needs only a token and a URL, so
 		// it can be built before any instance is known.
 		const bootstrap = loadConfig(sessionEnv(token, "", []));
-		const ids = (await createVomeHomeClient(bootstrap, logger).listInstances())
+		const vomehome = createVomeHomeClient(bootstrap, logger);
+		const ids = (await vomehome.listInstances())
 			.map((instance) => instance.id)
 			.filter((id) => id.length > 0);
 		if (ids.length === 0) {
@@ -325,11 +347,34 @@ export async function startMcpHttpServer(args: ServeArgs, logger: Logger): Promi
 				? pinned
 				: remembered && ids.includes(remembered.instanceId)
 					? remembered.instanceId
-					: (ids[0] as string);
+					: await firstReachable(vomehome, ids);
 		if (remembered && active === remembered.instanceId && ids[0] !== active) {
 			logger.debug(`Restored active instance ${active} for a reconnecting ${clientName}`);
 		}
 		return createToolContext(loadConfig(sessionEnv(token, active, ids)), logger);
+	}
+
+	/**
+	 * The instance a session with no pin and no memory starts on: the first
+	 * one that is online now. Taking the first on the account picked a retired
+	 * relay that had been offline for weeks, and every call then failed as
+	 * "offline" until the agent noticed and switched (GamlaBio, Oct 2026).
+	 * When the live look fails or nothing is online, the first instance, as
+	 * before.
+	 */
+	async function firstReachable(vomehome: ReturnType<typeof createVomeHomeClient>, ids: string[]): Promise<string> {
+		if (ids.length > 1) {
+			try {
+				const live = await vomehome.listInstances({ live: true });
+				const online = live.find((instance) => ids.includes(instance.id) && instance.live?.reachable === true);
+				if (online) {
+					return online.id;
+				}
+			} catch (error) {
+				logger.debug(`Live instance look failed; starting on the first instance: ${String(error)}`);
+			}
+		}
+		return ids[0] as string;
 	}
 
 	async function dropSession(sessionId: string): Promise<void> {
@@ -342,33 +387,77 @@ export async function startMcpHttpServer(args: ServeArgs, logger: Logger): Promi
 		logger.debug(`MCP session ${sessionId} closed (${sessions.size} open)`);
 	}
 
-	async function openSession(token: string, body: unknown, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-		const clientName = clientNameFrom(body);
-		const memoryKey = memoryKeyFor(token, clientName);
-		const pinned = new URL(req.url ?? "/", "http://localhost").searchParams.get("instance")?.trim() || null;
+	/**
+	 * Memory key for one session id: which home it was on, kept past the
+	 * session so an expired one can be revived there. Bound to the token hash,
+	 * so a session id alone revives nothing.
+	 */
+	function sessionKeyFor(token: string, sessionId: string): string {
+		return `${hashToken(token).toString("hex")}:session:${sessionId}`;
+	}
+
+	/**
+	 * Opens a session: a new one for an initialize request, or, with
+	 * ``revive``, the session id a client is still using after the server
+	 * forgot it.
+	 *
+	 * A session ended mid-task when it sat idle past the reaping window or the
+	 * server restarted for a deploy, and the client was told "Unknown or
+	 * expired MCP session"; several clients do not re-initialize on that, so
+	 * the agent lost every Vome tool until the user restarted it (GamlaBio,
+	 * Oct 2026). A revived session keeps its id and is put back on the home it
+	 * was last on, and only that one: if the token can no longer reach it, the
+	 * old refusal stands rather than answering from another house.
+	 */
+	async function openSession(
+		token: string,
+		body: unknown,
+		req: http.IncomingMessage,
+		res: http.ServerResponse,
+		revive?: { sessionId: string; instanceId: string }
+	): Promise<void> {
+		const clientName = revive ? "revived-session" : clientNameFrom(body);
+		const memoryKey = revive ? sessionKeyFor(token, revive.sessionId) : memoryKeyFor(token, clientName);
+		const pinned = revive
+			? revive.instanceId
+			: new URL(req.url ?? "/", "http://localhost").searchParams.get("instance")?.trim() || null;
 		const ctx = await contextForToken(token, memoryKey, clientName, pinned);
+		if (revive && ctx.instances.activeId() !== revive.instanceId) {
+			await ctx.ws.close().catch(() => undefined);
+			sendRpcError(res, 404, -32001, "Unknown or expired MCP session. Re-initialize to continue.");
+			return;
+		}
 		const server = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION });
 		registerAllTools(server, ctx);
 
+		const remember = (sessionId: string): void => {
+			const key = sessionKeyFor(token, sessionId);
+			const active = ctx.instances.activeId();
+			sessions.set(sessionId, {
+				transport,
+				server,
+				close: async () => {
+					await ctx.ws.close().catch(() => undefined);
+					await server.close().catch(() => undefined);
+				},
+				tokenHash: hashToken(token),
+				tokenKey: memoryKey,
+				activeId: () => ctx.instances.activeId(),
+				startedOn: active,
+				sessionKey: key,
+				recorded: active,
+				lastSeen: Date.now()
+			});
+			lastActiveByToken.set(key, active);
+			logger.info(`MCP session ${sessionId} ${revive ? "revived" : "opened"} (${sessions.size} open)`);
+		};
+
 		const transport = new StreamableHTTPServerTransport({
-			sessionIdGenerator: () => randomUUID(),
-			onsessioninitialized: (sessionId) => {
-				sessions.set(sessionId, {
-					transport,
-					server,
-					close: async () => {
-						await ctx.ws.close().catch(() => undefined);
-						await server.close().catch(() => undefined);
-					},
-					tokenHash: hashToken(token),
-					tokenKey: memoryKey,
-					activeId: () => ctx.instances.activeId(),
-					startedOn: ctx.instances.activeId(),
-					lastSeen: Date.now()
-				});
-				logger.info(`MCP session ${sessionId} opened (${sessions.size} open)`);
-			},
+			sessionIdGenerator: () => revive?.sessionId ?? randomUUID(),
+			onsessioninitialized: remember,
 			onsessionclosed: (sessionId) => {
+				// Ended by the client, not lost: nothing to revive.
+				lastActiveByToken.delete(sessionKeyFor(token, sessionId));
 				void dropSession(sessionId);
 			}
 		});
@@ -380,6 +469,15 @@ export async function startMcpHttpServer(args: ServeArgs, logger: Logger): Promi
 		};
 
 		await server.connect(transport);
+		if (revive) {
+			if (!markInitialized(transport, revive.sessionId)) {
+				await server.close().catch(() => undefined);
+				await ctx.ws.close().catch(() => undefined);
+				sendRpcError(res, 404, -32001, "Unknown or expired MCP session. Re-initialize to continue.");
+				return;
+			}
+			remember(revive.sessionId);
+		}
 		await transport.handleRequest(req, res, body);
 	}
 
@@ -436,10 +534,22 @@ export async function startMcpHttpServer(args: ServeArgs, logger: Logger): Promi
 				if (now !== existing.startedOn) {
 					lastActiveByToken.set(existing.tokenKey, now);
 				}
+				if (now !== existing.recorded) {
+					existing.recorded = now;
+					lastActiveByToken.set(existing.sessionKey, now);
+				}
 				return;
 			}
 
 			if (typeof sessionId === "string" && sessionId.length > 0) {
+				const known = lastActiveByToken.get(sessionKeyFor(token, sessionId));
+				if (known && req.method === "POST") {
+					await openSession(token, await readBody(req), req, res, {
+						sessionId,
+						instanceId: known.instanceId
+					});
+					return;
+				}
 				sendRpcError(res, 404, -32001, "Unknown or expired MCP session. Re-initialize to continue.");
 				return;
 			}

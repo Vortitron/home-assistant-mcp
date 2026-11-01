@@ -20,6 +20,8 @@ const silentLogger: Logger = {
 const GOOD_TOKEN = "vh_good_token";
 /** Flipped by a test to simulate a grant being revoked between sessions. */
 let revokeSecondInstance = false;
+/** Flipped by a test: the first instance is a retired relay that is offline. */
+let firstInstanceOffline = false;
 const NO_INSTANCE_TOKEN = "vh_scopeless_token";
 
 interface FakePortal {
@@ -43,17 +45,21 @@ async function makeFakePortal(): Promise<FakePortal> {
 			json(401, { error: "bad token" });
 			return;
 		}
-		if (req.url === "/api/v1/instances") {
+		if (req.url === "/api/v1/instances" || req.url === "/api/v1/instances?live=1") {
+			const live = req.url.endsWith("live=1");
+			const row = (id: string, name: string) => ({
+				id,
+				name,
+				status: "running",
+				...(live ? { live: { reachable: !(firstInstanceOffline && id === "inst-one") } } : {})
+			});
 			json(200, {
 				instances:
 					token === NO_INSTANCE_TOKEN
 						? []
 						: revokeSecondInstance
-							? [{ id: "inst-one", name: "Home", status: "running" }]
-							: [
-									{ id: "inst-one", name: "Home", status: "running" },
-									{ id: "inst-two", name: "Cottage", status: "running" }
-								]
+							? [row("inst-one", "Home")]
+							: [row("inst-one", "Home"), row("inst-two", "Cottage")]
 			});
 			return;
 		}
@@ -159,6 +165,7 @@ describe("MCP HTTP server", () => {
 
 	beforeEach(async () => {
 		revokeSecondInstance = false;
+		firstInstanceOffline = false;
 		portal = await makeFakePortal();
 		server = await startMcpHttpServer(serveArgs(portal.url), silentLogger);
 		endpoint = `http://127.0.0.1:${server.port}/mcp`;
@@ -226,6 +233,58 @@ describe("MCP HTTP server", () => {
 		});
 		expect(status).toBe(404);
 		expect(body).toContain("Unknown or expired MCP session");
+	});
+
+	it("revives a session the server forgot, on the same home, so a task can carry on", async () => {
+		/**
+		 * Reported from use: a session reaped while idle, or lost to a deploy
+		 * restart, ended the agent's Vome tools mid-task, because its client
+		 * did not re-initialize on "Unknown or expired MCP session".
+		 */
+		const stateDir = mkdtempSync(join(tmpdir(), "mcp-state-"));
+		try {
+			await server.close();
+			server = await startMcpHttpServer({ ...serveArgs(portal.url), stateDir }, silentLogger);
+			const first = await connectTo(`http://127.0.0.1:${server.port}/mcp`);
+			await first.callTool({ name: "vomehome_use_instance", arguments: { instance_id: "inst-two" } });
+			const transport = first.transport as StreamableHTTPClientTransport;
+			const sessionId = transport.sessionId as string;
+			expect(sessionId).toBeTruthy();
+
+			// The server restarts; the client still holds its session id.
+			await server.close();
+			server = await startMcpHttpServer({ ...serveArgs(portal.url), stateDir }, silentLogger);
+			const again = await post(
+				`http://127.0.0.1:${server.port}/mcp`,
+				{ jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: "vomehome_list_instances", arguments: {} } },
+				{
+					Authorization: `Bearer ${GOOD_TOKEN}`,
+					"mcp-session-id": sessionId,
+					"mcp-protocol-version": "2025-06-18"
+				}
+			);
+			expect(again.status).toBe(200);
+			expect(again.body).toContain("inst-two");
+			expect(again.body).toMatch(/active_instance\\?"\s*:\s*\\?"inst-two/);
+
+			// Another token cannot use the id to revive it.
+			const stranger = await post(
+				`http://127.0.0.1:${server.port}/mcp`,
+				{ jsonrpc: "2.0", id: 8, method: "tools/list" },
+				{ Authorization: `Bearer ${NO_INSTANCE_TOKEN}`, "mcp-session-id": "not-a-known-session" }
+			);
+			expect(stranger.status).toBe(404);
+		} finally {
+			rmSync(stateDir, { recursive: true, force: true });
+		}
+	});
+
+	it("starts a new session on an online instance, not an offline first one", async () => {
+		// A retired relay, first on the account and offline for weeks, was the default (GamlaBio, Oct 2026).
+		firstInstanceOffline = true;
+		const client = await connectTo(endpoint);
+		expect(await activeOf(client)).toBe("inst-two");
+		await client.close();
 	});
 
 	it("binds a session to the token that opened it", async () => {

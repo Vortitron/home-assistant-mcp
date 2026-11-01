@@ -19,6 +19,7 @@ import type { Logger } from "../logger.js";
 export interface InstanceMemory {
 	get(key: string): RememberedInstance | undefined;
 	set(key: string, instanceId: string): void;
+	delete(key: string): void;
 }
 
 export interface RememberedInstance {
@@ -76,6 +77,11 @@ export function createInstanceMemory(
 
 	return {
 		get: (key) => entries.get(key),
+		delete(key) {
+			if (entries.delete(key)) {
+				persist();
+			}
+		},
 		set(key, instanceId) {
 			entries.delete(key); // re-insert, so the map stays oldest-first
 			entries.set(key, { instanceId, at: now() });

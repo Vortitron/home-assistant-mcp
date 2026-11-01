@@ -52,13 +52,16 @@ export function registerVomeHomeTools(server: McpServer, ctx: ToolContext): void
 		{
 			title: "List VomeHome instances",
 			description:
-				"List the Home Assistant instances on your VomeHome account, with status, tier, HA URL and (where available) live health. Requires VOMEHOME_TOKEN.",
+				"List the Home Assistant instances on your VomeHome account, with status, tier, HA URL and live health " +
+					"(live.reachable false: offline now, e.g. a retired relay that never reconnects). Requires VOMEHOME_TOKEN.",
 			inputSchema: {},
 			annotations: { readOnlyHint: true, openWorldHint: true }
 		},
 		async () =>
 			runTool(ctx.logger, "vomehome_list_instances", async () => {
-				const instances = await ctx.vomehome.listInstances();
+				// Live, so an offline instance is visible as one rather than
+				// looking like any other (GamlaBio, Oct 2026).
+				const instances = await ctx.vomehome.listInstances({ live: true });
 				const active = ctx.instances.activeId();
 				return jsonResult({
 					count: instances.length,

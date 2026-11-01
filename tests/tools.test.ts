@@ -2782,3 +2782,89 @@ describe("people", () => {
 		expect(sendCommand).not.toHaveBeenCalled();
 	});
 });
+
+describe("GamlaBio feedback, Oct 2026", () => {
+	it("asks shell_command for its response, so stdout comes back", async () => {
+		const callService = vi.fn(async () => ({
+			changed_states: [],
+			service_response: { stdout: "3 photos", stderr: "", returncode: 0 }
+		}));
+		const server = buildHarness({ env: { HA_ALLOW_WRITE: "true" }, rest: { callService } });
+		const body = jsonOf(await server.call("ha_call_service", { domain: "shell_command", service: "frontpath_photos" }));
+		expect(body.service_response.stdout).toBe("3 photos");
+		expect((callService.mock.calls[0] as any)[4]).toMatchObject({ returnResponse: true });
+
+		await server.call("ha_call_service", { domain: "light", service: "turn_on", target: { entity_id: "light.k" } });
+		expect((callService.mock.calls[1] as any)[4]).toMatchObject({ returnResponse: false });
+		await server.call("ha_call_service", { domain: "script", service: "x", return_response: true });
+		expect((callService.mock.calls[2] as any)[4]).toMatchObject({ returnResponse: true });
+	});
+
+	it("reads an automation from a YAML package by entity when the config route 404s", async () => {
+		const getStates = vi.fn(async () => [
+			{ entity_id: "automation.saga_watch", state: "on", attributes: { id: "saga_watch" } }
+		]);
+		const getAutomationConfig = vi.fn(async () => {
+			throw new HaApiError("not found", 404, '{"message": "Resource not found"}');
+		});
+		const sendCommand = vi.fn(async () => ({ config: { alias: "Saga watch", triggers: [] } }));
+		const server = buildHarness({ rest: { getStates, getAutomationConfig } as any, ws: { sendCommand } });
+		const body = jsonOf(await server.call("ha_get_automation", { automation: "saga_watch" }));
+		expect(sendCommand).toHaveBeenCalledWith({ type: "automation/config", entity_id: "automation.saga_watch" });
+		expect(body.config.alias).toBe("Saga watch");
+		expect(body.source).toBe("yaml");
+		expect(body.editable_with_ha_set_automation).toBe(false);
+	});
+
+	it("still returns an automations.yaml automation from the config route", async () => {
+		const getAutomationConfig = vi.fn(async () => ({ alias: "UI one" }));
+		const sendCommand = vi.fn();
+		const server = buildHarness({ rest: { getAutomationConfig } as any, ws: { sendCommand } });
+		const body = jsonOf(await server.call("ha_get_automation", { automation: "1744362298178" }));
+		expect(body.config.alias).toBe("UI one");
+		expect(sendCommand).not.toHaveBeenCalled();
+	});
+
+	it("trims, filters and pages the community store list", async () => {
+		const rows = Array.from({ length: 120 }, (_, i) => ({
+			id: String(i),
+			full_name: i === 7 ? "me/frontpath-card" : `someone/repo-${i}`,
+			name: `repo ${i}`,
+			category: "plugin",
+			installed: i < 3,
+			description: "x".repeat(2000),
+			topics: ["a", "b"]
+		}));
+		const sendCommand = vi.fn(async (command: Record<string, unknown>) => {
+			if (command.type === "marketplace/info") throw new Error("unknown_command");
+			if (command.type === "hacs/info") return { version: "2.0" };
+			return rows;
+		});
+		const server = buildHarness({ ws: { sendCommand } as any });
+		const first = jsonOf(await server.call("ha_hacs_list_repositories", {}));
+		expect(first.total).toBe(120);
+		expect(first.count).toBe(50);
+		expect(first.next_offset).toBe(50);
+		expect(first.repositories[0].description).toBeUndefined();
+		const found = jsonOf(await server.call("ha_hacs_list_repositories", { query: "FRONTPATH" }));
+		expect(found.repositories.map((r: any) => r.full_name)).toEqual(["me/frontpath-card"]);
+		const installed = jsonOf(await server.call("ha_hacs_list_repositories", { installed_only: true }));
+		expect(installed.total).toBe(3);
+	});
+
+	it("filters the logbook by text and domain, keeping the newest under a cap", async () => {
+		const getLogbook = vi.fn(async () => [
+			{ when: "1", name: "Saga watch", message: "triggered", entity_id: "automation.saga_watch" },
+			{ when: "2", name: "Kitchen", message: "turned on", entity_id: "light.kitchen" },
+			{ when: "3", name: "Saga cam", message: "changed to idle", entity_id: "sensor.saga_cam" },
+			{ when: "4", name: "Saga watch", message: "triggered", entity_id: "automation.saga_watch" }
+		]);
+		const server = buildHarness({ rest: { getLogbook } as any });
+		const saga = jsonOf(await server.call("ha_get_logbook", { search: "saga" }));
+		expect(saga.total).toBe(3);
+		const autos = jsonOf(await server.call("ha_get_logbook", { search: "saga", domain: "automation", limit: 1 }));
+		expect(autos.total).toBe(2);
+		expect(autos.entries.map((e: any) => e.when)).toEqual(["4"]);
+		expect(autos.truncated).toBe(true);
+	});
+});

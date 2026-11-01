@@ -269,6 +269,13 @@ export function registerConfigFileTools(server: McpServer, ctx: ToolContext): vo
 				"**It replaces the entire file** — read it first with ha_read_config_file and send " +
 				"back the full content with your change applied, or you will delete everything else " +
 				"in it.\n\n" +
+				"**For a file you already have on disk** (a web page for /config/www, an icon, a bundle), do not " +
+				"carry it through this tool or as a run of ha_edit_config_file edits: upload it as it is to the " +
+				"VomeHome broker, which takes the raw bytes, text or binary, up to 8 MB:\n" +
+				"  curl -X PUT --data-binary @page.html -H 'Authorization: Bearer <VomeHome API key>' " +
+				"'https://vome.io/api/v1/instances/<instance id>/ha/files/upload?path=www/page.html'\n" +
+				"It answers with the bytes and SHA-256 written, to check against the local file. Same ha:files " +
+				"scope; no configuration check is run, so run ha_check_config yourself if it is YAML.\n\n" +
 				"Pass verify=false when writing several files that are only valid together, then call " +
 				"ha_check_config yourself at the end.\n\n" +
 				"A successful write does not apply the change: restart Home Assistant, or reload the " +

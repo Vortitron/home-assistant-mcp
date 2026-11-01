@@ -88,6 +88,24 @@ describe("createBrokeredHaRestClient", () => {
 		expect(urls[2]).toBe("https://vome.io/api/v1/instances/srv-1/ha/services/light/turn_on");
 	});
 
+	it("passes return_response on, for shell_command's stdout", async () => {
+		const fetchMock = vi.fn(async () => jsonResponse({ changed_states: [], service_response: { stdout: "ok" } }));
+		vi.stubGlobal("fetch", fetchMock);
+
+		await client().callService("shell_command", "x", {}, undefined, { returnResponse: true, timeoutSeconds: 30 });
+
+		expect(fetchMock.mock.calls[0]![0]).toBe(
+			"https://vome.io/api/v1/instances/srv-1/ha/services/shell_command/x?timeout=30&return_response=true"
+		);
+	});
+
+	it("says Home Assistant is restarting instead of passing on nginx's page", async () => {
+		const page = "<html>\r\n<head><title>404 Not Found</title></head>\r\n<body><center>nginx</center></body></html>";
+		vi.stubGlobal("fetch", vi.fn(async () => new Response(page, { status: 404 })));
+
+		await expect(client().getStates()).rejects.toThrow(/restarting/);
+	});
+
 	it("renders templates as text via the broker", async () => {
 		const fetchMock = vi.fn(async () => new Response("4", { status: 200 }));
 		vi.stubGlobal("fetch", fetchMock);

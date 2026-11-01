@@ -60,7 +60,7 @@ policy (see [Safety](#safety)).
 | `ha_render_template` | Render a Jinja2 template against live state. |
 | `ha_list_helpers` | List stored helpers (input_boolean, input_number, counter, timer, …). |
 | `ha_list_automations` | Automations with entity_id, unique id, state, last-triggered. |
-| `ha_get_automation` | Full automation config (triggers/conditions/actions). |
+| `ha_get_automation` | Full automation config (triggers/conditions/actions), including automations defined in YAML packages (marked `source: "yaml"`; edit those in their file). |
 | `ha_check_config` | Validate the configuration (Check configuration). |
 | `ha_get_system_log` | **Deduplicated, structured errors** — level, logger, source, count, first/last seen. Start here. |
 | `ha_get_error_log` | Tail of the raw Home Assistant error log. |
@@ -70,7 +70,7 @@ policy (see [Safety](#safety)).
 | `ha_camera_frame` | A camera still decoded and shrunk to a small grid of RGB pixels, for clients that draw pictures in text. |
 | `ha_view_snapshot` | Everything a dashboard view shows in one call: states, rendered templates, history in few points, camera frames. For dashboard clients. |
 | `ha_watch_states` | Wait for state changes instead of polling: the home's Vome component sends them as they happen (through VomeHome). |
-| `ha_get_logbook` | Human-readable logbook entries. |
+| `ha_get_logbook` | Human-readable logbook entries, filterable by text (`search`) and `domain`, capped at `limit` (newest kept). |
 | `ha_get_energy_prefs` | The Energy dashboard's setup (grid, solar, battery, gas, water, tracked devices) with the dashboard's own validation. |
 | `ha_list_traces` | Recent automation/script runs and how each one stopped. |
 | `ha_get_trace` | Step-by-step detail for one run, with `failed_at` naming the blocking step. |
@@ -84,13 +84,13 @@ policy (see [Safety](#safety)).
 
 | Tool | Description |
 | --- | --- |
-| `ha_call_service` | Call any service (turn_on, set_temperature, …). |
+| `ha_call_service` | Call any service (turn_on, set_temperature, …). `return_response` returns the service's own response; it is on by default for `shell_command`, so stdout comes back. |
 | `ha_clear_system_log` | Empty the structured error store (only needs `HA_ALLOW_WRITE`). |
 | `ha_set_log_level` | Change logging for one integration at runtime (only needs `HA_ALLOW_WRITE`). |
 | `ha_set_automation` | Create or update an automation (also needs `HA_ALLOW_CONFIG_WRITE`). |
 | `ha_set_helper` | Create or update a helper — no `configuration.yaml`, no restart. |
 | `ha_read_config_file` | Read a file under the config directory — text by default, or `encoding: 'base64'` for a binary asset (needs `ha:files`). |
-| `ha_write_config_file` | Replace a file under the config directory — text by default, or `encoding: 'base64'` for a binary asset; checks the config and restores the file if it fails (needs `ha:files`). |
+| `ha_write_config_file` | Replace a file under the config directory — text by default, or `encoding: 'base64'` for a binary asset; checks the config and restores the file if it fails (needs `ha:files`). For a file already on disk (a page for `/config/www`, an icon), the broker takes the raw bytes instead: `curl -X PUT --data-binary @page.html -H 'Authorization: Bearer <key>' 'https://vome.io/api/v1/instances/<id>/ha/files/upload?path=www/page.html'` (up to 8 MB; answers with the bytes and SHA-256 written). |
 | `ha_delete_config_file` | Delete one file under the config directory. Never a directory, and never `configuration.yaml`, `secrets.yaml` or Home Assistant's database. Names its target home like a write (needs `ha:files`, and Vome add-on 0.3.55 / integration 0.9.39 on the home). |
 | `ha_edit_config_file` | Change part of a text file in place: exact find-and-replace edits that must each match once, then the same check-and-restore as a write. For a three-line change to a large file (needs `ha:files`). |
 | `ha_list_config_files` | List a directory under the config directory (needs `ha:files`). |
@@ -232,7 +232,7 @@ be revoked early at any time.
 | Tool | Description |
 | --- | --- |
 | `ha_hacs_info` | HACS version, stage, and whether it has pending background tasks. |
-| `ha_hacs_list_repositories` | List repositories HACS knows about (optionally filtered by category). |
+| `ha_hacs_list_repositories` | List repositories the community store knows about, trimmed to the fields that identify them, filtered by category, `query` or `installed_only`, and paged with `limit`/`offset`. |
 | `ha_hacs_add_repository` | Add a custom repository by `owner/repo` and category. Confirms by re-listing, since HACS acks even a failed add. Needs `HA_ALLOW_CONFIG_WRITE`. |
 | `ha_hacs_download_repository` | Install (or update) a tracked repository — the step that actually writes its files. Needs `HA_ALLOW_CONFIG_WRITE`. |
 | `ha_hacs_remove_repository` | Uninstall a repository's files and stop tracking it. Needs `HA_ALLOW_CONFIG_WRITE`. |

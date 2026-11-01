@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { HaState } from "../ha/types.js";
+import { HaApiError } from "../ha/restClient.js";
 import { evaluateConfigWrite, evaluateDomainWrite } from "../safety.js";
 import { errorResult, getFriendlyName, jsonResult, runTool, type ToolContext } from "./helpers.js";
 
@@ -40,6 +41,44 @@ export async function resolveAutomationId(
 	return state ? automationIdOf(state) : undefined;
 }
 
+function isNotFound(error: unknown): boolean {
+	return error instanceof HaApiError && error.status === 404;
+}
+
+/** `automation.x (id "…", alias "…")`, with whatever is known. */
+function describeAutomation(reference: string, state: HaState | undefined, id?: string): string {
+	const entityId = state?.entity_id ?? (reference.startsWith(AUTOMATION_PREFIX) ? reference : undefined);
+	const alias = state ? getFriendlyName(state.attributes) : undefined;
+	const bits = [
+		id !== undefined && id !== entityId ? `id "${id}"` : undefined,
+		alias ? `alias "${alias}"` : undefined
+	].filter(Boolean);
+	return `${entityId ?? `automation id "${id ?? reference}"`}${bits.length > 0 ? ` (${bits.join(", ")})` : ""}`;
+}
+
+/**
+ * Why the automation editor's API has no config for an automation that
+ * exists: it was written in YAML outside automations.yaml (a package, an
+ * !include). The config API only serves automations.yaml, and a 404 from it
+ * read as "no such automation" to an agent looking at the entity.
+ */
+export function notInEditorMessage(reference: string, state: HaState | undefined, id: string | undefined): string {
+	return (
+		`${describeAutomation(reference, state, id)} is not defined in the automation editor (automations.yaml); ` +
+		`it comes from YAML — ${whereInYaml(state, id)}`
+	);
+}
+
+/** Where a YAML automation probably lives, and how to find and change it. */
+function whereInYaml(state: HaState | undefined, id: string | undefined): string {
+	const search = [state ? getFriendlyName(state.attributes) : undefined, id].filter(Boolean).join('" or "');
+	return (
+		`most likely a package (often under packages/), configuration.yaml itself or another included file. Use ` +
+		`ha_list_config_files / ha_read_config_file to find it${search ? ` (search for "${search}")` : " (search for its alias or id)"}. ` +
+		`The editor tools cannot change it: edit that file (ha_edit_config_file), then reload automations.`
+	);
+}
+
 export function registerAutomationTools(server: McpServer, ctx: ToolContext): void {
 	server.registerTool(
 		"ha_list_automations",
@@ -71,7 +110,7 @@ export function registerAutomationTools(server: McpServer, ctx: ToolContext): vo
 		{
 			title: "Get automation config",
 			description:
-				"Get the full configuration (triggers, conditions, actions) of an automation. Accepts either the entity_id (automation.xxx) or the unique id.",
+				"Get the full configuration (triggers, conditions, actions) of an automation made in the automation editor (automations.yaml). Accepts either the entity_id (automation.xxx) or the unique id. An automation written in a YAML package or another included file is not served by the editor's API; for one of those this says so and how to find its file.",
 			inputSchema: {
 				automation: z.string().describe("entity_id (automation.xxx) or unique id.")
 			},
@@ -79,12 +118,40 @@ export function registerAutomationTools(server: McpServer, ctx: ToolContext): vo
 		},
 		async ({ automation }) =>
 			runTool(ctx.logger, "ha_get_automation", async () => {
-				const id = await resolveAutomationId(ctx, automation);
-				if (!id) {
-					return errorResult(`Could not resolve a unique id for '${automation}'.`);
+				let state: HaState | undefined;
+				let id: string | undefined = automation;
+				if (automation.startsWith(AUTOMATION_PREFIX)) {
+					state = await findAutomationState(ctx, automation);
+					if (!state) {
+						return errorResult(`No automation matched '${automation}'. ha_list_automations lists them.`);
+					}
+					id = automationIdOf(state);
+					if (!id) {
+						// No `id:` at all: a YAML automation the editor could never open.
+						return errorResult(
+							`${describeAutomation(automation, state)} has no unique id: it is written in YAML without an ` +
+								`'id:', so the automation editor cannot open it. It comes from YAML — ` +
+								whereInYaml(state, undefined)
+						);
+					}
 				}
-				const config = await ctx.rest.getAutomationConfig(id);
-				return jsonResult({ id, config });
+				try {
+					const config = await ctx.rest.getAutomationConfig(id);
+					return jsonResult({ id, config });
+				} catch (error) {
+					if (!isNotFound(error)) throw error;
+					if (!state) {
+						// Asked by unique id: find the entity, if there is one, to name it.
+						state = await findAutomationState(ctx, id).catch(() => undefined);
+						if (!state) {
+							return errorResult(
+								`No automation has the unique id '${id}' — neither in the automation editor nor among ` +
+									`the running automations. ha_list_automations lists them with their ids.`
+							);
+						}
+					}
+					return errorResult(notInEditorMessage(automation, state, id));
+				}
 			})
 	);
 
@@ -137,8 +204,17 @@ export function registerAutomationTools(server: McpServer, ctx: ToolContext): vo
 				if (!decision.allowed) {
 					return errorResult(`Refused: ${decision.reason}`);
 				}
-				const result = await ctx.rest.deleteAutomationConfig(automation_id);
-				return jsonResult({ deleted: true, automation_id, result });
+				try {
+					const result = await ctx.rest.deleteAutomationConfig(automation_id);
+					return jsonResult({ deleted: true, automation_id, result });
+				} catch (error) {
+					if (!isNotFound(error)) throw error;
+					const state = await findAutomationState(ctx, automation_id).catch(() => undefined);
+					if (!state) {
+						return errorResult(`Nothing deleted: no automation has the unique id '${automation_id}'.`);
+					}
+					return errorResult(`Nothing deleted: ${notInEditorMessage(automation_id, state, automation_id)}`);
+				}
 			})
 	);
 

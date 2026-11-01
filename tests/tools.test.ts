@@ -591,6 +591,99 @@ describe("ha_get_error_log", () => {
 	});
 });
 
+describe("automations defined in YAML packages", () => {
+	const STATES = [
+		{
+			entity_id: "automation.front_path_adaptive_seasonal_ble",
+			state: "on",
+			attributes: { id: "1712345678901", friendly_name: "Front path adaptive seasonal BLE" }
+		},
+		{ entity_id: "automation.no_id", state: "on", attributes: { friendly_name: "Old YAML one" } },
+		{ entity_id: "automation.ui_made", state: "on", attributes: { id: "ui1", friendly_name: "UI made" } }
+	];
+	const notFound = () => new HaApiError("Home Assistant GET … responded 404 Not Found", 404, '{"message":"Resource not found"}');
+
+	it("says a 404 from the editor's API means the automation lives in YAML, and what to search for", async () => {
+		const getAutomationConfig = vi.fn(async () => {
+			throw notFound();
+		});
+		const server = buildHarness({ rest: { getStates: async () => STATES, getAutomationConfig } });
+
+		const result = await server.call("ha_get_automation", { automation: "automation.front_path_adaptive_seasonal_ble" });
+
+		expect(result.isError).toBe(true);
+		const text = textOf(result);
+		expect(getAutomationConfig).toHaveBeenCalledWith("1712345678901");
+		expect(text).toContain("automation.front_path_adaptive_seasonal_ble");
+		expect(text).toMatch(/not defined in the automation editor \(automations\.yaml\)/);
+		expect(text).toMatch(/package/);
+		expect(text).toContain('"Front path adaptive seasonal BLE" or "1712345678901"');
+		expect(text).toMatch(/ha_list_config_files/);
+	});
+
+	it("names the entity when asked by unique id", async () => {
+		const server = buildHarness({
+			rest: {
+				getStates: async () => STATES,
+				getAutomationConfig: async () => {
+					throw notFound();
+				}
+			}
+		});
+		const text = textOf(await server.call("ha_get_automation", { automation: "1712345678901" }));
+		expect(text).toContain("automation.front_path_adaptive_seasonal_ble");
+		expect(text).toMatch(/comes from YAML/);
+	});
+
+	it("explains an automation with no id at all", async () => {
+		const getAutomationConfig = vi.fn();
+		const server = buildHarness({ rest: { getStates: async () => STATES, getAutomationConfig } });
+		const text = textOf(await server.call("ha_get_automation", { automation: "automation.no_id" }));
+		expect(text).toMatch(/no unique id/);
+		expect(text).toContain('"Old YAML one"');
+		expect(getAutomationConfig).not.toHaveBeenCalled();
+	});
+
+	it("still returns an editor automation's config", async () => {
+		const server = buildHarness({
+			rest: { getStates: async () => STATES, getAutomationConfig: async () => ({ alias: "UI made" }) }
+		});
+		expect(jsonOf(await server.call("ha_get_automation", { automation: "automation.ui_made" }))).toEqual({
+			id: "ui1",
+			config: { alias: "UI made" }
+		});
+	});
+
+	it("does not mistake other failures for a package automation", async () => {
+		const server = buildHarness({
+			rest: {
+				getStates: async () => STATES,
+				getAutomationConfig: async () => {
+					throw new HaApiError("Home Assistant GET … responded 401 Unauthorized", 401, "");
+				}
+			}
+		});
+		const text = textOf(await server.call("ha_get_automation", { automation: "automation.ui_made" }));
+		expect(text).toMatch(/401/);
+		expect(text).not.toMatch(/package/);
+	});
+
+	it("ha_delete_automation says the same instead of a bare 404", async () => {
+		const server = buildHarness({
+			env: { HA_ALLOW_WRITE: "true", HA_ALLOW_CONFIG_WRITE: "true" },
+			rest: {
+				getStates: async () => STATES,
+				deleteAutomationConfig: async () => {
+					throw notFound();
+				}
+			}
+		});
+		const text = textOf(await server.call("ha_delete_automation", { automation_id: "1712345678901" }));
+		expect(text).toMatch(/^Nothing deleted: automation\.front_path_adaptive_seasonal_ble/);
+		expect(text).toMatch(/comes from YAML/);
+	});
+});
+
 describe("automation traces", () => {
 	const automationStates = [
 		{ entity_id: "automation.morning", state: "on", attributes: { id: "1699999999999" } }

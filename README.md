@@ -60,7 +60,7 @@ policy (see [Safety](#safety)).
 | `ha_render_template` | Render a Jinja2 template against live state. |
 | `ha_list_helpers` | List stored helpers (input_boolean, input_number, counter, timer, …). |
 | `ha_list_automations` | Automations with entity_id, unique id, state, last-triggered. |
-| `ha_get_automation` | Full automation config (triggers/conditions/actions). |
+| `ha_get_automation` | Full automation config (triggers/conditions/actions) for an automation made in the editor. One written in a YAML package or included file is named as such, with what to search for to find its file. |
 | `ha_check_config` | Validate the configuration (Check configuration). |
 | `ha_get_system_log` | **Deduplicated, structured errors** — level, logger, source, count, first/last seen. Start here. |
 | `ha_get_error_log` | Tail of the raw Home Assistant error log. |

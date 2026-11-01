@@ -37,9 +37,27 @@ export function splitServiceResult(raw: unknown): { changed: HaState[]; response
 	return { changed: [] };
 }
 
+/**
+ * HA's 400 for a service called with ?return_response that returns nothing
+ * ("An action which does not return responses can't be called with
+ * return_response=True"; before 2024.x "Service does not support responses").
+ */
+export function refusesReturnResponse(error: unknown): boolean {
+	return (
+		error instanceof HaApiError &&
+		error.status === 400 &&
+		/does not (?:support|return) responses|remove return_response/i.test(error.body)
+	);
+}
+
 /** HA's 400 for a service that only works with ?return_response. */
 export function wantsReturnResponse(error: unknown): boolean {
-	return error instanceof HaApiError && error.status === 400 && /return_response/.test(error.body);
+	return (
+		error instanceof HaApiError &&
+		error.status === 400 &&
+		/return_response/.test(error.body) &&
+		!refusesReturnResponse(error)
+	);
 }
 
 export class HaApiError extends Error {
@@ -88,6 +106,13 @@ export interface ServiceCallOptions {
 	 * the portal ends a request at 60 s.
 	 */
 	timeoutSeconds?: number;
+	/**
+	 * Ask for the service's own response (?return_response). For a service
+	 * whose response is optional (shell_command's stdout and returncode,
+	 * script, weather.get_forecasts …) Home Assistant only sends it when asked.
+	 * A service that turns out not to return one is called again without.
+	 */
+	returnResponse?: boolean;
 }
 
 export const SERVICE_MAX_TIMEOUT_SECONDS = 50;
@@ -254,6 +279,21 @@ export function createHaRestClient(
 			}
 		}
 		const path = `/api/services/${encodeURIComponent(domain)}/${encodeURIComponent(service)}`;
+		if (options?.returnResponse) {
+			try {
+				return await request<HaServiceCallResult>(path, {
+					method: "POST",
+					body,
+					query: { return_response: "true" },
+					timeoutMs
+				});
+			} catch (error) {
+				// Asked of a service that returns nothing: call it the plain way.
+				if (!refusesReturnResponse(error)) {
+					throw error;
+				}
+			}
+		}
 		try {
 			return await request<HaServiceCallResult>(path, { method: "POST", body, timeoutMs });
 		} catch (error) {

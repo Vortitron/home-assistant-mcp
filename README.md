@@ -84,7 +84,7 @@ policy (see [Safety](#safety)).
 
 | Tool | Description |
 | --- | --- |
-| `ha_call_service` | Call any service (turn_on, set_temperature, …). |
+| `ha_call_service` | Call any service (turn_on, set_temperature, …). A service that can return a response (`shell_command`'s stdout/stderr/returncode, `script`, `weather.get_forecasts` …) is asked for it, and it comes back as `service_response`. |
 | `ha_clear_system_log` | Empty the structured error store (only needs `HA_ALLOW_WRITE`). |
 | `ha_set_log_level` | Change logging for one integration at runtime (only needs `HA_ALLOW_WRITE`). |
 | `ha_set_automation` | Create or update an automation (also needs `HA_ALLOW_CONFIG_WRITE`). |

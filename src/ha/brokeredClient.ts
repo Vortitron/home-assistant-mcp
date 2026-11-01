@@ -1,6 +1,13 @@
 import type { Config } from "../config.js";
 import type { Logger } from "../logger.js";
-import { HaApiError, binaryResult, serviceTimeoutSeconds, type ServiceCallOptions, type StateWatchGrant } from "./restClient.js";
+import {
+	HaApiError,
+	binaryResult,
+	refusesReturnResponse,
+	serviceTimeoutSeconds,
+	type ServiceCallOptions,
+	type StateWatchGrant
+} from "./restClient.js";
 import type { HaImage, HaRestClient, HaServiceCallResult, HistoryParams, LogbookParams } from "./restClient.js";
 import { commandTimeoutMs, type HaWsClient } from "./wsClient.js";
 import type {
@@ -129,7 +136,7 @@ export function createBrokeredHaRestClient(
 		}
 	}
 
-	function callService(
+	async function callService(
 		domain: string,
 		service: string,
 		data: Record<string, unknown> = {},
@@ -150,11 +157,25 @@ export function createBrokeredHaRestClient(
 		// A longer wait is asked of the portal (?timeout=, which it carries to
 		// the home), and this side waits a few seconds past it so the home's own
 		// answer, even a timeout error, gets back.
-		const query = seconds === undefined ? "" : `?timeout=${seconds}`;
-		return broker<HaServiceCallResult>(
-			`/services/${encodeURIComponent(domain)}/${encodeURIComponent(service)}${query}`,
-			{ method: "POST", body, ...(seconds === undefined ? {} : { timeoutMs: (seconds + 8) * 1000 }) }
-		);
+		// ?return_response asks the portal to pass the same flag to the home, for
+		// a service whose response is optional (shell_command). A portal from
+		// before it forwarded the flag ignores it, and the call works as before.
+		const path = `/services/${encodeURIComponent(domain)}/${encodeURIComponent(service)}`;
+		const init = { method: "POST", body, ...(seconds === undefined ? {} : { timeoutMs: (seconds + 8) * 1000 }) };
+		const timeout = seconds === undefined ? undefined : String(seconds);
+		if (options?.returnResponse) {
+			try {
+				return await broker<HaServiceCallResult>(
+					`${path}${buildQuery({ timeout, return_response: "1" })}`,
+					init
+				);
+			} catch (error) {
+				if (!refusesReturnResponse(error)) {
+					throw error;
+				}
+			}
+		}
+		return broker<HaServiceCallResult>(`${path}${buildQuery({ timeout })}`, init);
 	}
 
 	function renderTemplate(template: string, variables?: Record<string, unknown>): Promise<string> {

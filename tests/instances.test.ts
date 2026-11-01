@@ -171,6 +171,20 @@ describe("createInstanceManager (brokered)", () => {
 		await mgr.rest.getStates();
 		expect(fetchMock.mock.calls[1]![0]).toBe("https://vome.io/api/v1/instances/sbx-plc/ha/states");
 	});
+
+	it("passes a service call's options through the proxy (timeout, return_response)", async () => {
+		// The proxy used to drop the fifth argument, so ha_call_service's
+		// timeout_seconds never reached the portal.
+		const fetchMock = vi.fn(async () => jsonResponse([]));
+		vi.stubGlobal("fetch", fetchMock);
+		const mgr = createInstanceManager(loadConfig(BROKER_ENV), logger);
+
+		await mgr.rest.callService("shell_command", "x", {}, undefined, { timeoutSeconds: 30, returnResponse: true });
+
+		expect(fetchMock.mock.calls[0]![0]).toBe(
+			"https://vome.io/api/v1/instances/rly-house/ha/services/shell_command/x?timeout=30&return_response=1"
+		);
+	});
 });
 
 describe("createInstanceManager (direct)", () => {

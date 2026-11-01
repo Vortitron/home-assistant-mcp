@@ -38,6 +38,8 @@ export interface HaService {
 	description?: string;
 	fields?: Record<string, HaServiceField>;
 	target?: Record<string, unknown>;
+	/** Present when the service can return a response; `optional: false` means it always does. */
+	response?: { optional?: boolean };
 	[key: string]: unknown;
 }
 

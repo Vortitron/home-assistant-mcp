@@ -194,8 +194,8 @@ export function createInstanceManager(
 		getStates: () => currentRest().getStates(),
 		getState: (entityId) => currentRest().getState(entityId),
 		getServices: () => currentRest().getServices(),
-		callService: (domain, service, data, target) =>
-			currentRest().callService(domain, service, data, target),
+		callService: (domain, service, data, target, options) =>
+			currentRest().callService(domain, service, data, target, options),
 		renderTemplate: (template, variables) => currentRest().renderTemplate(template, variables),
 		checkConfig: () => currentRest().checkConfig(),
 		getErrorLog: () => currentRest().getErrorLog(),

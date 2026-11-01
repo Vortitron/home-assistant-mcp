@@ -66,6 +66,37 @@ describe("createHaRestClient", () => {
 		expect(fetchMock.mock.calls[1]![0]).toBe("http://ha.local:8123/api/services/vomesync/subscribe_switch?return_response=true");
 	});
 
+	it("asks for an optional response when told to, e.g. shell_command's stdout", async () => {
+		const fetchMock = vi.fn(async () =>
+			jsonResponse({ changed_states: [], service_response: { stdout: "hi", stderr: "", returncode: 0 } })
+		);
+		vi.stubGlobal("fetch", fetchMock);
+
+		const result = await client().callService("shell_command", "hello", {}, undefined, { returnResponse: true });
+
+		expect(fetchMock.mock.calls[0]![0]).toBe("http://ha.local:8123/api/services/shell_command/hello?return_response=true");
+		expect(result).toMatchObject({ service_response: { stdout: "hi", returncode: 0 } });
+	});
+
+	it("calls again without return_response when the service returns nothing", async () => {
+		const fetchMock = vi
+			.fn()
+			.mockResolvedValueOnce(
+				jsonResponse(
+					{ message: "Validation error: An action which does not return responses can't be called with return_response=True" },
+					400
+				)
+			)
+			.mockResolvedValueOnce(jsonResponse([]));
+		vi.stubGlobal("fetch", fetchMock);
+
+		await expect(client().callService("light", "turn_on", {}, undefined, { returnResponse: true })).resolves.toEqual([]);
+		expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([
+			"http://ha.local:8123/api/services/light/turn_on?return_response=true",
+			"http://ha.local:8123/api/services/light/turn_on"
+		]);
+	});
+
 	it("does not retry other 400s", async () => {
 		const fetchMock = vi.fn(async () => jsonResponse({ message: "Entity not found" }, 400));
 		vi.stubGlobal("fetch", fetchMock);

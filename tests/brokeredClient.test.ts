@@ -88,6 +88,26 @@ describe("createBrokeredHaRestClient", () => {
 		expect(urls[2]).toBe("https://vome.io/api/v1/instances/srv-1/ha/services/light/turn_on");
 	});
 
+	it("asks the portal for a service's optional response, and falls back when it has none", async () => {
+		const fetchMock = vi
+			.fn()
+			.mockResolvedValueOnce(jsonResponse({ changed_states: [], service_response: { stdout: "ok" } }))
+			.mockResolvedValueOnce(
+				jsonResponse({ message: "An action which does not return responses can't be called with return_response=True" }, 400)
+			)
+			.mockResolvedValueOnce(jsonResponse([]));
+		vi.stubGlobal("fetch", fetchMock);
+
+		await client().callService("shell_command", "x", {}, undefined, { returnResponse: true, timeoutSeconds: 30 });
+		await client().callService("light", "turn_on", {}, undefined, { returnResponse: true });
+
+		expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([
+			"https://vome.io/api/v1/instances/srv-1/ha/services/shell_command/x?timeout=30&return_response=1",
+			"https://vome.io/api/v1/instances/srv-1/ha/services/light/turn_on?return_response=1",
+			"https://vome.io/api/v1/instances/srv-1/ha/services/light/turn_on"
+		]);
+	});
+
 	it("renders templates as text via the broker", async () => {
 		const fetchMock = vi.fn(async () => new Response("4", { status: 200 }));
 		vi.stubGlobal("fetch", fetchMock);

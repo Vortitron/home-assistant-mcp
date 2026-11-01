@@ -95,6 +95,57 @@ describe("ha_call_service results", () => {
 	});
 });
 
+describe("ha_call_service return_response", () => {
+	const SERVICES = [
+		{ domain: "shell_command", services: { uptime: { response: { optional: true } } } },
+		{ domain: "light", services: { turn_on: {} } }
+	];
+
+	it("asks for the response of a service that can return one, and reads the list once", async () => {
+		const getServices = vi.fn(async () => SERVICES);
+		const callService = vi.fn(async (_d: string, service: string) =>
+			service === "uptime"
+				? { changed_states: [], service_response: { stdout: "up 3 days", stderr: "", returncode: 0 } }
+				: []
+		);
+		const server = buildHarness({ env: { HA_ALLOW_WRITE: "true" }, rest: { getServices, callService } });
+
+		const shell = jsonOf(await server.call("ha_call_service", { domain: "shell_command", service: "uptime" }));
+		await server.call("ha_call_service", { domain: "light", service: "turn_on", target: { entity_id: "light.k" } });
+
+		expect(shell.service_response).toEqual({ stdout: "up 3 days", stderr: "", returncode: 0 });
+		expect((callService.mock.calls[0] as unknown[])[4]).toMatchObject({ returnResponse: true });
+		expect((callService.mock.calls[1] as unknown[])[4]).toMatchObject({ returnResponse: false });
+		expect(getServices).toHaveBeenCalledTimes(1);
+	});
+
+	it("lets the caller turn it off, and says when an asked-for response did not come back", async () => {
+		const getServices = vi.fn(async () => SERVICES);
+		const callService = vi.fn(async () => []);
+		const server = buildHarness({ env: { HA_ALLOW_WRITE: "true" }, rest: { getServices, callService } });
+
+		await server.call("ha_call_service", { domain: "shell_command", service: "uptime", return_response: false });
+		expect((callService.mock.calls[0] as unknown[])[4]).toMatchObject({ returnResponse: false });
+		expect(getServices).not.toHaveBeenCalled();
+
+		const body = jsonOf(await server.call("ha_call_service", { domain: "shell_command", service: "uptime" }));
+		expect(body.service_response).toBeUndefined();
+		expect(body.service_response_note).toMatch(/portal/);
+	});
+
+	it("still calls the service when the service list cannot be read", async () => {
+		const getServices = vi.fn(async () => {
+			throw new HaApiError("boom", 500, "");
+		});
+		const callService = vi.fn(async () => []);
+		const server = buildHarness({ env: { HA_ALLOW_WRITE: "true" }, rest: { getServices, callService } });
+
+		const result = await server.call("ha_call_service", { domain: "shell_command", service: "uptime" });
+		expect(result.isError).toBeFalsy();
+		expect((callService.mock.calls[0] as unknown[])[4]).toMatchObject({ returnResponse: false });
+	});
+});
+
 describe("ha_call_service safety", () => {
 	it("refuses when writes are disabled", async () => {
 		const callService = vi.fn();

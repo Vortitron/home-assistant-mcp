@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { SafetyConfig } from "../config.js";
-import type { HaTarget } from "../ha/types.js";
+import type { HaServiceDomain, HaTarget } from "../ha/types.js";
 import { SERVICE_MAX_TIMEOUT_SECONDS, splitServiceResult } from "../ha/restClient.js";
 import { evaluateDomainWrite, extractDomain } from "../safety.js";
 import { errorResult, jsonResult, runTool, type ToolContext } from "./helpers.js";
@@ -74,7 +74,63 @@ function hasDomainRestrictions(safety: SafetyConfig): boolean {
 	return safety.denyDomains.length > 0 || safety.allowDomains.length > 0;
 }
 
+/** `domain.service` for every service that can return a response. */
+export function servicesWithResponses(domains: HaServiceDomain[]): Set<string> {
+	const out = new Set<string>();
+	for (const entry of domains ?? []) {
+		for (const [name, service] of Object.entries(entry?.services ?? {})) {
+			const response = (service as { response?: unknown })?.response;
+			if (response && typeof response === "object") {
+				out.add(`${entry.domain}.${name}`);
+			}
+		}
+	}
+	return out;
+}
+
+/**
+ * How long a home's list of response-capable services is trusted. The full
+ * service list is large (hundreds of KB over the relay), so it is not fetched
+ * per call; a new integration's services are picked up within this window,
+ * and a service that needs a response regardless is retried with it anyway.
+ */
+const RESPONSE_SUPPORT_TTL_MS = 10 * 60 * 1000;
+
+/**
+ * Per-instance memory of which services can return a response, so
+ * ha_call_service can ask for it (?return_response) only where Home
+ * Assistant accepts it.
+ */
+function createResponseSupport(ctx: ToolContext) {
+	const byInstance = new Map<string, { at: number; services: Set<string> }>();
+
+	/** Records a freshly fetched service list (ha_list_services fetches it anyway). */
+	function remember(domains: HaServiceDomain[]): void {
+		byInstance.set(ctx.instances.activeId(), { at: Date.now(), services: servicesWithResponses(domains) });
+	}
+
+	/** True / false, or undefined when the list could not be read. */
+	async function supports(domain: string, service: string): Promise<boolean | undefined> {
+		const id = ctx.instances.activeId();
+		let hit = byInstance.get(id);
+		if (!hit || Date.now() - hit.at > RESPONSE_SUPPORT_TTL_MS) {
+			try {
+				remember(await ctx.rest.getServices());
+			} catch (error) {
+				ctx.logger.debug(`Could not read services to check response support: ${String(error)}`);
+				return undefined;
+			}
+			hit = byInstance.get(id);
+		}
+		return hit?.services.has(`${domain}.${service}`);
+	}
+
+	return { remember, supports };
+}
+
 export function registerServiceTools(server: McpServer, ctx: ToolContext): void {
+	const responseSupport = createResponseSupport(ctx);
+
 	server.registerTool(
 		"ha_list_services",
 		{
@@ -89,6 +145,7 @@ export function registerServiceTools(server: McpServer, ctx: ToolContext): void 
 		async ({ domain }) =>
 			runTool(ctx.logger, "ha_list_services", async () => {
 				const domains = await ctx.rest.getServices();
+				responseSupport.remember(domains);
 				if (domain) {
 					const match = domains.find((entry) => entry.domain === domain);
 					if (!match) {
@@ -109,7 +166,7 @@ export function registerServiceTools(server: McpServer, ctx: ToolContext): void 
 		{
 			title: "Call a service",
 			description:
-				"Call a Home Assistant service to change state (e.g. domain='light', service='turn_on', data={ brightness_pct: 60 }, target={ entity_id: 'light.kitchen' }). Refused unless writes are enabled, and blocked for denied domains. Returns the entities that changed, and service_response for services that return data.",
+				"Call a Home Assistant service to change state (e.g. domain='light', service='turn_on', data={ brightness_pct: 60 }, target={ entity_id: 'light.kitchen' }). Refused unless writes are enabled, and blocked for denied domains. Returns the entities that changed, and service_response for services that return data: a service that can return a response (shell_command's stdout, stderr and returncode; script; weather.get_forecasts; calendar.get_events …) is asked for it automatically.",
 			inputSchema: {
 				domain: z.string().describe("Service domain, e.g. 'light', 'switch', 'climate'."),
 				service: z.string().describe("Service name, e.g. 'turn_on', 'set_temperature'."),
@@ -135,11 +192,18 @@ export function registerServiceTools(server: McpServer, ctx: ToolContext): void 
 					.describe(
 						"How long to wait for the service to answer (default 15 s, at most 50). For slow actions: " +
 							"ai_task.generate_data with an image attached, a script that waits, a cloud call."
+					),
+				return_response: z
+					.boolean()
+					.optional()
+					.describe(
+						"Ask for the service's response. Default: automatically when Home Assistant lists the service " +
+							"as able to return one. false never asks (a service that requires it is still asked)."
 					)
 			},
 			annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true }
 		},
-		async ({ domain, service, data, target, timeout_seconds }) =>
+		async ({ domain, service, data, target, timeout_seconds, return_response }) =>
 			runTool(ctx.logger, "ha_call_service", async () => {
 				// Per-instance write policy (deny/allow domains stay global).
 				const safety = ctx.instances.currentSafety();
@@ -171,8 +235,12 @@ export function registerServiceTools(server: McpServer, ctx: ToolContext): void 
 							`Target specific entity_id(s) instead, or call the domain-specific service (e.g. 'light.${service}').`
 					);
 				}
+				const returnResponse = return_response ?? (await responseSupport.supports(domain, service)) === true;
 				const { changed, response } = splitServiceResult(
-					await ctx.rest.callService(domain, service, data ?? {}, target, { timeoutSeconds: timeout_seconds })
+					await ctx.rest.callService(domain, service, data ?? {}, target, {
+						timeoutSeconds: timeout_seconds,
+						returnResponse
+					})
 				);
 				return jsonResult({
 					called: `${domain}.${service}`,
@@ -182,7 +250,15 @@ export function registerServiceTools(server: McpServer, ctx: ToolContext): void 
 					})),
 					raw_changed_count: changed.length,
 					// What a service that returns data said (vomesync.subscribe_switch, ...).
-					...(response === undefined ? {} : { service_response: response })
+					...(response === undefined ? {} : { service_response: response }),
+					...(returnResponse && response === undefined
+						? {
+								service_response_note:
+									"The response was asked for but none came back. Through Vome this needs a portal " +
+									"that passes return_response on to the home; on a direct connection the service " +
+									"returned nothing."
+							}
+						: {})
 				});
 			})
 	);

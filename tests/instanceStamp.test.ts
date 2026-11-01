@@ -275,3 +275,21 @@ describe("naming the home on any call", () => {
 		expect(registered.get("vomehome_list_instances")!.config.inputSchema).not.toHaveProperty("instance_id");
 	});
 });
+
+describe("a restarting Home Assistant", () => {
+	it("says restarting rather than UNVERIFIED", async () => {
+		const { appendStamp, createIdentityReader } = await import("../src/tools/instanceStamp.js");
+		const { HaApiError } = await import("../src/ha/restClient.js");
+		const page = "<html><head><title>404 Not Found</title></head><body>nginx</body></html>";
+		const ctx = {
+			instances: { activeId: () => "inst-1" },
+			rest: { getConfig: async () => { throw new HaApiError("broker 404", 404, page); } },
+			logger: { warn: () => {} }
+		} as any;
+		const identity = await createIdentityReader(ctx)();
+		const stamped = appendStamp({ content: [] }, identity);
+		const text = (stamped.content[0] as { text: string }).text;
+		expect(text).toMatch(/restarting/);
+		expect(text).not.toMatch(/UNVERIFIED/);
+	});
+});

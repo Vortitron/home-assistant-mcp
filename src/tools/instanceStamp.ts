@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ToolContext } from "./helpers.js";
+import { isRestartingError } from "../ha/brokeredClient.js";
 
 /**
  * Stamp every tool reply with which Home Assistant answered it.
@@ -43,6 +44,8 @@ interface Identity {
 	version?: string;
 	components?: number;
 	error?: string;
+	/** The read failed because Home Assistant is down (restarting), not because the route is wrong. */
+	restarting?: boolean;
 }
 
 interface CacheEntry {
@@ -54,6 +57,16 @@ interface CacheEntry {
 export const STAMP_PREFIX = "[vome-instance]";
 
 function renderStamp(identity: Identity): string {
+	if (identity.restarting) {
+		// Not "UNVERIFIED": nothing answered at all, so no reply can have come
+		// from the wrong home. An agent that had just restarted HA read the
+		// old wording as a routing fault and went looking for one (GamlaBio,
+		// Oct 2026).
+		return (
+			`${STAMP_PREFIX} target=${identity.id} — Home Assistant is restarting or not answering yet, ` +
+			`so which home answered could not be checked. If it was just restarted, wait a minute or two.`
+		);
+	}
 	if (identity.error) {
 		return (
 			`${STAMP_PREFIX} target=${identity.id} — identity UNVERIFIED ` +
@@ -101,7 +114,11 @@ export function createIdentityReader(ctx: ToolContext): () => Promise<Identity> 
 			// unverified stamp that says so is more use than no stamp: it
 			// tells the reader the reply cannot be trusted to be from the
 			// instance they asked for.
-			result = { id, error: error instanceof Error ? error.message : String(error) };
+			result = {
+				id,
+				error: error instanceof Error ? error.message : String(error),
+				...(isRestartingError(error) ? { restarting: true } : {})
+			};
 			// Logged, because the reader only sees the stamp: a run of
 			// unverified replies on 14 Oct left no trace of why.
 			ctx.logger?.warn(`Instance stamp: could not read ${id}'s identity: ${describe(error)}`);

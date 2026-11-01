@@ -150,7 +150,12 @@ export function createBrokeredHaRestClient(
 		// A longer wait is asked of the portal (?timeout=, which it carries to
 		// the home), and this side waits a few seconds past it so the home's own
 		// answer, even a timeout error, gets back.
-		const query = seconds === undefined ? "" : `?timeout=${seconds}`;
+		// ?return_response is passed on; the portal falls back to a plain call
+		// when the service has no response to give.
+		const query = buildQuery({
+			timeout: seconds === undefined ? undefined : String(seconds),
+			return_response: options?.returnResponse ? "true" : undefined
+		});
 		return broker<HaServiceCallResult>(
 			`/services/${encodeURIComponent(domain)}/${encodeURIComponent(service)}${query}`,
 			{ method: "POST", body, ...(seconds === undefined ? {} : { timeoutMs: (seconds + 8) * 1000 }) }
@@ -253,7 +258,38 @@ export function createBrokeredHaRestClient(
 	};
 }
 
+/** What an agent is told while Home Assistant is down for a restart. */
+export const RESTARTING_MESSAGE =
+	"Home Assistant is not answering: it is most likely restarting, which usually takes one to three " +
+	"minutes. Wait, then try again.";
+
+/**
+ * True when a broker reply says Home Assistant itself is not up: the portal
+ * marks it `ha_restarting`, or an older portal passed on the web server's
+ * own HTML error page. That page reached agents as "nginx 404", which reads
+ * like a wrong path, mid-restart (GamlaBio, Oct 2026).
+ */
+export function isRestartingReply(status: number, body: string): boolean {
+	if (![404, 502, 503, 504].includes(status)) return false;
+	try {
+		const parsed = JSON.parse(body) as { ha_restarting?: unknown };
+		if (parsed && parsed.ha_restarting === true) return true;
+	} catch {
+		// not JSON
+	}
+	const head = body.trimStart().slice(0, 200).toLowerCase();
+	return head.startsWith("<html") || head.startsWith("<!doctype html");
+}
+
+/** True for an error that came from {@link isRestartingReply}. */
+export function isRestartingError(error: unknown): boolean {
+	return error instanceof HaApiError && isRestartingReply(error.status, error.body);
+}
+
 function brokerErrorMessage(method: string, path: string, status: number, body: string): string {
+	if (isRestartingReply(status, body)) {
+		return `${RESTARTING_MESSAGE} (VomeHome broker ${method} ${path}: ${status})`;
+	}
 	let detail = body;
 	try {
 		const parsed = JSON.parse(body) as { error?: string };

@@ -3,6 +3,7 @@ import type { Config } from "../config.js";
 import type { Logger } from "../logger.js";
 import type { HaRestClient } from "../ha/restClient.js";
 import { HaApiError } from "../ha/restClient.js";
+import { isRestartingError } from "../ha/brokeredClient.js";
 import { VomeHomeError } from "../vomehome/client.js";
 import type { HaWsClient } from "../ha/wsClient.js";
 import type { EsphomeClient } from "../esphome/client.js";
@@ -42,6 +43,11 @@ export function errorResult(message: string): CallToolResult {
 
 export function toErrorMessage(error: unknown): string {
 	if (error instanceof HaApiError || error instanceof VomeHomeError || error instanceof NodeRedError) {
+		// The restart message already says what happened; nginx's page under
+		// it would only bury that.
+		if (error instanceof HaApiError && isRestartingError(error)) {
+			return error.message;
+		}
 		const body = error.body ? ` Body: ${error.body.slice(0, 800)}` : "";
 		return `${error.message}${error.status ? ` (status ${error.status})` : ""}.${body}`;
 	}

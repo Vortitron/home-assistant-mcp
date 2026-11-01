@@ -6,7 +6,10 @@ import { createLogger } from "../src/logger.js";
 import { HaApiError, type HaRestClient } from "../src/ha/restClient.js";
 import { commandTimeoutMs, type HaWsClient } from "../src/ha/wsClient.js";
 import { SLOW_SUPERVISOR_TIMEOUT_SECONDS, defaultSupervisorTimeout, supervisorLogTarget } from "../src/tools/addons.js";
-import { imageTypeFor } from "../src/tools/configFiles.js";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { MAX_UPLOAD_BYTES, encodeForUpload, imageTypeFor, resolveLocalPath } from "../src/tools/configFiles.js";
 import { createUnavailableEsphomeClient, type EsphomeClient, type EsphomeCommandRequest } from "../src/esphome/client.js";
 import { createNodeRedClient } from "../src/nodered/client.js";
 import { createVomeHomeClient, type VomeHomeClient } from "../src/vomehome/client.js";
@@ -1020,7 +1023,8 @@ describe("config files", () => {
 		for (const [tool, args] of [
 			["ha_list_config_files", {}],
 			["ha_read_config_file", { path: "configuration.yaml" }],
-			["ha_write_config_file", { instance_id: "direct", path: "configuration.yaml", content: "x" }]
+			["ha_write_config_file", { instance_id: "direct", path: "configuration.yaml", content: "x" }],
+			["ha_upload_file", { instance_id: "direct", local_path: "/nonexistent/x.yaml", path: "x.yaml" }]
 		] as const) {
 			const result = await server.call(tool, args);
 			expect(result.isError).toBe(true);
@@ -1336,6 +1340,179 @@ describe("binary config files", () => {
 
 		expect(checkConfig).toHaveBeenCalled();
 		expect(body.verified).toBe(true);
+	});
+});
+
+describe("ha_upload_file", () => {
+	const BROKERED = {
+		HA_TOKEN: "",
+		VOMEHOME_TOKEN: "vh_test",
+		VOMEHOME_INSTANCE_ID: "rly-1",
+		HA_ALLOW_WRITE: "true",
+		HA_ALLOW_CONFIG_WRITE: "true"
+	};
+	let dir: string;
+
+	beforeEach(() => {
+		dir = mkdtempSync(join(tmpdir(), "ha-upload-"));
+	});
+	afterEach(() => {
+		vi.unstubAllGlobals();
+		rmSync(dir, { recursive: true, force: true });
+	});
+
+	/** Routes the file endpoints; records every write body. */
+	function stubFiles(existing: string | null = null) {
+		const writes: Array<{ url: string; body: { content: string; encoding: string } }> = [];
+		const fetchMock = vi.fn(async (input: unknown, init: any) => {
+			const url = String(input);
+			if (url.includes("/files/read")) {
+				return existing === null
+					? new Response("not found", { status: 404 })
+					: new Response(JSON.stringify({ content: existing }), { status: 200 });
+			}
+			writes.push({ url, body: JSON.parse(init.body) });
+			return new Response(JSON.stringify({ path: "x", written: true }), { status: 200 });
+		});
+		vi.stubGlobal("fetch", fetchMock);
+		return { writes, fetchMock };
+	}
+
+	it("sends a text file as UTF-8, byte for byte, without a config check for a non-YAML file", async () => {
+		const page = "\uFEFF<!doctype html>\r\n<p>Hall \u00e5\u00e4\u00f6</p>\n";
+		const local = join(dir, "index.html");
+		writeFileSync(local, page, "utf8");
+		const { writes } = stubFiles();
+		const checkConfig = vi.fn();
+		const server = buildHarness({ env: BROKERED, rest: { checkConfig } });
+
+		const result = await server.call("ha_upload_file", {
+			instance_id: "rly-1",
+			local_path: local,
+			path: "www/floor/index.html"
+		});
+
+		expect(result.isError).toBeFalsy();
+		expect(writes).toHaveLength(1);
+		expect(writes[0]!.url).toContain("/files/write?path=www%2Ffloor%2Findex.html");
+		expect(writes[0]!.body).toEqual({ content: page, encoding: "utf8" });
+		expect(checkConfig).not.toHaveBeenCalled();
+		const body = jsonOf(result);
+		expect(body).toMatchObject({ uploaded_from: local, encoding: "utf8", verified: false });
+		expect(body.bytes).toBe(Buffer.byteLength(page, "utf8"));
+	});
+
+	it("sends a binary file as base64", async () => {
+		const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0xff]);
+		const local = join(dir, "icon.png");
+		writeFileSync(local, png);
+		const { writes } = stubFiles();
+		const server = buildHarness({ env: BROKERED });
+
+		const body = jsonOf(
+			await server.call("ha_upload_file", { instance_id: "rly-1", local_path: local, path: "www/icon.png" })
+		);
+
+		expect(writes[0]!.body).toEqual({ content: png.toString("base64"), encoding: "base64" });
+		expect(body.encoding).toBe("base64");
+	});
+
+	it("checks a YAML file and puts the old one back when it breaks the configuration", async () => {
+		const local = join(dir, "heating.yaml");
+		writeFileSync(local, "broken: [\n");
+		const { writes } = stubFiles("good: true\n");
+		const checkConfig = vi
+			.fn()
+			.mockResolvedValueOnce({ result: "invalid", errors: "bad yaml" })
+			.mockResolvedValueOnce({ result: "valid", errors: null });
+		const server = buildHarness({ env: BROKERED, rest: { checkConfig } });
+
+		const body = jsonOf(
+			await server.call("ha_upload_file", {
+				instance_id: "rly-1",
+				local_path: local,
+				path: "packages/heating.yaml"
+			})
+		);
+
+		expect(body.rolled_back).toBe(true);
+		expect(writes.map((w) => w.body.content)).toEqual(["broken: [\n", "good: true\n"]);
+	});
+
+	it("resolves a relative local_path against the server's working directory", () => {
+		expect(resolveLocalPath("site/index.html", "/work/proj")).toBe("/work/proj/site/index.html");
+		expect(resolveLocalPath("/abs/file.txt", "/work/proj")).toBe("/abs/file.txt");
+	});
+
+	it("refuses a file over 2 MiB before sending anything", async () => {
+		const local = join(dir, "big.bin");
+		writeFileSync(local, Buffer.alloc(MAX_UPLOAD_BYTES + 1, 0x41));
+		const { fetchMock } = stubFiles();
+		const server = buildHarness({ env: BROKERED });
+
+		const result = await server.call("ha_upload_file", { instance_id: "rly-1", local_path: local, path: "www/big.bin" });
+
+		expect(result.isError).toBe(true);
+		expect(textOf(result)).toMatch(/2 MiB/);
+		expect(textOf(result)).toContain(String(MAX_UPLOAD_BYTES));
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	it("says so when the local file is missing or a directory", async () => {
+		const { fetchMock } = stubFiles();
+		const server = buildHarness({ env: BROKERED });
+
+		const missing = await server.call("ha_upload_file", { instance_id: "rly-1", local_path: join(dir, "nope.txt"), path: "x.txt" });
+		expect(textOf(missing)).toMatch(/does not exist/);
+		const folder = await server.call("ha_upload_file", { instance_id: "rly-1", local_path: dir, path: "x.txt" });
+		expect(textOf(folder)).toMatch(/not a regular file/);
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	it("refuses, without reading or writing, when the named home is not the one selected", async () => {
+		const local = join(dir, "a.txt");
+		writeFileSync(local, "a");
+		const { fetchMock } = stubFiles();
+		const server = buildHarness({ env: BROKERED });
+
+		const result = await server.call("ha_upload_file", { instance_id: "other", local_path: local, path: "a.txt" });
+
+		expect(result.isError).toBe(true);
+		expect(textOf(result)).toContain("rly-1");
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	it("on the hosted server, reads nothing and gives the REST upload instead", async () => {
+		const local = join(dir, "page.html");
+		writeFileSync(local, "<p>secret on the server</p>");
+		const { fetchMock } = stubFiles();
+		const server = buildHarness({ env: { ...BROKERED, MCP_HOSTED: "1" } });
+
+		const result = await server.call("ha_upload_file", { instance_id: "rly-1", local_path: local, path: "www/page.html" });
+
+		expect(result.isError).toBe(true);
+		const text = textOf(result);
+		expect(text).toContain("https://vome.io/api/v1/instances/rly-1/ha/files/write?path=www%2Fpage.html");
+		expect(text).toContain(`file=@${local}`);
+		expect(text).not.toContain("secret on the server");
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+});
+
+describe("encodeForUpload", () => {
+	it("keeps UTF-8 text (with ANSI colour and tabs) as text", () => {
+		const text = "\u001b[31mred\u001b[0m\tok\n";
+		expect(encodeForUpload(Buffer.from(text, "utf8"))).toEqual({ encoding: "utf8", content: text });
+	});
+
+	it("base64s invalid UTF-8, NUL bytes and control-character soup", () => {
+		expect(encodeForUpload(Buffer.from([0xc3, 0x28])).encoding).toBe("base64");
+		expect(encodeForUpload(Buffer.from("ab\u0000cd", "utf8")).encoding).toBe("base64");
+		expect(encodeForUpload(Buffer.from([1, 2, 3, 4, 5, 0x41])).encoding).toBe("base64");
+	});
+
+	it("treats an empty file as text", () => {
+		expect(encodeForUpload(Buffer.alloc(0))).toEqual({ encoding: "utf8", content: "" });
 	});
 });
 

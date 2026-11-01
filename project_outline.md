@@ -143,6 +143,14 @@ useful to say about a binary write, and running it anyway would be free but
 misleading (a "verified" binary write that check_config never actually
 looked at).
 
+`ha_upload_file` (November 2026) sends a file that is already on disk without
+pasting it into a tool call: it reads `local_path` from the MCP process's own
+filesystem, picks UTF-8 or base64 (`encodeForUpload`), caps it at 2 MiB, and
+writes through the same `refuseFileWrite` + `writeChecked` path as
+`ha_write_config_file`. On the hosted server (`config.hosted`, set by `serve`
+through `MCP_HOSTED` in every session's env) the process's disk is Vome's, so
+it reads nothing and answers with the equivalent REST upload instead.
+
 Traces (`tools/traces.ts`): `trace/list` + `trace/get` over WS, for automations
 and scripts. Raw traces embed the whole config and every step's variables, so
 these summarise by default — ordered steps, the trigger, and `failed_at` (the

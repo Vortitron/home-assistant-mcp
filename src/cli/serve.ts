@@ -238,7 +238,9 @@ export async function startMcpHttpServer(args: ServeArgs, logger: Logger): Promi
 			VOMEHOME_API_URL: args.apiUrl,
 			VOMEHOME_INSTANCE_ID: instanceId,
 			VOMEHOME_INSTANCES: instanceIds.length > 0 ? JSON.stringify(instanceIds) : "",
-			LOG_LEVEL: args.logLevel
+			LOG_LEVEL: args.logLevel,
+			// The process's disk is this server's, not the caller's machine.
+			MCP_HOSTED: "1"
 		} as NodeJS.ProcessEnv;
 	}
 

@@ -1,3 +1,6 @@
+import { readFile, stat } from "node:fs/promises";
+import { homedir } from "node:os";
+import { resolve as resolvePath } from "node:path";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -132,9 +135,10 @@ async function writeAndVerify(
 	content: string,
 	fileEncoding: FileEncoding,
 	previous: string | null,
-	shouldVerify: boolean
+	shouldVerify: boolean,
+	extra: Record<string, unknown> = {}
 ): Promise<CallToolResult> {
-	const result = await writeConfigFile(ctx, path, content, fileEncoding);
+	const result = { ...extra, ...(await writeConfigFile(ctx, path, content, fileEncoding)) };
 	if (!shouldVerify) {
 		return jsonResult({
 			...result,
@@ -171,6 +175,7 @@ async function writeAndVerify(
 	await writeConfigFile(ctx, path, previous, fileEncoding);
 	const after = await ctx.rest.checkConfig();
 	return jsonResult({
+		...extra,
 		path,
 		written: false,
 		verified: false,
@@ -186,6 +191,195 @@ async function writeAndVerify(
 				"file was still put back. If you are fixing it in stages, write again " +
 				"with verify=false and check at the end."
 	});
+}
+
+/**
+ * Refuses a write aimed at a home other than the one this session targets, or
+ * one the local config-write guard forbids; null when it may go ahead.
+ *
+ * Say which house, and be told if it is not the one you think.
+ *
+ * The active instance is ambient session state, and ambient state drifts: a
+ * transport reconnect can resume a *different* conversation's choice (the
+ * memory is keyed only as far as the client's name), and nothing in the write
+ * path ever said so.
+ *
+ * On 2026-09-18 that put a Vome boilerplate configuration.yaml over a live
+ * customer's real Home Assistant. The agent had selected the demo VM, had
+ * checked it was selected, and its writes went to the house next door — 5 KB
+ * of their config, the packages include and every YAML-defined helper,
+ * replaced by 790 bytes of ours. Two full restarts followed before anyone
+ * noticed.
+ *
+ * No amount of transport bookkeeping can reliably tell two conversations
+ * apart, so this does not try. It makes the caller name the target and
+ * refuses when belief and reality disagree — which is precisely the state
+ * that did the damage. Cheap to satisfy, and it fails loudly instead of
+ * destructively. Only where there is more than one house to confuse: a direct
+ * connection has exactly one Home Assistant and no ambient instance to drift,
+ * so the check would be friction with nothing to catch.
+ */
+function refuseFileWrite(ctx: ToolContext, instanceId: string | undefined, noun: string): CallToolResult | null {
+	const meant = (instanceId ?? "").trim();
+	const targeting = ctx.instances.activeId();
+	if (ctx.config.brokered && meant !== targeting) {
+		return errorResult(
+			`Refused: this session is targeting "${targeting}", but the ${noun} names ` +
+				`"${meant}". Nothing was written. If "${meant}" is the home you mean, ` +
+				`select it with vomehome_use_instance first and try again — do not ` +
+				`assume the session is still where you left it.`
+		);
+	}
+	const decision = evaluateConfigWrite(ctx.instances.currentSafety());
+	if (!decision.allowed) {
+		return errorResult(`Refused: ${decision.reason}`);
+	}
+	return null;
+}
+
+/**
+ * The checked write both ha_write_config_file and ha_upload_file go through:
+ * capture what is there now (when verifying), write, check, roll back.
+ */
+async function writeChecked(
+	ctx: ToolContext,
+	path: string,
+	content: string,
+	fileEncoding: FileEncoding,
+	shouldVerify: boolean,
+	extra: Record<string, unknown> = {}
+): Promise<CallToolResult> {
+	// Captured before the write so the file can be put back. A file that does
+	// not exist yet reads as null, and there is nothing to restore to.
+	const previous = shouldVerify ? await readIfExists(ctx, path, fileEncoding) : null;
+	return writeAndVerify(ctx, path, content, fileEncoding, previous, shouldVerify, extra);
+}
+
+/** What the file write endpoints accept in one go. */
+export const MAX_UPLOAD_BYTES = 2 * 1024 * 1024;
+
+/** How much of a file is looked at when deciding whether it is text. */
+const SNIFF_BYTES = 8192;
+
+/**
+ * The file's bytes as the write endpoint wants them: UTF-8 text when they are
+ * valid UTF-8 and do not look binary, base64 otherwise.
+ *
+ * "Look binary" is a NUL byte anywhere, or more than one in ten of the first
+ * 8 KB being control characters other than tab, newline, carriage return,
+ * form feed, vertical tab and escape (ANSI colour in a log is still text).
+ * A byte-order mark is kept, so what lands on the home is byte-for-byte what
+ * was on disk.
+ */
+export function encodeForUpload(bytes: Uint8Array): { encoding: FileEncoding; content: string } {
+	const asBase64 = (): { encoding: FileEncoding; content: string } => ({
+		encoding: "base64",
+		content: Buffer.from(bytes).toString("base64")
+	});
+	if (bytes.includes(0)) {
+		return asBase64();
+	}
+	let text: string;
+	try {
+		text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+	} catch {
+		return asBase64();
+	}
+	const head = text.slice(0, SNIFF_BYTES);
+	let controls = 0;
+	for (let i = 0; i < head.length; i++) {
+		const code = head.charCodeAt(i);
+		if ((code < 0x20 && code !== 0x09 && code !== 0x0a && code !== 0x0d && code !== 0x0c && code !== 0x0b && code !== 0x1b) || code === 0x7f) {
+			controls++;
+		}
+	}
+	if (head.length > 0 && controls / head.length > 0.1) {
+		return asBase64();
+	}
+	return { encoding: "utf8", content: text };
+}
+
+/** `~/x` → the home directory; anything relative → against `cwd`. */
+export function resolveLocalPath(localPath: string, cwd: string = process.cwd()): string {
+	const trimmed = localPath.trim();
+	if (trimmed === "~" || trimmed.startsWith("~/")) {
+		return resolvePath(homedir(), trimmed.slice(2));
+	}
+	return resolvePath(cwd, trimmed);
+}
+
+type LocalUpload =
+	| { ok: true; resolved: string; bytes: number; encoding: FileEncoding; content: string }
+	| { ok: false; message: string };
+
+/** Reads a file from this process's own disk for upload, or says why not. */
+export async function readLocalUpload(localPath: string, cwd: string = process.cwd()): Promise<LocalUpload> {
+	const resolved = resolveLocalPath(localPath, cwd);
+	let info: Awaited<ReturnType<typeof stat>>;
+	try {
+		info = await stat(resolved);
+	} catch (error) {
+		const code = (error as { code?: string }).code;
+		return {
+			ok: false,
+			message:
+				code === "ENOENT"
+					? `Nothing uploaded: ${resolved} does not exist (local_path is resolved against ${cwd}).`
+					: `Nothing uploaded: could not read ${resolved} (${code ?? String(error)}).`
+		};
+	}
+	if (!info.isFile()) {
+		return { ok: false, message: `Nothing uploaded: ${resolved} is not a regular file.` };
+	}
+	if (info.size > MAX_UPLOAD_BYTES) {
+		return {
+			ok: false,
+			message:
+				`Nothing uploaded: ${resolved} is ${info.size} bytes, over the ${MAX_UPLOAD_BYTES}-byte ` +
+				`(2 MiB) limit for one file. Split it, compress it, or serve it from somewhere else.`
+		};
+	}
+	const bytes = await readFile(resolved);
+	// Checked again: the file can grow between stat and read.
+	if (bytes.length > MAX_UPLOAD_BYTES) {
+		return {
+			ok: false,
+			message: `Nothing uploaded: ${resolved} is over the ${MAX_UPLOAD_BYTES}-byte (2 MiB) limit.`
+		};
+	}
+	return { ok: true, resolved, bytes: bytes.length, ...encodeForUpload(bytes) };
+}
+
+/**
+ * What ha_upload_file says on the hosted server, where "local" is Vome's
+ * machine, not the agent's: the same upload over the REST API, which the
+ * agent can run from where the file is.
+ */
+export function hostedUploadMessage(apiUrl: string, instanceId: string, path: string, localPath: string): string {
+	const url =
+		`${apiUrl}/api/v1/instances/${encodeURIComponent(instanceId || "<instance id>")}` +
+		`/ha/files/write?path=${encodeURIComponent(path)}`;
+	return [
+		"Nothing uploaded: this is the hosted Vome MCP. It runs on Vome's servers, so it cannot see files " +
+			"on your machine, and ha_upload_file only reads the disk of the machine the MCP runs on.",
+		"",
+		"Upload the file over the Vome REST API from the machine that has it (the API key needs ha:files):",
+		"",
+		`  curl -X POST "${url}" \\`,
+		'    -H "Authorization: Bearer $VOMEHOME_TOKEN" \\',
+		`    -F "file=@${localPath}"`,
+		"",
+		"If that multipart form is refused (an older portal), send JSON instead, which works today:",
+		"",
+		`  base64 < "${localPath}" | tr -d '\\n' | jq -Rs '{content: ., encoding: "base64"}' | \\`,
+		`    curl -X POST "${url}" -H "Authorization: Bearer $VOMEHOME_TOKEN" \\`,
+		'    -H "Content-Type: application/json" --data @-',
+		"",
+		'The JSON body is {"content": "<base64 of the bytes>", "encoding": "base64"}, or {"content": "<text>"} ' +
+			"for UTF-8 text. One file may be at most 2 MiB. A file sent this way is not run through Home " +
+			"Assistant's configuration check, so run ha_check_config afterwards if it is YAML. For a small text " +
+			"file, ha_write_config_file (or ha_edit_config_file for a change to an existing one) works from here."
+	].join("\n");
 }
 
 export function registerConfigFileTools(server: McpServer, ctx: ToolContext): void {
@@ -275,7 +469,8 @@ export function registerConfigFileTools(server: McpServer, ctx: ToolContext): vo
 				"relevant domain, for it to take effect.\n\n" +
 				"Requires the ha:files scope. Prefer a purpose-built tool where one exists: helpers via " +
 				"ha_set_helper and automations via ha_set_automation both apply immediately and cannot " +
-				"break startup.",
+				"break startup. For a file that is already on disk (a web page, an image, a large file), " +
+				"use ha_upload_file instead of pasting its contents here.",
 			inputSchema: {
 				instance_id: z
 					.string()
@@ -302,51 +497,79 @@ export function registerConfigFileTools(server: McpServer, ctx: ToolContext): vo
 		},
 		async ({ instance_id, path, content, encoding, verify }) =>
 			runTool(ctx.logger, "ha_write_config_file", async () => {
-				// Say which house, and be told if it is not the one you think.
-				//
-				// The active instance is ambient session state, and ambient state
-				// drifts: a transport reconnect can resume a *different*
-				// conversation's choice (the memory is keyed only as far as the
-				// client's name), and nothing in the write path ever said so.
-				//
-				// On 2026-09-18 that put a Vome boilerplate configuration.yaml
-				// over a live customer's real Home Assistant. The agent had
-				// selected the demo VM, had checked it was selected, and its
-				// writes went to the house next door — 5 KB of their config, the
-				// packages include and every YAML-defined helper, replaced by 790
-				// bytes of ours. Two full restarts followed before anyone noticed.
-				//
-				// No amount of transport bookkeeping can reliably tell two
-				// conversations apart, so this does not try. It makes the caller
-				// name the target and refuses when belief and reality disagree —
-				// which is precisely the state that did the damage. Cheap to
-				// satisfy, and it fails loudly instead of destructively.
-				// Only where there is more than one house to confuse. A direct
-				// connection has exactly one Home Assistant and no ambient
-				// instance to drift, so the check would be friction with nothing
-				// to catch.
-				const meant = (instance_id ?? "").trim();
-				const targeting = ctx.instances.activeId();
-				if (ctx.config.brokered && meant !== targeting) {
-					return errorResult(
-						`Refused: this session is targeting "${targeting}", but the write names ` +
-							`"${meant}". Nothing was written. If "${meant}" is the home you mean, ` +
-							`select it with vomehome_use_instance first and try again — do not ` +
-							`assume the session is still where you left it.`
-					);
-				}
-				const decision = evaluateConfigWrite(ctx.instances.currentSafety());
-				if (!decision.allowed) {
-					return errorResult(`Refused: ${decision.reason}`);
-				}
+				// See refuseFileWrite for why the caller must name the home.
+				const refused = refuseFileWrite(ctx, instance_id, "write");
+				if (refused) return refused;
 				const fileEncoding: FileEncoding = encoding ?? "utf8";
 				const shouldVerify = verify !== undefined ? verify : fileEncoding === "utf8";
-				// Captured before the write so the file can be put back. A file that
-				// does not exist yet reads as null, and there is nothing to restore
-				// to — see below.
-				const previous = shouldVerify ? await readIfExists(ctx, path, fileEncoding) : null;
+				return writeChecked(ctx, path, content, fileEncoding, shouldVerify);
+			})
+	);
 
-				return writeAndVerify(ctx, path, content, fileEncoding, previous, shouldVerify);
+	server.registerTool(
+		"ha_upload_file",
+		{
+			title: "Upload a local file to the config directory",
+			description:
+				"Copy a file that is already on disk — a web page for www/, an image, a package, a data file — " +
+				"into Home Assistant's config directory, without pasting its contents into the call. The MCP " +
+				"server reads local_path from its own filesystem, sends it as UTF-8 text when it is text and as " +
+				"base64 when it is binary, and writes it exactly as ha_write_config_file does: it replaces any " +
+				"file already at 'path', and a YAML file is checked with Home Assistant's configuration check and " +
+				"put back if the check fails. At most 2 MiB per file.\n\n" +
+				"Only for an MCP server running on your machine (npx / stdio). The hosted Vome MCP runs on Vome's " +
+				"servers and cannot see your files; there this tool reads nothing and answers with the equivalent " +
+				"REST upload (curl) to run where the file is.\n\n" +
+				"Requires the ha:files scope. A successful write does not apply the change: restart Home Assistant " +
+				"or reload the relevant domain where that matters (files under www/ are served at /local/ at once).",
+			inputSchema: {
+				instance_id: z
+					.string()
+					.describe(
+						"The instance this upload is meant for (as listed by vomehome_list_instances). " +
+							"Required, and checked against the one this session is actually targeting: " +
+							"if they differ nothing is written."
+					),
+				local_path: z
+					.string()
+					.min(1)
+					.describe(
+						"The file on the MCP server's machine: absolute, '~/...', or relative to the server's working directory."
+					),
+				path: z.string().min(1).describe("Destination relative to the config root, e.g. 'www/floorplan/index.html'."),
+				verify: z
+					.boolean()
+					.optional()
+					.describe(
+						"Check the configuration afterwards and restore the previous file if it fails. Default true for " +
+							"a .yaml/.yml text file, false otherwise (check_config only validates YAML)."
+					)
+			},
+			annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true }
+		},
+		async ({ instance_id, local_path, path, verify }) =>
+			runTool(ctx.logger, "ha_upload_file", async () => {
+				const refused = refuseFileWrite(ctx, instance_id, "upload");
+				if (refused) return refused;
+				// On the hosted server "local" is Vome's disk. Never read it.
+				if (ctx.config.hosted) {
+					return errorResult(
+						hostedUploadMessage(ctx.config.vomehome.apiUrl, ctx.instances.activeId(), path, local_path)
+					);
+				}
+				if (!ctx.config.brokered) {
+					return errorResult(NEEDS_RELAY);
+				}
+				const local = await readLocalUpload(local_path);
+				if (!local.ok) {
+					return errorResult(local.message);
+				}
+				const shouldVerify = verify ?? (local.encoding === "utf8" && /\.ya?ml$/i.test(path));
+				return writeChecked(ctx, path, local.content, local.encoding, shouldVerify, {
+					uploaded_from: local.resolved,
+					bytes: local.bytes,
+					encoding: local.encoding
+				});
 			})
 	);
 

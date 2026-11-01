@@ -123,6 +123,14 @@ export interface Config {
 	 * HA_TOKEN is configured.
 	 */
 	brokered: boolean;
+	/**
+	 * True when this process is the hosted, multi-tenant HTTP server
+	 * (`home-assistant-mcp serve`) rather than a stdio server the agent started
+	 * on its own machine. Its filesystem is then the server's, not the agent's,
+	 * so nothing may read a "local" path on the caller's behalf (ha_upload_file).
+	 * Set by `serve` for every session via MCP_HOSTED; never by the user.
+	 */
+	hosted: boolean;
 	timeoutMs: number;
 	maxResults: number;
 	logLevel: LogLevel;
@@ -344,6 +352,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
 		haUrl: stripTrailingSlashes((env.HA_URL ?? "").trim()),
 		haToken,
 		brokered,
+		hosted: parseBoolean(env.MCP_HOSTED, false),
 		timeoutMs: parsePositiveInt(env.HA_TIMEOUT_MS, DEFAULT_TIMEOUT_MS),
 		maxResults: parsePositiveInt(env.MAX_RESULTS, DEFAULT_MAX_RESULTS),
 		logLevel: parseLogLevel(env.LOG_LEVEL),

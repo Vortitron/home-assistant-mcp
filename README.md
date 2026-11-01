@@ -91,6 +91,7 @@ policy (see [Safety](#safety)).
 | `ha_set_helper` | Create or update a helper — no `configuration.yaml`, no restart. |
 | `ha_read_config_file` | Read a file under the config directory — text by default, or `encoding: 'base64'` for a binary asset (needs `ha:files`). |
 | `ha_write_config_file` | Replace a file under the config directory — text by default, or `encoding: 'base64'` for a binary asset; checks the config and restores the file if it fails (needs `ha:files`). |
+| `ha_upload_file` | Copy a file already on disk (a web page, an image, a package) into the config directory: read from the MCP server's own filesystem, sent as text or base64 as it needs, at most 2 MiB, written and checked like `ha_write_config_file`. Local (npx) servers only — the hosted MCP can't see your files and answers with the equivalent `curl` upload (needs `ha:files`). |
 | `ha_delete_config_file` | Delete one file under the config directory. Never a directory, and never `configuration.yaml`, `secrets.yaml` or Home Assistant's database. Names its target home like a write (needs `ha:files`, and Vome add-on 0.3.55 / integration 0.9.39 on the home). |
 | `ha_edit_config_file` | Change part of a text file in place: exact find-and-replace edits that must each match once, then the same check-and-restore as a write. For a three-line change to a large file (needs `ha:files`). |
 | `ha_list_config_files` | List a directory under the config directory (needs `ha:files`). |

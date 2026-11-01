@@ -21,6 +21,8 @@ const GOOD_TOKEN = "vh_good_token";
 /** Flipped by a test to simulate a grant being revoked between sessions. */
 let revokeSecondInstance = false;
 const NO_INSTANCE_TOKEN = "vh_scopeless_token";
+/** Every config-file request the fake portal saw. */
+const filesRequests: string[] = [];
 
 interface FakePortal {
 	url: string;
@@ -39,6 +41,9 @@ async function makeFakePortal(): Promise<FakePortal> {
 			res.writeHead(status, { "Content-Type": "application/json" });
 			res.end(JSON.stringify(body));
 		};
+		if (req.url?.includes("/ha/files/")) {
+			filesRequests.push(req.url);
+		}
 		if (token !== GOOD_TOKEN && token !== NO_INSTANCE_TOKEN) {
 			json(401, { error: "bad token" });
 			return;
@@ -443,6 +448,26 @@ describe("MCP HTTP server", () => {
 		expect(text).toContain("2026.8.0");
 		expect(text).toContain("Test Home");
 
+		await client.close();
+	});
+
+	it("never reads its own disk for ha_upload_file, and says how to upload instead", async () => {
+		// The hosted server's filesystem is Vome's, not the agent's: a file
+		// that happens to exist here (package.json in the server's cwd) must
+		// not be sent to the caller's home.
+		filesRequests.length = 0;
+		const client = await connectTo(endpoint);
+		const result = await client.callTool({
+			name: "ha_upload_file",
+			arguments: { instance_id: "inst-one", local_path: "package.json", path: "www/package.json" }
+		});
+		const text = (result.content as { text: string }[])[0]?.text ?? "";
+		expect(result.isError).toBe(true);
+		expect(text).toMatch(/hosted Vome MCP/);
+		expect(text).toContain(`curl -X POST "${portal.url}/api/v1/instances/inst-one/ha/files/write?path=www%2Fpackage.json"`);
+		expect(text).toContain('-F "file=@package.json"');
+		expect(text).toMatch(/"encoding": "base64"/);
+		expect(filesRequests).toEqual([]);
 		await client.close();
 	});
 });

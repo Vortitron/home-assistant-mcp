@@ -13,6 +13,12 @@ describe("loadConfig", () => {
 		expect(config.safety.denyDomains).toContain("camera");
 		expect(config.safety.denyDomains).not.toContain("climate");
 		expect(config.esphome.enabled).toBe(false);
+		expect(config.hosted).toBe(false);
+	});
+
+	it("marks a session of the hosted HTTP server, whose disk is not the agent's", () => {
+		expect(loadConfig({ MCP_HOSTED: "1" }).hosted).toBe(true);
+		expect(loadConfig({ MCP_HOSTED: "" }).hosted).toBe(false);
 	});
 
 	it("leaves sensitive domains to the API key in brokered mode", () => {

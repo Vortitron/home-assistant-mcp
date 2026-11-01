@@ -99,6 +99,7 @@ describe("vomehome CHAP tools", () => {
 			"vomehome_chap_set_home_address",
 			"vomehome_chap_set_standby_addons",
 			"vomehome_chap_set_switch_back_rule",
+			"vomehome_chap_set_sync_exclude",
 			"vomehome_chap_set_takeover_rule",
 			"vomehome_chap_standby_candidates",
 			"vomehome_chap_status",
@@ -127,6 +128,17 @@ describe("vomehome CHAP tools", () => {
 		const result = await harness(WRITE, { chap }).call("vomehome_chap_link_standby", { instance_id: "home-1", install_id: "spare" });
 		expect(result.isError).toBeUndefined();
 		expect(chap).toHaveBeenCalledWith("home-1", "standby", "POST", { install_id: "spare" });
+	});
+
+	it("leaves folders out of syncing", async () => {
+		// 227 MB of camera photos broke a pair's sync (GamlaBio, Oct 2026).
+		const chap = vi.fn(async () => ({ ok: true, sync_exclude: ["www/frontpath"] }));
+		const result = await harness(WRITE, { chap }).call("vomehome_chap_set_sync_exclude", {
+			instance_id: "home-1",
+			paths: ["www/frontpath"]
+		});
+		expect(result.isError).toBeUndefined();
+		expect(chap).toHaveBeenCalledWith("home-1", "sync-exclude", "POST", { paths: ["www/frontpath"] });
 	});
 
 	it("says why VomeHome refused", async () => {

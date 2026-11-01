@@ -232,6 +232,22 @@ export function registerVomeHomeChapTools(server: McpServer, ctx: ToolContext): 
 	);
 
 	write(
+		"vomehome_chap_set_sync_exclude",
+		"CHAP: folders left out of syncing",
+		"Set the paths under /config that the pair leaves out of syncing, both ways: never sent, and never " +
+			"removed from the install that receives. For bulky data that does not need to follow the home — a " +
+			"camera's photo folder, recordings, a download cache: 227 MB of photos once broke a pair's sync. " +
+			"Folders or '*' patterns, relative to /config (e.g. \"www/frontpath\", \"*.mp4\"); at most 40. The " +
+			"list replaces the current one (vomehome_chap_status shows it as pair.sync_exclude), so send it " +
+			"whole; [] syncs everything again. .storage cannot be left out. Needs a linked standby and Vome CHAP " +
+			"0.2.6 or later on both installs.",
+		"sync-exclude",
+		"POST",
+		{ paths: z.array(z.string()).max(40).describe("Paths under /config to leave out, e.g. [\"www/frontpath\"].") },
+		(args) => ({ paths: args.paths })
+	);
+
+	write(
 		"vomehome_chap_set_home_address",
 		"CHAP: the home's address at home",
 		"Set the house-network address (e.g. 192.168.1.15/24) that follows whichever install runs the " +

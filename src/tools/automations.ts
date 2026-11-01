@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { HaState } from "../ha/types.js";
 import { evaluateConfigWrite, evaluateDomainWrite } from "../safety.js";
+import { HaApiError } from "../ha/restClient.js";
 import { errorResult, getFriendlyName, jsonResult, runTool, type ToolContext } from "./helpers.js";
 
 const AUTOMATION_PREFIX = "automation.";
@@ -40,6 +41,29 @@ export async function resolveAutomationId(
 	return state ? automationIdOf(state) : undefined;
 }
 
+/**
+ * An automation defined outside automations.yaml (a package, an !include),
+ * read by entity through the websocket, which knows every automation
+ * however it was defined. It cannot be saved back through the config API.
+ */
+async function yamlAutomation(ctx: ToolContext, state: HaState): Promise<Record<string, unknown>> {
+	const answer = await ctx.ws.sendCommand<{ config?: unknown }>({
+		type: "automation/config",
+		entity_id: state.entity_id
+	});
+	return {
+		id: automationIdOf(state) ?? null,
+		entity_id: state.entity_id,
+		config: answer?.config ?? answer,
+		source: "yaml",
+		editable_with_ha_set_automation: false,
+		note:
+			"Defined in YAML outside automations.yaml (a package or an included file), so " +
+			"ha_set_automation cannot change it. Find it with ha_list_config_files / ha_read_config_file, " +
+			"edit it there with ha_edit_config_file, then reload automations."
+	};
+}
+
 export function registerAutomationTools(server: McpServer, ctx: ToolContext): void {
 	server.registerTool(
 		"ha_list_automations",
@@ -71,7 +95,7 @@ export function registerAutomationTools(server: McpServer, ctx: ToolContext): vo
 		{
 			title: "Get automation config",
 			description:
-				"Get the full configuration (triggers, conditions, actions) of an automation. Accepts either the entity_id (automation.xxx) or the unique id.",
+				"Get the full configuration (triggers, conditions, actions) of an automation. Accepts either the entity_id (automation.xxx) or the unique id. Works for automations defined in YAML packages too (source: \"yaml\" in the result); those are edited in their file, not with ha_set_automation.",
 			inputSchema: {
 				automation: z.string().describe("entity_id (automation.xxx) or unique id.")
 			},
@@ -80,11 +104,26 @@ export function registerAutomationTools(server: McpServer, ctx: ToolContext): vo
 		async ({ automation }) =>
 			runTool(ctx.logger, "ha_get_automation", async () => {
 				const id = await resolveAutomationId(ctx, automation);
-				if (!id) {
-					return errorResult(`Could not resolve a unique id for '${automation}'.`);
+				if (id) {
+					try {
+						return jsonResult({ id, config: await ctx.rest.getAutomationConfig(id) });
+					} catch (error) {
+						// Home Assistant's config route only reads automations.yaml,
+						// so every automation in a YAML package was a 404 here.
+						if (!(error instanceof HaApiError && error.status === 404)) {
+							throw error;
+						}
+					}
 				}
-				const config = await ctx.rest.getAutomationConfig(id);
-				return jsonResult({ id, config });
+				const state = await findAutomationState(ctx, automation);
+				if (!state) {
+					return errorResult(
+						id
+							? `No automation with id '${automation}' in automations.yaml, and no automation entity carries that id.`
+							: `Could not find automation '${automation}'.`
+					);
+				}
+				return jsonResult(await yamlAutomation(ctx, state));
 			})
 	);
 

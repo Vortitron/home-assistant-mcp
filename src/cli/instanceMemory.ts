@@ -18,25 +18,31 @@ import type { Logger } from "../logger.js";
  */
 export interface InstanceMemory {
 	get(key: string): RememberedInstance | undefined;
-	set(key: string, instanceId: string): void;
+	/** `client` is the client's name, for a caller that needs it back with the instance. */
+	set(key: string, instanceId: string, client?: string): void;
+	delete(key: string): void;
 }
 
 export interface RememberedInstance {
 	instanceId: string;
 	at: number;
+	client?: string;
 }
 
 const FILE_NAME = "active-instances.json";
+/** The file serve.ts keeps each session's home in, so it can revive one (see serve.ts, openSession). */
+export const SESSION_FILE_NAME = "session-instances.json";
 const MAX_AGE_MS = 90 * 24 * 60 * 60 * 1000;
 const MAX_ENTRIES = 10_000;
 
 export function createInstanceMemory(
 	stateDir: string | null,
 	logger: Logger,
-	now: () => number = Date.now
+	now: () => number = Date.now,
+	fileName: string = FILE_NAME
 ): InstanceMemory {
 	const entries = new Map<string, RememberedInstance>();
-	const file = stateDir ? join(stateDir, FILE_NAME) : null;
+	const file = stateDir ? join(stateDir, fileName) : null;
 	let hasWarned = false;
 
 	if (file) {
@@ -45,7 +51,11 @@ export function createInstanceMemory(
 			const cutoff = now() - MAX_AGE_MS;
 			for (const [key, value] of Object.entries(parsed.entries ?? {})) {
 				if (typeof value?.instanceId === "string" && typeof value.at === "number" && value.at >= cutoff) {
-					entries.set(key, { instanceId: value.instanceId, at: value.at });
+					entries.set(key, {
+						instanceId: value.instanceId,
+						at: value.at,
+						...(typeof value.client === "string" ? { client: value.client } : {})
+					});
 				}
 			}
 			logger.debug(`Loaded ${entries.size} remembered instance choice(s) from ${file}`);
@@ -76,9 +86,14 @@ export function createInstanceMemory(
 
 	return {
 		get: (key) => entries.get(key),
-		set(key, instanceId) {
+		delete(key) {
+			if (entries.delete(key)) {
+				persist();
+			}
+		},
+		set(key, instanceId, client) {
 			entries.delete(key); // re-insert, so the map stays oldest-first
-			entries.set(key, { instanceId, at: now() });
+			entries.set(key, { instanceId, at: now(), ...(client ? { client } : {}) });
 			while (entries.size > MAX_ENTRIES) {
 				const oldest = entries.keys().next().value;
 				if (oldest === undefined) {

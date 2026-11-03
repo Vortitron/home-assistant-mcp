@@ -372,6 +372,95 @@ describe("MCP HTTP server", () => {
 		}
 	});
 
+	describe("a session the server forgot", () => {
+		/**
+		 * Reported from use: a session reaped while idle, or lost to a deploy
+		 * restart, ended the agent's Vome tools mid-task, because its client
+		 * did not re-initialize on "Unknown or expired MCP session".
+		 */
+		const callWith = (url: string, sessionId: string, token = GOOD_TOKEN, id = 7) =>
+			post(
+				url,
+				{ jsonrpc: "2.0", id, method: "tools/call", params: { name: "vomehome_list_instances", arguments: {} } },
+				{ Authorization: `Bearer ${token}`, "mcp-session-id": sessionId, "mcp-protocol-version": "2025-06-18" }
+			);
+		const sessionOf = (client: Client): string => (client.transport as StreamableHTTPClientTransport).sessionId as string;
+
+		it("is revived after a restart, on the home it was on, and keeps working", async () => {
+			const stateDir = mkdtempSync(join(tmpdir(), "mcp-state-"));
+			try {
+				await server.close();
+				server = await startMcpHttpServer({ ...serveArgs(portal.url), stateDir }, silentLogger);
+				const first = await connectTo(`http://127.0.0.1:${server.port}/mcp`);
+				await first.callTool({ name: "vomehome_use_instance", arguments: { instance_id: "inst-two" } });
+				const sessionId = sessionOf(first);
+				expect(sessionId).toBeTruthy();
+
+				// The server restarts; the client still holds its session id.
+				await server.close();
+				server = await startMcpHttpServer({ ...serveArgs(portal.url), stateDir }, silentLogger);
+				const url = `http://127.0.0.1:${server.port}/mcp`;
+				const again = await callWith(url, sessionId);
+				expect(again.status).toBe(200);
+				expect(again.body).toMatch(/active_instance\\?"\s*:\s*\\?"inst-two/);
+				// The revived session is an ordinary one from then on.
+				const next = await callWith(url, sessionId, GOOD_TOKEN, 8);
+				expect(next.status).toBe(200);
+				expect(server.sessionCount()).toBe(1);
+
+				const saved = readFileSync(join(stateDir, "session-instances.json"), "utf8");
+				expect(saved).toContain("inst-two");
+				expect(saved).not.toContain(GOOD_TOKEN);
+			} finally {
+				rmSync(stateDir, { recursive: true, force: true });
+			}
+		});
+
+		it("is not revived by another token holding its id", async () => {
+			const stateDir = mkdtempSync(join(tmpdir(), "mcp-state-"));
+			try {
+				await server.close();
+				server = await startMcpHttpServer({ ...serveArgs(portal.url), stateDir }, silentLogger);
+				const first = await connectTo(`http://127.0.0.1:${server.port}/mcp`);
+				const sessionId = sessionOf(first);
+				await server.close();
+				server = await startMcpHttpServer({ ...serveArgs(portal.url), stateDir }, silentLogger);
+				const stranger = await callWith(`http://127.0.0.1:${server.port}/mcp`, sessionId, NO_INSTANCE_TOKEN);
+				expect(stranger.status).toBe(404);
+				expect(stranger.body).toContain("Unknown or expired MCP session");
+			} finally {
+				rmSync(stateDir, { recursive: true, force: true });
+			}
+		});
+
+		it("is not revived once the client ended it", async () => {
+			const client = await connectTo(endpoint);
+			const sessionId = sessionOf(client);
+			await (client.transport as StreamableHTTPClientTransport).terminateSession();
+			const after = await callWith(endpoint, sessionId);
+			expect(after.status).toBe(404);
+		});
+
+		it("stays expired when its home is no longer reachable by the token, rather than moving house", async () => {
+			const stateDir = mkdtempSync(join(tmpdir(), "mcp-state-"));
+			try {
+				await server.close();
+				server = await startMcpHttpServer({ ...serveArgs(portal.url), stateDir }, silentLogger);
+				const first = await connectTo(`http://127.0.0.1:${server.port}/mcp`);
+				await first.callTool({ name: "vomehome_use_instance", arguments: { instance_id: "inst-two" } });
+				const sessionId = sessionOf(first);
+				await server.close();
+				revokeSecondInstance = true;
+				server = await startMcpHttpServer({ ...serveArgs(portal.url), stateDir }, silentLogger);
+				const again = await callWith(`http://127.0.0.1:${server.port}/mcp`, sessionId);
+				expect(again.status).toBe(404);
+				expect(again.body).toContain("Unknown or expired MCP session");
+			} finally {
+				rmSync(stateDir, { recursive: true, force: true });
+			}
+		});
+	});
+
 	it("starts on the instance a client's config pins in the URL", async () => {
 		/** Each project can say which house it is for: `?instance=` on the endpoint. */
 		const pinned = await connectTo(`${endpoint}?instance=inst-two`);

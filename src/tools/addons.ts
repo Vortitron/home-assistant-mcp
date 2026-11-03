@@ -82,6 +82,49 @@ export function unwrap(result: unknown): unknown {
 	return result;
 }
 
+// Supervisor hands credentials back in plain text: GET /discovery carries the
+// MQTT broker's password and other add-ons' API tokens, /services/mqtt the
+// same login, and /addons/<slug>/info every add-on's options (database and
+// broker logins among them). ha_supervisor_api replies land in an agent's
+// context and transcript, so the values are replaced by a marker; the keys
+// stay, and an empty value stays empty, so "is it set?" can still be answered.
+// Programs that need a login get one through ha_provision_service_login,
+// which never returns it either.
+export const REDACTED = "[redacted]";
+const SECRET_KEY =
+	/(?:password|passwd|passphrase|^pass$|secret|token|psk|apikey|privatekey|secretkey|accesskey|encryptionkey|credentials?)$/;
+
+function isSecretKey(key: string): boolean {
+	return SECRET_KEY.test(key.toLowerCase().replace(/[^a-z0-9]/g, ""));
+}
+
+export function redactSecrets(value: unknown): { value: unknown; redacted: string[] } {
+	const found: string[] = [];
+	const walk = (node: unknown, at: string, secret: boolean): unknown => {
+		if (Array.isArray(node)) return node.map((item, i) => walk(item, `${at}[${i}]`, secret));
+		if (node && typeof node === "object") {
+			return Object.fromEntries(
+				Object.entries(node).map(([key, child]) => [key, walk(child, at ? `${at}.${key}` : key, isSecretKey(key))])
+			);
+		}
+		if (secret && (typeof node === "number" || (typeof node === "string" && node !== ""))) {
+			found.push(at);
+			return REDACTED;
+		}
+		return node;
+	};
+	return { value: walk(value, "", false), redacted: found };
+}
+
+// A redacted reply sent back as a write (read an add-on's options, change one,
+// POST them) would set every password to the marker.
+function carriesRedaction(value: unknown): boolean {
+	if (value === REDACTED) return true;
+	if (Array.isArray(value)) return value.some(carriesRedaction);
+	if (value && typeof value === "object") return Object.values(value).some(carriesRedaction);
+	return false;
+}
+
 // Supervisor answers a repo re-add with "already in the store", not
 // "already exists" — the two guards used to only catch the latter, so a
 // repo that was already present made the whole tool abort as if it had
@@ -159,7 +202,7 @@ export function registerAddonTools(server: McpServer, ctx: ToolContext): void {
 		{
 			title: "Call Home Assistant Supervisor API",
 			description:
-				"Call a Supervisor endpoint through Home Assistant's supervisor/api WebSocket command (e.g. /addons, /store/addons, /store/repositories). Requires a Supervised / HAOS install and ha:config for mutating methods. Use this for add-on store operations.",
+				"Call a Supervisor endpoint through Home Assistant's supervisor/api WebSocket command (e.g. /addons, /store/addons, /store/repositories). Requires a Supervised / HAOS install and ha:config for mutating methods. Use this for add-on store operations. Passwords, tokens and keys in replies (discovery, add-on options, service logins) are shown as \"[redacted]\", and a write that sends that marker back is refused.",
 			inputSchema: {
 				endpoint: z
 					.string()
@@ -197,6 +240,15 @@ export function registerAddonTools(server: McpServer, ctx: ToolContext): void {
 							: "Writes disabled (set HA_ALLOW_WRITE=true in direct mode)."
 					);
 				}
+				if (method !== "get" && carriesRedaction(data)) {
+					return errorResult(
+						`Refused: the body contains "${REDACTED}", which would overwrite a real password or token with ` +
+							"that text. ha_supervisor_api hides secrets in its replies, and Supervisor replaces an add-on's " +
+							"options as a whole, so options that hold a secret cannot be rewritten from here. Ask the owner " +
+							"to make the change in the add-on's Configuration tab, or use ha_provision_service_login to give " +
+							"a program its own login."
+					);
+				}
 				const logs = method === "get" ? supervisorLogTarget(endpoint) : null;
 				if (logs === "unsupported") {
 					return errorResult(
@@ -216,7 +268,18 @@ export function registerAddonTools(server: McpServer, ctx: ToolContext): void {
 				}
 				try {
 					const result = await supervisorApi(ctx, endpoint, method, data, timeout_seconds);
-					return jsonResult({ endpoint, method, result: unwrap(result) });
+					const { value, redacted } = redactSecrets(unwrap(result));
+					return jsonResult({
+						endpoint,
+						method,
+						result: value,
+						...(redacted.length
+							? {
+									redacted,
+									note: `Passwords, tokens and keys are shown as "${REDACTED}"; they are set, but not passed to agents.`
+								}
+							: {})
+					});
 				} catch (error) {
 					const lifecycle = ADDON_LIFECYCLE.exec(endpoint);
 					const message = error instanceof Error ? error.message : String(error);

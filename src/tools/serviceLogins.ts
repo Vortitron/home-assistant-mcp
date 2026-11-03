@@ -164,9 +164,9 @@ export function registerServiceLoginTools(server: McpServer, ctx: ToolContext): 
 				"Zigbee2MQTT or an energy manager, an ESPHome device, a bridge), generate its password " +
 				"here, and write it straight into where that program reads it: an add-on's options " +
 				"and/or a secrets file. **This tool never returns the password** and never logs it, so " +
-				"nobody has to choose, see or type one. It is stored where the program reads it, which a " +
-				"key holding ha:config (add-on options) or ha:files (secrets.yaml) can read back; that is " +
-				"the program's secret, not a second one. The Mosquitto add-on accepts " +
+				"nobody has to choose, see or type one. It is stored where the program reads it; a key " +
+				"holding ha:files can read it back from a secrets file (ha_supervisor_api hides it in " +
+				"add-on options), and that is the program's secret, not a second one. The Mosquitto add-on accepts " +
 				"Home Assistant logins, so this is all an MQTT client on this home needs.\n\n" +
 				"Ask the owner before calling it: it creates a standing account on their home that " +
 				"outlives the API key that made it. Every delivery target is checked before anything " +

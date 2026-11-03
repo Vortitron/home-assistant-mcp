@@ -5,7 +5,7 @@ import { loadConfig } from "../src/config.js";
 import { createLogger } from "../src/logger.js";
 import { HaApiError, HaRestartingError, type HaRestClient } from "../src/ha/restClient.js";
 import { commandTimeoutMs, type HaWsClient } from "../src/ha/wsClient.js";
-import { SLOW_SUPERVISOR_TIMEOUT_SECONDS, defaultSupervisorTimeout, supervisorLogTarget } from "../src/tools/addons.js";
+import { REDACTED, SLOW_SUPERVISOR_TIMEOUT_SECONDS, defaultSupervisorTimeout, supervisorLogTarget } from "../src/tools/addons.js";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -2969,6 +2969,49 @@ describe("ha_supervisor_api: logs and slow calls (16 Oct gap notes)", () => {
 		const result = await server.call("ha_supervisor_api", { endpoint: "/addons/a0d7b954_nodered/stop", method: "post" });
 		expect(result.isError).toBe(true);
 		expect(JSON.stringify(result.content)).toContain('\\"stopped\\"');
+	});
+
+	it("hides passwords and tokens in replies, keeping the keys and empty values (3 Nov: /discovery)", async () => {
+		const sendCommand = vi.fn(async () => ({
+			discovery: [
+				{ addon: "core_mosquitto", service: "mqtt", config: { host: "core-mosquitto", port: 1883, username: "homeassistant", password: "hunter2" } },
+				{ addon: "d5369777_music_assistant", service: "music_assistant", config: { host: "ma", auth_token: "eyJ.abc" } },
+				{ addon: "5c53de3b_esphome", service: "mcp", config: { url: "http://127.0.0.1:62999/api/mcp" } }
+			],
+			options: { logins: [{ username: "z2m", password: "s3cret" }], certfile: "fullchain.pem", wifi_psk: "", api_key: 1234 },
+			auth_api: true,
+			token_url: "https://example/token"
+		}));
+		const server = buildHarness({ ws: { sendCommand } });
+		const result = await server.call("ha_supervisor_api", { endpoint: "/discovery" });
+		const text = JSON.stringify(result.content);
+		for (const secret of ["hunter2", "eyJ.abc", "s3cret", "1234"]) expect(text).not.toContain(secret);
+		const body = jsonOf(result);
+		expect(body.result.discovery[0].config).toMatchObject({ username: "homeassistant", password: REDACTED, port: 1883 });
+		expect(body.result.discovery[2].config.url).toBe("http://127.0.0.1:62999/api/mcp");
+		expect(body.result.options).toMatchObject({ certfile: "fullchain.pem", wifi_psk: "" });
+		expect(body.result).toMatchObject({ auth_api: true, token_url: "https://example/token" });
+		expect(body.redacted).toEqual([
+			"discovery[0].config.password",
+			"discovery[1].config.auth_token",
+			"options.logins[0].password",
+			"options.api_key"
+		]);
+
+		const plain = buildHarness({ ws: { sendCommand: vi.fn(async () => ({ addons: [] })) } });
+		expect(jsonOf(await plain.call("ha_supervisor_api", { endpoint: "/addons" }))).not.toHaveProperty("redacted");
+	});
+
+	it("refuses to write the redaction marker back over a real password", async () => {
+		const sendCommand = vi.fn(async () => ({ result: "ok" }));
+		const server = buildHarness({ env: WRITE, ws: { sendCommand } });
+		const result = await server.call("ha_supervisor_api", {
+			endpoint: "/addons/core_mosquitto/options",
+			method: "post",
+			data: { options: { logins: [{ username: "z2m", password: REDACTED }] } }
+		});
+		expect(result.isError).toBe(true);
+		expect(sendCommand).not.toHaveBeenCalled();
 	});
 
 	it("parses log endpoints and waits for a command's own timeout", () => {

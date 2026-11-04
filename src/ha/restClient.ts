@@ -11,6 +11,7 @@ import type {
 } from "./types.js";
 import type { HaWsClient } from "./wsClient.js";
 import { PROBE_TIMEOUT_MS, explainRestart } from "./restart.js";
+import { parseWav, speechContentHeader } from "./wav.js";
 
 /**
  * Thrown for any non-2xx Home Assistant REST response. Carries the HTTP status
@@ -130,6 +131,10 @@ export interface HaImage {
 export interface HaRequestOptions {
 	method?: string;
 	body?: unknown;
+	/** Bytes sent as they are, in place of a JSON `body` (speech to text's bare PCM). */
+	rawBody?: Uint8Array;
+	/** Extra request headers; a Content-Type here replaces the JSON one. */
+	headers?: Record<string, string>;
 	/** "binary" resolves to an {@link HaImage} rather than parsed text. */
 	expect?: "json" | "text" | "binary";
 	query?: Record<string, string | number | boolean | undefined>;
@@ -156,6 +161,16 @@ export interface ServiceCallOptions {
 }
 
 export const SERVICE_MAX_TIMEOUT_SECONDS = 50;
+
+/** What Home Assistant's /api/stt/<entity> answers: the words, and "success" or "error". */
+export interface SpeechToTextResult {
+	text: string | null;
+	result: string;
+	[key: string]: unknown;
+}
+
+/** How long one speech-to-text request may take: the engine may be a cloud one, and the portal allows the home 40 s. */
+export const STT_TIMEOUT_MS = 45_000;
 
 export function serviceTimeoutSeconds(options?: ServiceCallOptions): number | undefined {
 	const asked = options?.timeoutSeconds;
@@ -217,6 +232,12 @@ export interface HaRestClient {
 	deleteScriptConfig(scriptId: string): Promise<{ result: string }>;
 	/** Run one Home Assistant WebSocket command (brokered: allowlisted Lovelace subset). */
 	sendWsCommand<T = unknown>(command: Record<string, unknown>): Promise<T>;
+	/**
+	 * A 16-bit PCM WAV (base64) through a speech-to-text engine (`stt.*`).
+	 * Direct: the bare PCM to /api/stt/<entity> with X-Speech-Content. Brokered:
+	 * the WAV to the portal, which does the same over the home's Vome link.
+	 */
+	speechToText(entityId: string, wavBase64: string, language: string): Promise<SpeechToTextResult>;
 }
 
 function buildQuery(query: HaRequestOptions["query"]): string {
@@ -273,9 +294,10 @@ export function createHaRestClient(
 				method,
 				headers: {
 					Authorization: `Bearer ${config.haToken}`,
-					"Content-Type": "application/json"
+					"Content-Type": "application/json",
+					...options.headers
 				},
-				body: options.body === undefined ? undefined : JSON.stringify(options.body),
+				body: options.rawBody ?? (options.body === undefined ? undefined : JSON.stringify(options.body)),
 				signal: controller.signal
 			});
 			if (options.expect === "binary") {
@@ -304,7 +326,7 @@ export function createHaRestClient(
 		} catch (error) {
 			if (error instanceof Error && error.name === "AbortError") {
 				throw new HaApiError(
-					`Home Assistant ${method} ${path} timed out after ${config.timeoutMs}ms`,
+					`Home Assistant ${method} ${path} timed out after ${options.timeoutMs ?? config.timeoutMs}ms`,
 					0,
 					""
 				);
@@ -401,8 +423,32 @@ export function createHaRestClient(
 		return request<HaLogbookEntry[]>(base, { query });
 	}
 
+	/**
+	 * Home Assistant's SpeechToTextView reads the body as a stream of audio
+	 * and every detail of it from X-Speech-Content (all six fields are
+	 * required); it does not look at Content-Type. So the WAV's header is
+	 * stripped here and what it said goes in that header, as a satellite does.
+	 */
+	function speechToText(entityId: string, wavBase64: string, language: string): Promise<SpeechToTextResult> {
+		const wav = Buffer.from(wavBase64, "base64");
+		const info = parseWav(wav);
+		if (!info.ok) {
+			return Promise.reject(new HaApiError(info.message, 400, ""));
+		}
+		return request<SpeechToTextResult>(`/api/stt/${encodeURIComponent(entityId)}`, {
+			method: "POST",
+			rawBody: wav.subarray(info.dataOffset, info.dataOffset + info.dataLength),
+			headers: {
+				"Content-Type": "audio/wav",
+				"X-Speech-Content": speechContentHeader(info, language)
+			},
+			timeoutMs: STT_TIMEOUT_MS
+		});
+	}
+
 	return {
 		request,
+		speechToText,
 		ping: () => request<HaApiStatus>("/api/"),
 		getConfig: () => request<HaConfig>("/api/config"),
 		getStates: () => request<HaState[]>("/api/states"),

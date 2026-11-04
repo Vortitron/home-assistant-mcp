@@ -294,7 +294,8 @@ export function createInstanceManager(
 		getScriptConfig: (scriptId) => currentRest().getScriptConfig(scriptId),
 		upsertScriptConfig: (scriptId, scriptConfig) => currentRest().upsertScriptConfig(scriptId, scriptConfig),
 		deleteScriptConfig: (scriptId) => currentRest().deleteScriptConfig(scriptId),
-		sendWsCommand: (command) => currentRest().sendWsCommand(command)
+		sendWsCommand: (command) => currentRest().sendWsCommand(command),
+		speechToText: (entityId, wavBase64, language) => currentRest().speechToText(entityId, wavBase64, language)
 	};
 
 	return {

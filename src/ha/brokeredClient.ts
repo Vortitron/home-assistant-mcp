@@ -5,7 +5,9 @@ import {
 	binaryResult,
 	refusesReturnResponse,
 	serviceTimeoutSeconds,
+	STT_TIMEOUT_MS,
 	type ServiceCallOptions,
+	type SpeechToTextResult,
 	type StateWatchGrant
 } from "./restClient.js";
 import type { HaImage, HaRestClient, HaServiceCallResult, HistoryParams, LogbookParams } from "./restClient.js";
@@ -211,6 +213,14 @@ export function createBrokeredHaRestClient(
 		callService,
 		renderTemplate,
 		checkConfig: () => broker<HaCheckConfigResult>("/check_config", { method: "POST" }),
+		// The portal reads the WAV, sends the home the bare PCM with
+		// X-Speech-Content over its Vome link, and answers with HA's JSON.
+		speechToText: (entityId, wavBase64, language) =>
+			broker<SpeechToTextResult>(`/stt/${encodeURIComponent(entityId)}`, {
+				method: "POST",
+				body: { audio_base64: wavBase64, language },
+				timeoutMs: STT_TIMEOUT_MS
+			}),
 		getErrorLog: () => broker<string>("/error_log", { expect: "text" }),
 		startStateWatch: (entityIds, jobId) =>
 			broker<StateWatchGrant>("/watch", { method: "POST", body: { entity_ids: entityIds, ...(jobId ? { job_id: jobId } : {}) } }),

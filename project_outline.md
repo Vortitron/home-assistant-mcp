@@ -164,6 +164,25 @@ writes through the same `refuseFileWrite` + `writeChecked` path as
 through `MCP_HOSTED` in every session's env) the process's disk is Vome's, so
 it reads nothing and answers with the equivalent REST upload instead.
 
+Speech to text (`tools/speech.ts` + `ha/wav.ts`, November 2026):
+`ha_speech_to_text` runs a 16-bit PCM WAV through an `stt.*` engine, as a
+voice satellite does, so an agent can test an assistant's hearing. The WAV's
+chunks are walked (`fmt ` and `data`, past LIST/fact chunks, not a fixed
+44-byte header) and checked locally: PCM (format 1), 16-bit, at most 30 s and
+2 MiB. Language defaults to `/api/config` `language`, else `en`. A write
+(gated with `evaluateDomainWrite("stt", …)`, `ha:write` through VomeHome)
+because engines such as Vome Hearing charge per request. `audio_path` reads
+the local disk exactly as `ha_upload_file` does, and is refused unread on the
+hosted server (`config.hosted`), which takes `audio_base64`. Brokered:
+`POST /stt/<entity>` with `{audio_base64, language}` and a 45 s timeout.
+Direct: the client strips the header and POSTs the bare PCM to
+`/api/stt/<entity>` with `Content-Type: audio/wav` and `X-Speech-Content:
+format=wav; codec=pcm; sample_rate=<rate>; bit_rate=16; channel=<n>;
+language=<lang>` (HA's view requires all six fields and ignores
+Content-Type); `rawRequest` gained `rawBody` + `headers` for it. A 415 (or
+the portal's "Home Assistant answered 415") becomes the ffmpeg conversion
+hint.
+
 Traces (`tools/traces.ts`): `trace/list` + `trace/get` over WS, for automations
 and scripts. Raw traces embed the whole config and every step's variables, so
 these summarise by default — ordered steps, the trigger, and `failed_at` (the
@@ -263,6 +282,7 @@ Brokered Home Assistant (`portal/ha_proxy_api.py` → `portal/ha_core_api.py`):
 | GET | `/api/v1/instances/{id}/ha/services` | `ha:read` | services |
 | POST | `/api/v1/instances/{id}/ha/template` | `ha:read` | render (eval only) |
 | POST | `/api/v1/instances/{id}/ha/services/{domain}/{service}` | `ha:write` | deny-domain + cross-domain checked |
+| POST | `/api/v1/instances/{id}/ha/stt/{stt.entity}` | `ha:write` | `{audio_base64: <16-bit PCM WAV>, language}` → HA's `{text, result}`; the portal strips the WAV header and sends bare PCM with `X-Speech-Content`; ≤ 30 s; relay and hosted homes, not external |
 
 How the portal reaches HA: it can't hit tenant VMs directly, so it reuses
 `supervisor_api._get_vm_access` (refresh→access token) and runs `curl` on the

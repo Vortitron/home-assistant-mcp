@@ -17,6 +17,7 @@ import { createVomeHomeClient, type VomeHomeClient } from "../src/vomehome/clien
 import { createInstanceManager } from "../src/vomehome/instances.js";
 import { registerAllTools } from "../src/tools/index.js";
 import type { ToolContext } from "../src/tools/helpers.js";
+import { makeWav } from "./fixtures/wav.js";
 
 type Handler = (args: Record<string, unknown>, extra: unknown) => Promise<CallToolResult>;
 
@@ -3677,5 +3678,167 @@ describe("ha_update_dashboard", () => {
 		const readOnly = buildHarness({ env: { HA_ALLOW_WRITE: "true" }, rest: { sendWsCommand } as never });
 		expect((await readOnly.call("ha_update_dashboard", { dashboard_id: "garden_cams", title: "x" })).isError).toBe(true);
 		expect(sendWsCommand).not.toHaveBeenCalledWith(expect.objectContaining({ type: "lovelace/dashboards/update" }));
+	});
+});
+
+describe("ha_speech_to_text", () => {
+	const WRITE = { HA_ALLOW_WRITE: "true" };
+	const HEARD = { text: "Tänd lampan i vardagsrummet.", result: "success" };
+	let dir: string;
+
+	beforeEach(() => {
+		dir = mkdtempSync(join(tmpdir(), "ha-stt-"));
+	});
+	afterEach(() => {
+		vi.unstubAllGlobals();
+		rmSync(dir, { recursive: true, force: true });
+	});
+
+	it("is a write: refused without HA_ALLOW_WRITE, and nothing is sent", async () => {
+		const speechToText = vi.fn();
+		const server = buildHarness({ rest: { speechToText } });
+		const result = await server.call("ha_speech_to_text", { entity_id: "stt.whisper", audio_base64: makeWav().toString("base64") });
+		expect(result.isError).toBe(true);
+		expect(textOf(result)).toMatch(/Refused: Writes are disabled.*HA_ALLOW_WRITE/);
+		expect(speechToText).not.toHaveBeenCalled();
+	});
+
+	it("sends the WAV in the home's own language and answers with the words and what was sent", async () => {
+		const wav = makeWav({ seconds: 1.5 }).toString("base64");
+		const speechToText = vi.fn(async () => HEARD);
+		const getConfig = vi.fn(async () => ({ language: "sv" }));
+		const server = buildHarness({ env: WRITE, rest: { speechToText, getConfig } });
+
+		const result = await server.call("ha_speech_to_text", { entity_id: "stt.vome_hearing", audio_base64: wav });
+
+		expect(result.isError).toBeFalsy();
+		expect(speechToText).toHaveBeenCalledWith("stt.vome_hearing", wav, "sv");
+		expect(jsonOf(result)).toEqual({
+			text: "Tänd lampan i vardagsrummet.",
+			result: "success",
+			entity_id: "stt.vome_hearing",
+			language: "sv",
+			seconds: 1.5,
+			sample_rate: 16000,
+			channels: 1
+		});
+	});
+
+	it("falls back to 'en' when the home's language cannot be read, and a given language wins", async () => {
+		const speechToText = vi.fn(async () => HEARD);
+		const getConfig = vi.fn(async () => {
+			throw new HaApiError("boom", 500, "");
+		});
+		const server = buildHarness({ env: WRITE, rest: { speechToText, getConfig } });
+		const wav = makeWav().toString("base64");
+
+		await server.call("ha_speech_to_text", { entity_id: "stt.whisper", audio_base64: wav });
+		expect(speechToText).toHaveBeenLastCalledWith("stt.whisper", wav, "en");
+
+		await server.call("ha_speech_to_text", { entity_id: "stt.whisper", audio_base64: wav, language: "en-GB" });
+		expect(speechToText).toHaveBeenLastCalledWith("stt.whisper", wav, "en-GB");
+	});
+
+	it("reads audio_path from the local disk", async () => {
+		const local = join(dir, "kitchen.wav");
+		const bytes = makeWav({ seconds: 0.5 });
+		writeFileSync(local, bytes);
+		const speechToText = vi.fn(async () => HEARD);
+		const server = buildHarness({ env: WRITE, rest: { speechToText, getConfig: async () => ({}) } });
+
+		const body = jsonOf(await server.call("ha_speech_to_text", { entity_id: "stt.whisper", audio_path: local }));
+
+		expect(speechToText).toHaveBeenCalledWith("stt.whisper", bytes.toString("base64"), "en");
+		expect(body.audio_path).toBe(local);
+		expect(body.seconds).toBe(0.5);
+	});
+
+	it("on the hosted server, never reads audio_path and says to send audio_base64", async () => {
+		const speechToText = vi.fn();
+		const server = buildHarness({
+			env: { HA_TOKEN: "", VOMEHOME_TOKEN: "vh_test", VOMEHOME_INSTANCE_ID: "rly-1", MCP_HOSTED: "1", ...WRITE },
+			rest: { speechToText }
+		});
+		const missing = join(dir, "not-there.wav");
+
+		const result = await server.call("ha_speech_to_text", { entity_id: "stt.whisper", audio_path: missing });
+
+		expect(result.isError).toBe(true);
+		const text = textOf(result);
+		expect(text).toMatch(/hosted Vome MCP/);
+		expect(text).toMatch(/audio_base64/);
+		expect(text).toContain(`base64 -w0 "${missing}"`);
+		// Had it looked at the disk, it would have said the file does not exist.
+		expect(text).not.toMatch(/does not exist/);
+		expect(speechToText).not.toHaveBeenCalled();
+	});
+
+	it("wants exactly one of audio_path and audio_base64, and an stt entity", async () => {
+		const speechToText = vi.fn();
+		const server = buildHarness({ env: WRITE, rest: { speechToText } });
+		const wav = makeWav().toString("base64");
+		for (const args of [
+			{ entity_id: "stt.whisper" },
+			{ entity_id: "stt.whisper", audio_base64: wav, audio_path: "/x.wav" }
+		]) {
+			const result = await server.call("ha_speech_to_text", args);
+			expect(result.isError).toBe(true);
+			expect(textOf(result)).toMatch(/exactly one of audio_path/);
+		}
+		const notStt = await server.call("ha_speech_to_text", { entity_id: "tts.piper", audio_base64: wav });
+		expect(textOf(notStt)).toMatch(/not a speech-to-text engine/);
+		expect(speechToText).not.toHaveBeenCalled();
+	});
+
+	it("checks the WAV before sending: 8-bit, longer than 30 s, not base64, over 2 MiB", async () => {
+		const speechToText = vi.fn();
+		const server = buildHarness({ env: WRITE, rest: { speechToText } });
+		const cases: Array<[string, RegExp]> = [
+			[makeWav({ bits: 8 }).toString("base64"), /8-bit/],
+			[makeWav({ seconds: 31 }).toString("base64"), /at most 30 s/],
+			["not base64 at all!", /not base64/],
+			["A".repeat(Math.ceil((2 * 1024 * 1024) / 3) * 4 + 4), /2 MiB/]
+		];
+		for (const [audio_base64, message] of cases) {
+			const result = await server.call("ha_speech_to_text", { entity_id: "stt.whisper", audio_base64 });
+			expect(result.isError).toBe(true);
+			expect(textOf(result)).toMatch(message);
+		}
+		expect(speechToText).not.toHaveBeenCalled();
+	});
+
+	it("turns Home Assistant's 415 into the ffmpeg conversion", async () => {
+		const speechToText = vi.fn(async () => {
+			throw new HaApiError("Home Assistant POST /api/stt/stt.whisper responded 415 Unsupported Media Type", 415, "");
+		});
+		const server = buildHarness({ env: WRITE, rest: { speechToText, getConfig: async () => ({}) } });
+		const result = await server.call("ha_speech_to_text", {
+			entity_id: "stt.whisper",
+			audio_base64: makeWav({ rate: 44100, channels: 2 }).toString("base64")
+		});
+		expect(result.isError).toBe(true);
+		expect(textOf(result)).toContain("refused 44100 Hz, 2-channel audio");
+		expect(textOf(result)).toContain(
+			"This engine takes 16 kHz mono 16-bit WAV. Convert with: ffmpeg -i in.wav -ar 16000 -ac 1 -sample_fmt s16 out.wav"
+		);
+	});
+
+	it("sends other rates as they are, with a note", async () => {
+		const speechToText = vi.fn(async () => HEARD);
+		const server = buildHarness({ env: WRITE, rest: { speechToText, getConfig: async () => ({}) } });
+		const body = jsonOf(
+			await server.call("ha_speech_to_text", { entity_id: "stt.whisper", audio_base64: makeWav({ rate: 48000 }).toString("base64") })
+		);
+		expect(body.sample_rate).toBe(48000);
+		expect(body.note).toMatch(/16 kHz mono/);
+	});
+
+	it("is an error when the engine heard nothing, with Home Assistant's answer", async () => {
+		const speechToText = vi.fn(async () => ({ text: null, result: "error" }));
+		const server = buildHarness({ env: WRITE, rest: { speechToText, getConfig: async () => ({}) } });
+		const result = await server.call("ha_speech_to_text", { entity_id: "stt.whisper", audio_base64: makeWav().toString("base64") });
+		expect(result.isError).toBe(true);
+		expect(textOf(result)).toMatch(/did not make out any words \(result: error\)/);
+		expect(textOf(result)).toContain('{"text":null,"result":"error"}');
 	});
 });

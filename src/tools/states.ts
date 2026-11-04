@@ -2,6 +2,7 @@ import { z } from "zod";
 import { downsample } from "../ha/pixels.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { HaState } from "../ha/types.js";
+import { HaApiError } from "../ha/restClient.js";
 import { getFriendlyName, jsonResult, runTool, truncate, type ToolContext } from "./helpers.js";
 import { buildEntityAreaMap, findAreaId } from "./registry.js";
 
@@ -17,6 +18,42 @@ function compactState(state: HaState): Record<string, unknown> {
 
 /** From this many entities, ha_get_state reads every state once instead of each in turn. */
 const BULK_FROM = 2;
+
+/**
+ * Current states of some entities, as ha_get_state reads them: several at
+ * once with one read of every state, one or two each on their own. A missing
+ * entity maps to null. `tolerant` also maps any other failure of a single read
+ * to null (ha_get_state's long-standing behaviour); without it only a 404
+ * does, so a home that stops answering is an error rather than every entity
+ * vanishing (what ha_watch_states' polling needs).
+ */
+export async function readStates(
+	ctx: ToolContext,
+	entityIds: string[],
+	options: { tolerant?: boolean } = {}
+): Promise<Map<string, HaState | null>> {
+	// Several entities: one read of every state, not one request each. Vome rate-limits each
+	// endpoint per key (500 an hour), and a dashboard pane reading twenty entities one by one
+	// spent that in minutes, after which every entity read "not found" for the rest of the hour.
+	if (entityIds.length > BULK_FROM) {
+		const all = new Map((await ctx.rest.getStates()).map((state) => [state.entity_id, state]));
+		return new Map(entityIds.map((entityId) => [entityId, all.get(entityId) ?? null]));
+	}
+	const results = await Promise.all(
+		entityIds.map(async (entityId): Promise<[string, HaState | null]> => {
+			try {
+				return [entityId, await ctx.rest.getState(entityId)];
+			} catch (error) {
+				if (options.tolerant || (error instanceof HaApiError && error.status === 404)) {
+					return [entityId, null];
+				}
+				throw error;
+			}
+		})
+	);
+	return new Map(results);
+}
+
 export function registerStateTools(server: McpServer, ctx: ToolContext): void {
 	server.registerTool(
 		"ha_list_entities",
@@ -101,28 +138,13 @@ export function registerStateTools(server: McpServer, ctx: ToolContext): void {
 		},
 		async ({ entity_ids }) =>
 			runTool(ctx.logger, "ha_get_state", async () => {
-				// Several entities: one read of every state, not one request each. Vome rate-limits each
-				// endpoint per key (500 an hour), and a dashboard pane reading twenty entities one by one
-				// spent that in minutes, after which every entity read "not found" for the rest of the hour.
-				if (entity_ids.length > BULK_FROM) {
-					const all = new Map((await ctx.rest.getStates()).map((state) => [state.entity_id, state]));
-					return jsonResult({
-						entities: entity_ids.map((entityId) => {
-							const state = all.get(entityId);
-							return state ? { entity_id: entityId, found: true, state } : { entity_id: entityId, found: false, state: null };
-						})
-					});
-				}
-				const results = await Promise.all(
-					entity_ids.map(async (entityId) => {
-						try {
-							return { entity_id: entityId, found: true, state: await ctx.rest.getState(entityId) };
-						} catch {
-							return { entity_id: entityId, found: false, state: null };
-						}
+				const states = await readStates(ctx, entity_ids, { tolerant: true });
+				return jsonResult({
+					entities: entity_ids.map((entityId) => {
+						const state = states.get(entityId) ?? null;
+						return state ? { entity_id: entityId, found: true, state } : { entity_id: entityId, found: false, state: null };
 					})
-				);
-				return jsonResult({ entities: results });
+				});
 			})
 	);
 

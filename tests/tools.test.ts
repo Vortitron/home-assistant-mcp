@@ -2653,6 +2653,119 @@ describe("ha_watch_states", () => {
 	});
 });
 
+describe("ha_watch_states falls back to polling", () => {
+	afterEach(() => vi.useRealTimers());
+
+	const noRelay = () => {
+		throw new HaApiError("VomeHome broker POST /watch failed: HTTP 404", 404, '{"error":"No relay connection for this server."}');
+	};
+
+	function polledHome(initial: Record<string, string>) {
+		const states = { ...initial };
+		const getState = vi.fn(async (entityId: string) => {
+			if (!(entityId in states)) throw new HaApiError("not found", 404, "");
+			return { entity_id: entityId, state: states[entityId], attributes: {} };
+		});
+		const startStateWatch = vi.fn(async () => noRelay());
+		return { states, rest: { startStateWatch, getState } as never, getState, startStateWatch };
+	}
+
+	it("polls when the home has no Vome component to send changes, in the live watch's shape", async () => {
+		const home = polledHome({ "light.a": "on" });
+		const body = jsonOf(await buildHarness({ rest: home.rest }).call("ha_watch_states", { entity_ids: ["light.a", "light.gone"], wait_seconds: 0 }));
+		expect(body.mode).toBe("polling");
+		expect(body.full).toBe(true);
+		expect(body.states).toEqual([{ entity_id: "light.a", state: "on", attributes: {} }]);
+		expect(body.missing).toEqual(["light.gone"]);
+		expect(body.note).toMatch(/No relay connection/);
+		expect(typeof body.cursor).toBe("number");
+		expect(body.done).toBe(false);
+		expect(body.error).toBe(null);
+	});
+
+	it("does not poll around a refusal: 403 surfaces", async () => {
+		const getState = vi.fn();
+		const rest = {
+			startStateWatch: async () => {
+				throw new HaApiError("VomeHome broker POST /watch failed: HTTP 403", 403, '{"error":"No relay connection; key lacks ha:read"}');
+			},
+			getState
+		} as never;
+		const result = await buildHarness({ rest }).call("ha_watch_states", { entity_ids: ["light.a"], wait_seconds: 0 });
+		expect(result.isError).toBe(true);
+		expect(textOf(result)).toMatch(/403/);
+		expect(getState).not.toHaveBeenCalled();
+	});
+
+	it("does not poll around a restart either", async () => {
+		const rest = {
+			startStateWatch: async () => {
+				throw new HaRestartingError("Home Assistant is not answering (no relay connection)", null, "x");
+			},
+			getState: vi.fn()
+		} as never;
+		const result = await buildHarness({ rest }).call("ha_watch_states", { entity_ids: ["light.a"], wait_seconds: 0 });
+		expect(result.isError).toBe(true);
+	});
+
+	it("waits for a change, reading every few seconds, and returns only what changed", async () => {
+		vi.useFakeTimers();
+		const home = polledHome({ "light.a": "on", "light.b": "off" });
+		const server = buildHarness({ rest: home.rest });
+		const first = jsonOf(await server.call("ha_watch_states", { entity_ids: ["light.a", "light.b"], wait_seconds: 0 }));
+		expect(first.full).toBe(true);
+
+		const pending = server.call("ha_watch_states", { entity_ids: ["light.a", "light.b"], wait_seconds: 20, cursor: first.cursor });
+		await vi.advanceTimersByTimeAsync(3_000);
+		await vi.advanceTimersByTimeAsync(3_000);
+		home.states["light.b"] = "on";
+		await vi.advanceTimersByTimeAsync(3_000);
+		const second = jsonOf(await pending);
+		expect(second.full).toBe(false);
+		expect(second.states).toEqual([{ entity_id: "light.b", state: "on", attributes: {} }]);
+		expect(second.cursor).toBeGreaterThan(first.cursor);
+		// One read for the baseline, then one per ~3 s until the change.
+		expect(home.getState.mock.calls.length).toBeLessThanOrEqual(2 + 2 * 4);
+		// Only one attempt at the live watch: polling sticks for a while.
+		expect(home.startStateWatch).toHaveBeenCalledTimes(1);
+	});
+
+	it("gives up waiting at wait_seconds with no changes and the same cursor", async () => {
+		vi.useFakeTimers();
+		const home = polledHome({ "light.a": "on" });
+		const server = buildHarness({ rest: home.rest });
+		const first = jsonOf(await server.call("ha_watch_states", { entity_ids: ["light.a"], wait_seconds: 0 }));
+		const pending = server.call("ha_watch_states", { entity_ids: ["light.a"], wait_seconds: 5, cursor: first.cursor });
+		await vi.advanceTimersByTimeAsync(6_000);
+		const second = jsonOf(await pending);
+		expect(second).toMatchObject({ full: false, states: [], cursor: first.cursor, mode: "polling" });
+	});
+
+	it("round-trips the cursor: an older one gets every change since, a foreign one the whole picture", async () => {
+		vi.useFakeTimers();
+		const home = polledHome({ "light.a": "on", "light.b": "off" });
+		const server = buildHarness({ rest: home.rest });
+		const ids = ["light.a", "light.b"];
+		const first = jsonOf(await server.call("ha_watch_states", { entity_ids: ids, wait_seconds: 0 }));
+		await vi.advanceTimersByTimeAsync(1_000);
+		home.states["light.a"] = "off";
+		const second = jsonOf(await server.call("ha_watch_states", { entity_ids: ids, wait_seconds: 0, cursor: first.cursor }));
+		expect(second.states.map((s: { entity_id: string }) => s.entity_id)).toEqual(["light.a"]);
+		await vi.advanceTimersByTimeAsync(1_000);
+		home.states["light.b"] = "on";
+		const third = jsonOf(await server.call("ha_watch_states", { entity_ids: ids, wait_seconds: 0, cursor: second.cursor }));
+		expect(third.states.map((s: { entity_id: string }) => s.entity_id)).toEqual(["light.b"]);
+		// The first cursor again: both changes since it.
+		const again = jsonOf(await server.call("ha_watch_states", { entity_ids: ids, wait_seconds: 0, cursor: first.cursor }));
+		expect(again.full).toBe(false);
+		expect(again.states.map((s: { entity_id: string }) => s.entity_id)).toEqual(["light.a", "light.b"]);
+		// A live watch's small cursor is not one polling handed out: the whole picture.
+		const foreign = jsonOf(await server.call("ha_watch_states", { entity_ids: ids, wait_seconds: 0, cursor: 3 }));
+		expect(foreign.full).toBe(true);
+		expect(foreign.states).toHaveLength(2);
+	});
+});
+
 describe("ha_delete_config_file", () => {
 	const BROKERED = {
 		HA_TOKEN: "",

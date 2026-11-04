@@ -231,21 +231,31 @@ be revoked early at any time.
 | `ha_supervisor_api` | Call a Supervisor endpoint via `supervisor/api` (store, add-ons, …). A `…/logs` read is served from the log route, since `supervisor/api` cannot carry plain text, and add-on start/stop/restart wait 50 s instead of Home Assistant's 10. |
 | `ha_addon_install_vome` | Add `https://github.com/Vortitron/VomeSync` to the store, install **Vome**, and start it. |
 
-### HACS (Home Assistant Community Store)
+### Community store: the Marketplace (2026.11+) or HACS
+
+The `ha_hacs_*` names predate Home Assistant 2026.11, which built HACS into
+Core as the **Marketplace**. Each tool asks `marketplace/info` first and uses
+the Marketplace's own commands when it is there, falling back to HACS's
+`hacs/*` on older Home Assistants. The names stayed so existing permission
+rules and prompts keep working.
 
 | Tool | Description |
 | --- | --- |
-| `ha_hacs_info` | HACS version, stage, and whether it has pending background tasks. |
+| `ha_hacs_info` | Which store this home has (`marketplace` or `hacs`) and its status; for the Marketplace, whether GitHub is connected and whether an admin has accepted its warning. |
 | `ha_hacs_list_repositories` | List repositories the store knows about. Installed ones only by default, trimmed to id, name, category, installed/available version and `pending_update`; `installed_only: false` or `search` looks through the catalogue, `categories` and `limit` (default 100) narrow it, `full: true` returns raw rows. |
-| `ha_hacs_add_repository` | Add a custom repository by `owner/repo` and category. Confirms by re-listing, since HACS acks even a failed add. Needs `HA_ALLOW_CONFIG_WRITE`. |
-| `ha_hacs_download_repository` | Install (or update) a tracked repository — the step that actually writes its files. Needs `HA_ALLOW_CONFIG_WRITE`. |
-| `ha_hacs_remove_repository` | Uninstall a repository's files and stop tracking it. Needs `HA_ALLOW_CONFIG_WRITE`. |
+| `ha_hacs_add_repository` | Add a custom repository by `owner/repo` and category. The Marketplace only adds one once GitHub is connected in Settings → Marketplace. Confirms by re-listing, since HACS acks even a failed add. Needs `ha:config` (`HA_ALLOW_CONFIG_WRITE` in direct mode). |
+| `ha_hacs_download_repository` | Install (or update) a tracked repository — the step that actually writes its files. Needs `ha:config` (`HA_ALLOW_CONFIG_WRITE` in direct mode). |
+| `ha_hacs_remove_repository` | Uninstall a repository's files and stop tracking it. Needs `ha:config` (`HA_ALLOW_CONFIG_WRITE` in direct mode). |
 
-There is no REST API or service call for managing HACS repositories — these
-go over HACS's own WebSocket commands (`hacs/*`), the same way as the
-Supervisor tools above. Adding a repository only registers it; call
-`ha_hacs_download_repository` afterwards to install it, and restart Home
-Assistant if it's a new integration or add-on domain.
+There is no REST API or service call for managing repositories — these go
+over the store's WebSocket commands, the same way as the Supervisor tools
+above. Adding a repository only registers it; call
+`ha_hacs_download_repository` afterwards to install it. With HACS, restart
+Home Assistant before setting up a new integration; the Marketplace loads a
+first install straight away and raises a repair when an update needs a
+restart. Nothing installs through the Marketplace until an admin has accepted
+its warning in Settings → Marketplace, and there is deliberately no tool for
+that.
 
 ### People
 

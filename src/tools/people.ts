@@ -183,7 +183,11 @@ export function registerPeopleTools(server: McpServer, ctx: ToolContext): void {
 				if (name !== undefined) fields.name = name;
 				if (user_id !== undefined) fields.user_id = user_id;
 				if (picture !== undefined) fields.picture = picture;
-				if (trackersTouched || !existing) fields.device_trackers = trackers;
+				// Always sent, even untouched: Home Assistant's person/update gives
+				// device_trackers a default of [] (UPDATE_FIELDS in person/__init__.py), so
+				// an update without it empties the list and the person goes "unknown". A
+				// change of only user_id did exactly that to a real home (4 Nov 2026).
+				fields.device_trackers = trackers;
 
 				const result = await ctx.ws.sendCommand<StoredPerson>(
 					existing

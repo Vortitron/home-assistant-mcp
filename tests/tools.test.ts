@@ -3537,11 +3537,26 @@ describe("people", () => {
 		expect(body.also_tracking_someone_else).toEqual({ "device_tracker.sofie_watch": ["Andy"] });
 	});
 
-	it("changes only the fields given", async () => {
+	it("changes only the fields given, and keeps the trackers it was not asked about", async () => {
+		// Home Assistant's person/update defaults device_trackers to [], so leaving it
+		// out empties the person's trackers: changing only user_id once took a real
+		// home's person to "unknown" (4 Nov 2026). The current list always goes along.
 		const sendCommand = peopleWs();
 		const server = buildHarness({ env: WRITE, ws: { sendCommand } });
 		await server.call("ha_set_person", { person_id: "sofie", user_id: null });
-		expect(sendCommand).toHaveBeenLastCalledWith({ type: "person/update", person_id: "sofie", user_id: null });
+		expect(sendCommand).toHaveBeenLastCalledWith({
+			type: "person/update",
+			person_id: "sofie",
+			user_id: null,
+			device_trackers: ["device_tracker.s21", "device_tracker.sofie_watch"]
+		});
+		await server.call("ha_set_person", { person_id: "sofie", name: "Sofie B" });
+		expect(sendCommand).toHaveBeenLastCalledWith({
+			type: "person/update",
+			person_id: "sofie",
+			name: "Sofie B",
+			device_trackers: ["device_tracker.s21", "device_tracker.sofie_watch"]
+		});
 	});
 
 	it("creates a person with a name and trackers", async () => {

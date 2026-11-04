@@ -149,11 +149,85 @@ export function registerDashboardTools(server: McpServer, ctx: ToolContext): voi
 	);
 
 	server.registerTool(
+		"ha_update_dashboard",
+		{
+			title: "Update a dashboard's title, icon or sidebar setting",
+			description:
+				"Change an existing storage-mode dashboard's title, icon, show_in_sidebar or require_admin, " +
+				"keeping its views and cards. Name it by dashboard_id or url_path (both from ha_list_dashboards); " +
+				"only the fields given change. icon: null removes the icon. Its content is ha_save_dashboard's job. " +
+				"Requires HA_ALLOW_WRITE=true and HA_ALLOW_CONFIG_WRITE=true.",
+			inputSchema: {
+				dashboard_id: z.string().optional().describe("Dashboard id (from ha_list_dashboards)."),
+				url_path: z
+					.string()
+					.optional()
+					.describe("Or its url_path, e.g. 'sam-energy'; looked up to find the id."),
+				title: z.string().optional().describe("New sidebar title."),
+				icon: z
+					.string()
+					.nullable()
+					.optional()
+					.describe("New MDI icon (e.g. 'mdi:home'), or null to remove it."),
+				show_in_sidebar: z.boolean().optional().describe("Show in the sidebar."),
+				require_admin: z.boolean().optional().describe("Restrict to admin users.")
+			},
+			annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true }
+		},
+		async ({ dashboard_id, url_path, title, icon, show_in_sidebar, require_admin }) =>
+			runTool(ctx.logger, "ha_update_dashboard", async () => {
+				const decision = evaluateConfigWrite(ctx.instances.currentSafety());
+				if (!decision.allowed) {
+					return errorResult(decision.reason);
+				}
+				// Home Assistant's update fields have no defaults (unlike person/update), so
+				// sending only the fields given leaves the rest exactly as they were.
+				const fields: Record<string, unknown> = {};
+				if (title !== undefined) fields.title = title;
+				if (icon !== undefined) fields.icon = icon;
+				if (show_in_sidebar !== undefined) fields.show_in_sidebar = show_in_sidebar;
+				if (require_admin !== undefined) fields.require_admin = require_admin;
+				if (Object.keys(fields).length === 0) {
+					return errorResult("Give at least one of title, icon, show_in_sidebar or require_admin.");
+				}
+				let id = dashboard_id;
+				if (!id) {
+					if (!url_path) {
+						return errorResult("Name the dashboard: dashboard_id or url_path (from ha_list_dashboards).");
+					}
+					const rows = await lovelaceCommand<unknown[]>(ctx, { type: "lovelace/dashboards/list" });
+					const match = (Array.isArray(rows) ? rows : []).find(
+						(row) => (row as { url_path?: unknown }).url_path === url_path
+					) as { id?: unknown } | undefined;
+					if (!match || typeof match.id !== "string") {
+						return errorResult(
+							url_path === "lovelace"
+								? "The default Overview dashboard has no id and cannot be renamed here; it is not a storage dashboard."
+								: `No storage dashboard has the url_path '${url_path}'. ha_list_dashboards lists them; YAML dashboards can't be changed at runtime.`
+						);
+					}
+					id = match.id;
+				}
+				const updated = await lovelaceCommand<Record<string, unknown>>(ctx, {
+					type: "lovelace/dashboards/update",
+					dashboard_id: id,
+					...fields
+				});
+				return jsonResult({
+					updated: true,
+					dashboard_id: id,
+					dashboard: updated,
+					hint: "Takes effect at once; its views and cards are untouched. Reload the browser to see a sidebar change."
+				});
+			})
+	);
+
+	server.registerTool(
 		"ha_delete_dashboard",
 		{
 			title: "Delete Lovelace dashboard",
 			description:
-				"Delete a storage-mode Lovelace dashboard by its id (from ha_list_dashboards or ha_create_dashboard). Requires HA_ALLOW_WRITE=true and HA_ALLOW_CONFIG_WRITE=true.",
+				"Delete a storage-mode Lovelace dashboard by its id (from ha_list_dashboards or ha_create_dashboard). Its views and cards go with it. To change a dashboard's title, icon, sidebar or admin setting, use ha_update_dashboard instead: deleting and recreating loses the cards. Requires HA_ALLOW_WRITE=true and HA_ALLOW_CONFIG_WRITE=true.",
 			inputSchema: {
 				dashboard_id: z.string().describe("Dashboard id to delete (not url_path).")
 			},

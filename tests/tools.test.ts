@@ -3624,3 +3624,58 @@ describe("people", () => {
 		expect(sendCommand).not.toHaveBeenCalled();
 	});
 });
+
+describe("ha_update_dashboard", () => {
+	const WRITE = { HA_ALLOW_WRITE: "true", HA_ALLOW_CONFIG_WRITE: "true" };
+	const DASHBOARDS = [
+		{ id: "garden_cams", url_path: "garden-cams", title: "Garden", show_in_sidebar: false, mode: "storage" }
+	];
+
+	function dashboardWs() {
+		return vi.fn(async (command: Record<string, unknown>) => {
+			if (command.type === "lovelace/dashboards/list") return DASHBOARDS;
+			if (command.type === "lovelace/dashboards/update") return { ...DASHBOARDS[0], ...command };
+			throw new Error(`unexpected ${String(command.type)}`);
+		});
+	}
+
+	it("turns the sidebar on in place, found by url_path, sending only that field", async () => {
+		// The gap that found it: an agent deleted and recreated a dashboard just to
+		// show it in the sidebar, which would have lost a real dashboard's cards.
+		const sendWsCommand = dashboardWs();
+		const server = buildHarness({ env: WRITE, rest: { sendWsCommand } as never });
+		const body = jsonOf(await server.call("ha_update_dashboard", { url_path: "garden-cams", show_in_sidebar: true }));
+		expect(sendWsCommand).toHaveBeenLastCalledWith({
+			type: "lovelace/dashboards/update",
+			dashboard_id: "garden_cams",
+			show_in_sidebar: true
+		});
+		expect(body.updated).toBe(true);
+		expect(sendWsCommand).not.toHaveBeenCalledWith(expect.objectContaining({ type: "lovelace/dashboards/delete" }));
+	});
+
+	it("takes a dashboard_id directly and can remove the icon", async () => {
+		const sendWsCommand = dashboardWs();
+		const server = buildHarness({ env: WRITE, rest: { sendWsCommand } as never });
+		await server.call("ha_update_dashboard", { dashboard_id: "garden_cams", title: "Garden cams", icon: null });
+		expect(sendWsCommand).toHaveBeenCalledTimes(1);
+		expect(sendWsCommand).toHaveBeenLastCalledWith({
+			type: "lovelace/dashboards/update",
+			dashboard_id: "garden_cams",
+			title: "Garden cams",
+			icon: null
+		});
+	});
+
+	it("refuses with nothing to change, an unknown url_path, or no config write", async () => {
+		const sendWsCommand = dashboardWs();
+		const server = buildHarness({ env: WRITE, rest: { sendWsCommand } as never });
+		expect((await server.call("ha_update_dashboard", { url_path: "garden-cams" })).isError).toBe(true);
+		const unknown = await server.call("ha_update_dashboard", { url_path: "nope", title: "x" });
+		expect(unknown.isError).toBe(true);
+		expect(textOf(unknown)).toMatch(/ha_list_dashboards/);
+		const readOnly = buildHarness({ env: { HA_ALLOW_WRITE: "true" }, rest: { sendWsCommand } as never });
+		expect((await readOnly.call("ha_update_dashboard", { dashboard_id: "garden_cams", title: "x" })).isError).toBe(true);
+		expect(sendWsCommand).not.toHaveBeenCalledWith(expect.objectContaining({ type: "lovelace/dashboards/update" }));
+	});
+});

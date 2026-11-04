@@ -119,7 +119,8 @@ policy (see [Safety](#safety)).
 | `ha_get_dashboard` | Read one dashboard's full config (views, cards, …). |
 | `ha_save_dashboard` | Save/replace a dashboard config (needs `HA_ALLOW_CONFIG_WRITE`). |
 | `ha_create_dashboard` | Register a new storage-mode dashboard (needs `HA_ALLOW_CONFIG_WRITE`). |
-| `ha_delete_dashboard` | Delete a dashboard by id (needs `HA_ALLOW_CONFIG_WRITE`). |
+| `ha_update_dashboard` | Change a dashboard's title, icon, sidebar or admin setting, keeping its cards (needs `HA_ALLOW_CONFIG_WRITE`). |
+| `ha_delete_dashboard` | Delete a dashboard by id, cards and all (needs `HA_ALLOW_CONFIG_WRITE`). |
 
 > Dashboards use Home Assistant's WebSocket API. In brokered mode VomeHome proxies
 > an allowlisted subset via `POST /api/v1/instances/<id>/ha/ws/command`.
@@ -773,7 +774,7 @@ services, read config, render templates — **plus automation editing**:
 `ha_get_automation`, `ha_set_automation`, `ha_delete_automation` and
 `ha_check_config`. **Lovelace dashboards** are brokered too:
 `ha_list_dashboards`, `ha_get_dashboard`, `ha_save_dashboard`,
-`ha_create_dashboard`, `ha_delete_dashboard` (writes need `ha:config`).
+`ha_create_dashboard`, `ha_update_dashboard`, `ha_delete_dashboard` (writes need `ha:config`).
 Reading an automation needs `ha:read`; writing one needs the
 separate **`ha:config`** scope on the token *for that instance*, enforced
 server-side. The client write guards (`HA_ALLOW_WRITE` / `HA_ALLOW_CONFIG_WRITE`)

@@ -17,6 +17,7 @@ import { createUnavailableEsphomeClient } from "./esphome/client.js";
 import { createNodeRedClient } from "./nodered/client.js";
 import { createVomeHomeClient } from "./vomehome/client.js";
 import { createInstanceManager } from "./vomehome/instances.js";
+import { createFailoverChecker } from "./vomehome/failover.js";
 import type { InstanceChoice, ToolContext } from "./tools/helpers.js";
 
 export function createToolContext(
@@ -40,7 +41,14 @@ export function createToolContext(
 			})
 		: createHaWsClient(config, logger);
 	const directRest = config.brokered ? undefined : createHaRestClient(config, logger, ws);
-	const instances = createInstanceManager(config, logger, directRest);
+	const vomehome = createVomeHomeClient(config, logger);
+	// A brokered home that "restarts" may be a CHAP main stopped while its
+	// standby runs the home; the portal's CHAP status says which.
+	const failover =
+		config.brokered && vomehome.isEnabled()
+			? createFailoverChecker((id) => vomehome.chap(id), { logger })
+			: undefined;
+	const instances = createInstanceManager(config, logger, directRest, { failover });
 	instancesRef.current = instances;
 	// One route to ESPHome: the VomeHome relay, where the Vome component
 	// translates the dashboard's /ws API. Without one, a client that refuses
@@ -50,7 +58,6 @@ export function createToolContext(
 		? createBrokeredEsphomeDashboardClient(config, logger, () => instances.activeId())
 		: createUnavailableEsphomeClient();
 	const nodered = createNodeRedClient(config, logger);
-	const vomehome = createVomeHomeClient(config, logger);
 	return {
 		config,
 		logger,

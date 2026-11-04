@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadConfig } from "../src/config.js";
 import { createLogger } from "../src/logger.js";
 import { createBrokeredHaRestClient } from "../src/ha/brokeredClient.js";
-import { HaApiError, HaRestartingError, createHaRestClient } from "../src/ha/restClient.js";
+import { HaApiError, HaFailoverError, HaRestartingError, createHaRestClient } from "../src/ha/restClient.js";
 import { createHaWsClient } from "../src/ha/wsClient.js";
 import { explainRestart, looksLikeRestart } from "../src/ha/restart.js";
 import { waitUntilRunning } from "../src/tools/system.js";
@@ -84,6 +84,14 @@ describe("explainRestart", () => {
 			throw new HaApiError("responded 401", 401, "");
 		});
 		expect(explained).toBe(failure);
+	});
+
+	it("passes on a CHAP failover the check found (a config-files call on a stopped main)", async () => {
+		const failover = new HaFailoverError("CHAP failover is active: the standby 'House' (rly-s) is running this home", "rly-s", "House", "x");
+		const explained = await explainRestart(failure, async () => {
+			throw failover;
+		});
+		expect(explained).toBe(failover);
 	});
 
 	it("is shown as written, not with a misleading status appended", async () => {

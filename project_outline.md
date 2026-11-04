@@ -224,6 +224,13 @@ fallback. It wraps inside the instance stamp, and reads the session's own
 instance (`sessionActiveId()`), not a call's routed one.
 `vomehome_list_instances` marks `offline: true`.
 
+CHAP failover awareness (`vomehome/failover.ts`, 0.17): each brokered client
+the instance manager makes is wrapped so a `HaRestartingError` triggers one
+(cached 30 s per instance, "no pair" and failures too) read of
+`GET /api/v1/instances/<id>/chap`; when `pair.failover` is true and
+`pair.running` is the standby, the error becomes a `HaFailoverError` (a
+`HaRestartingError` subclass) naming the standby. The stamp renders it too.
+
 Per-call routing (`tools/instanceStamp.ts` + `InstanceManager.runOn`, 0.17): a
 tool's `instance_id` (the optional one the stamp wrapper adds, or a write
 tool's own required one) runs that call inside an AsyncLocalStorage scope in

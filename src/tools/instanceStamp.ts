@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ToolContext } from "./helpers.js";
-import { HaRestartingError } from "../ha/restClient.js";
+import { HaFailoverError, HaRestartingError } from "../ha/restClient.js";
 import { isNotRunning } from "../ha/restart.js";
 import { DIRECT_INSTANCE_ID } from "../vomehome/instances.js";
 
@@ -54,6 +54,8 @@ interface Identity {
 	 * home restarts taught agents to distrust (or ignore) the stamp.
 	 */
 	restarting?: boolean;
+	/** The read failed because a CHAP standby is running the home: who, as "'name' (id)". */
+	failover?: string;
 }
 
 interface CacheEntry {
@@ -65,6 +67,12 @@ interface CacheEntry {
 export const STAMP_PREFIX = "[vome-instance]";
 
 function renderStamp(identity: Identity): string {
+	if (identity.failover) {
+		return (
+			`${STAMP_PREFIX} target=${identity.id} — CHAP failover is active: the standby ${identity.failover} is ` +
+			`running this home; identity not checked.`
+		);
+	}
 	if (identity.restarting) {
 		return (
 			`${STAMP_PREFIX} target=${identity.id} — Home Assistant is restarting or not answering; ` +
@@ -124,7 +132,8 @@ export function createIdentityReader(ctx: ToolContext): () => Promise<Identity> 
 			result = {
 				id,
 				error: error instanceof Error ? error.message : String(error),
-				...(error instanceof HaRestartingError ? { restarting: true } : {})
+				...(error instanceof HaRestartingError ? { restarting: true } : {}),
+				...(error instanceof HaFailoverError ? { failover: `'${error.standbyName}' (${error.standbyId})` } : {})
 			};
 			// Logged, because the reader only sees the stamp: a run of
 			// unverified replies on 14 Oct left no trace of why.

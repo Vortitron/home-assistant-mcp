@@ -93,6 +93,25 @@ export class HaRestartingError extends HaApiError {
 	}
 }
 
+/**
+ * A call to a CHAP pair's main install failed restart-shaped because the
+ * standby is running the home (the main is stopped on purpose): see
+ * vomehome/failover.ts. A {@link HaRestartingError} still, so everything that
+ * treats "not answering" specially keeps doing so; its message names the
+ * standby to use instead.
+ */
+export class HaFailoverError extends HaRestartingError {
+	readonly standbyId: string;
+	readonly standbyName: string;
+
+	constructor(message: string, standbyId: string, standbyName: string, original: string) {
+		super(message, null, original);
+		this.name = "HaFailoverError";
+		this.standbyId = standbyId;
+		this.standbyName = standbyName;
+	}
+}
+
 /** A binary body, base64-encoded, and what kind of file it is. */
 /** A running watch of some entities' states, and the token a reader follows it with (VomeHome only). */
 export interface StateWatchGrant {

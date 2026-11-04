@@ -1,4 +1,4 @@
-import { HaApiError, HaRestartingError } from "./restClient.js";
+import { HaApiError, HaFailoverError, HaRestartingError } from "./restClient.js";
 
 /**
  * Telling "Home Assistant is restarting" apart from a real failure.
@@ -136,6 +136,8 @@ export async function explainRestart(
 			// Answering and running: whatever failed, it was not a restart.
 			return error;
 		} catch (probeError) {
+			// The probe already found out who is running the home (CHAP failover): say that.
+			if (probeError instanceof HaFailoverError) return probeError;
 			if (!looksLikeRestart(probeError, options) && !isTimeout(probeError)) {
 				return error;
 			}

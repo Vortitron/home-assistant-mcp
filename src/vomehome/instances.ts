@@ -4,6 +4,7 @@ import type { Logger } from "../logger.js";
 import { HaApiError } from "../ha/restClient.js";
 import type { HaRequestOptions, HaRestClient } from "../ha/restClient.js";
 import { createBrokeredHaRestClient } from "../ha/brokeredClient.js";
+import { withFailoverAwareness, type FailoverChecker } from "./failover.js";
 
 /**
  * Multi-instance access manager.
@@ -99,7 +100,15 @@ export interface InstanceManager {
 export function createInstanceManager(
 	config: Config,
 	logger: Logger,
-	directRest?: HaRestClient
+	directRest?: HaRestClient,
+	options: {
+		/**
+		 * Asks whether a CHAP failover is active for an instance. Given, each
+		 * brokered client turns a restart-shaped failure into "the standby is
+		 * running this home" when that is so (vomehome/failover.ts).
+		 */
+		failover?: FailoverChecker;
+	} = {}
 ): InstanceManager {
 	const brokered = config.brokered;
 	const registry = new Map<string, InstanceAccess>();
@@ -182,7 +191,10 @@ export function createInstanceManager(
 		}
 		let client = clientCache.get(id);
 		if (!client) {
-			client = createBrokeredHaRestClient(config, logger, id);
+			const brokeredClient = createBrokeredHaRestClient(config, logger, id);
+			client = options.failover
+				? withFailoverAwareness(brokeredClient, id, options.failover, (standby) => registry.has(standby))
+				: brokeredClient;
 			clientCache.set(id, client);
 		}
 		return client;

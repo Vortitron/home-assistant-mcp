@@ -572,11 +572,18 @@ bench.
 ### Several instances from one token
 
 **Name the home on any call.** Every tool except the `vomehome_*` ones accepts
-an optional `instance_id`. When given, the call is refused if this session is
-targeting a different home, instead of answering from it. Writes to files and
-logins already require it. Reads need it too: a session that reconnects can
-resume on another window's choice, and "entity not found" or an empty history
-from the wrong house look like real answers.
+an optional `instance_id`, which **routes that one call** to the named home:
+the session's active instance does not move, and on the hosted server nothing
+is remembered for the key. Write/config permission is the named home's own,
+exactly as if it were active, and the reply's `[vome-instance]` stamp names the
+home that answered, adding `(this call only; session still on <active>)` when
+that is not the session's. Only an instance the session knows (declared, listed
+for the token, created or switched to) is accepted; any other id is refused
+with the list of valid ones, so a typo never answers from the active home.
+Writes to files and logins require `instance_id`, so a write always lands on
+the home named. Use it to read a CHAP standby while failover is active, or to
+compare two homes, without switching. A direct connection (`HA_URL`) has one
+Home Assistant and refuses an optional `instance_id` naming anything else.
 
 The multi-process layout above is one process per token. When several instances
 live on the **same** VomeHome account (same token), you can instead drive them

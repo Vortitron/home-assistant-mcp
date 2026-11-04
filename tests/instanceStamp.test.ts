@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
@@ -8,7 +8,10 @@ import {
 	withInstanceStamp
 } from "../src/tools/instanceStamp.js";
 import type { ToolContext } from "../src/tools/helpers.js";
-import { HaApiError, HaRestartingError } from "../src/ha/restClient.js";
+import { HaApiError, HaRestartingError, type HaRestClient } from "../src/ha/restClient.js";
+import { loadConfig } from "../src/config.js";
+import type { Logger } from "../src/logger.js";
+import { createInstanceManager } from "../src/vomehome/instances.js";
 
 /**
  * Every reply must say which Home Assistant answered it.
@@ -244,58 +247,147 @@ describe("every registered tool is stamped", () => {
 	});
 });
 
-describe("naming the home on any call", () => {
+describe("naming the home on any call routes that call", () => {
 	/* Reads answered from the wrong house three times: another window of the
 	   same client had moved the shared starting choice, and "entity not found"
-	   or an empty history looked like real answers. Every tool can now be told
-	   which home is meant, and refuses instead of answering from another. */
+	   or an empty history looked like real answers. Naming the home used to
+	   refuse such a call; now it sends the call there (Nov 2026: "there's no
+	   way to read the standby without changing the instance remembered for
+	   the whole API key"), for that call only. */
+	const logger = { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} } as unknown as Logger;
+
 	function harness(brokered: boolean) {
+		const env: Record<string, string> = brokered
+			? {
+					HA_TOKEN: "",
+					VOMEHOME_TOKEN: "vh_test",
+					VOMEHOME_API_URL: "https://portal.test",
+					VOMEHOME_INSTANCE_ID: "rly-1",
+					VOMEHOME_INSTANCES: JSON.stringify([
+						{ id: "rly-1", write: true, config: true },
+						{ id: "rly-2", write: false, config: false }
+					])
+				}
+			: { HA_URL: "http://ha.local:8123", HA_TOKEN: "tok", HA_ALLOW_WRITE: "true" };
+		const config = loadConfig(env);
+		const direct = { getConfig: async () => ({ location_name: "Direct" }) } as unknown as HaRestClient;
+		const instances = createInstanceManager(config, logger, brokered ? undefined : direct);
+		const ctx = { config, logger, instances, rest: instances.rest } as unknown as ToolContext;
 		const registered = new Map<string, { config: any; handler: (...a: any[]) => Promise<CallToolResult> }>();
 		const fake = {
-			registerTool: (name: string, config: unknown, handler: any) => registered.set(name, { config, handler })
+			registerTool: (name: string, cfg: unknown, handler: any) => registered.set(name, { config: cfg, handler })
 		} as unknown as McpServer;
-		const ctx = {
-			config: { brokered },
-			instances: { activeId: () => "rly-1" },
-			rest: { getConfig: async () => ({ location_name: "Home" }) }
-		} as unknown as ToolContext;
 		const server = withInstanceStamp(fake, ctx);
-		const seen: unknown[] = [];
+		const seen: Array<{ args: unknown; active: string; write: boolean }> = [];
 		const handler = vi.fn(async (args: unknown) => {
-			seen.push(args);
-			return { content: [{ type: "text" as const, text: "ok" }] };
+			seen.push({ args, active: instances.activeId(), write: instances.currentSafety().allowWrite });
+			// The tool's own Home Assistant call, through the shared client.
+			const home = (await ctx.rest.getConfig()) as { location_name?: string };
+			return { content: [{ type: "text" as const, text: home.location_name ?? "" }] };
 		});
-		return { server, registered, handler, seen };
+		const urls: string[] = [];
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (url: string) => {
+				urls.push(String(url));
+				const id = /\/instances\/([^/]+)\/ha/.exec(String(url))?.[1];
+				return new Response(JSON.stringify({ location_name: id === "rly-2" ? "Standby" : "Main" }), { status: 200 });
+			})
+		);
+		const call = (name: string, args: Record<string, unknown>) => registered.get(name)!.handler(args, {});
+		return { server, registered, handler, seen, instances, urls, call };
 	}
 
-	it("refuses a read that names another home, without running it", async () => {
-		const { server, registered, handler } = harness(true);
-		server.registerTool("ha_get_history", { inputSchema: { entity_ids: {} } } as any, handler as any);
-		const result = await registered.get("ha_get_history")!.handler({ entity_ids: ["x"], instance_id: "rly-2" }, {});
-		expect(result.isError).toBe(true);
-		expect(result.content[0]).toMatchObject({ type: "text" });
-		expect((result.content[0] as any).text).toContain('targeting "rly-1"');
-		expect(handler).not.toHaveBeenCalled();
-	});
+	afterEach(() => vi.unstubAllGlobals());
 
-	it("runs when the named home is the target, and the tool never sees the extra argument", async () => {
-		const { server, registered, handler, seen } = harness(true);
+	const stampOf = (result: CallToolResult) => String((result.content.at(-1) as any).text);
+
+	it("routes a read to the named instance without moving the session or its remembered choice", async () => {
+		const { server, handler, seen, instances, urls, call } = harness(true);
 		server.registerTool("ha_get_history", { inputSchema: { entity_ids: {} } } as any, handler as any);
-		const result = await registered.get("ha_get_history")!.handler({ entity_ids: ["x"], instance_id: "rly-1" }, {});
+		const result = await call("ha_get_history", { entity_ids: ["x"], instance_id: "rly-2" });
 		expect(result.isError).toBeFalsy();
-		expect(seen[0]).toEqual({ entity_ids: ["x"] });
+		expect((result.content[0] as any).text).toBe("Standby");
+		expect(seen[0]).toMatchObject({ args: { entity_ids: ["x"] }, active: "rly-2" });
+		expect(urls.every((url) => url.includes("/instances/rly-2/"))).toBe(true);
+		// The session is where it was, and nothing counts as a choice to remember.
+		expect(instances.activeId()).toBe("rly-1");
+		expect(instances.sessionActiveId()).toBe("rly-1");
+		expect(instances.chosenId()).toBeNull();
+		// The stamp names where the call went, and that the session did not move.
+		expect(stampOf(result)).toContain("target=rly-2");
+		expect(stampOf(result)).toContain('home="Standby"');
+		expect(stampOf(result)).toContain("(this call only; session still on rly-1)");
 	});
 
-	it("leaves direct mode, omitted ids, and tools that own the argument alone", async () => {
+	it("says nothing extra when the named instance is the session's own", async () => {
+		const { server, handler, call } = harness(true);
+		server.registerTool("ha_get_history", { inputSchema: { entity_ids: {} } } as any, handler as any);
+		const result = await call("ha_get_history", { entity_ids: ["x"], instance_id: "rly-1" });
+		expect(stampOf(result)).toContain("target=rly-1");
+		expect(stampOf(result)).not.toContain("this call only");
+	});
+
+	it("gives the call the target's own permission, as if it were active", async () => {
+		const { server, handler, seen, call } = harness(true);
+		server.registerTool("ha_call_service", { inputSchema: { domain: {} } } as any, handler as any);
+		await call("ha_call_service", { domain: "light", instance_id: "rly-2" });
+		await call("ha_call_service", { domain: "light" });
+		expect(seen.map((s) => [s.active, s.write])).toEqual([
+			["rly-2", false],
+			["rly-1", true]
+		]);
+	});
+
+	it("keeps concurrent calls on their own instances", async () => {
+		const { server, handler, seen, call } = harness(true);
+		server.registerTool("ha_get_state", { inputSchema: { entity_ids: {} } } as any, handler as any);
+		const results = await Promise.all([
+			call("ha_get_state", { entity_ids: ["a"], instance_id: "rly-2" }),
+			call("ha_get_state", { entity_ids: ["b"] }),
+			call("ha_get_state", { entity_ids: ["c"], instance_id: "rly-2" })
+		]);
+		expect(results.map((r) => (r.content[0] as any).text)).toEqual(["Standby", "Main", "Standby"]);
+		expect(seen.map((s) => s.active).sort()).toEqual(["rly-1", "rly-2", "rly-2"]);
+	});
+
+	it("refuses an unknown instance with the ones it can use, without running the tool", async () => {
+		const { server, handler, call, urls } = harness(true);
+		server.registerTool("ha_get_history", { inputSchema: { entity_ids: {} } } as any, handler as any);
+		const result = await call("ha_get_history", { entity_ids: ["x"], instance_id: "rly-9" });
+		expect(result.isError).toBe(true);
+		const text = (result.content[0] as any).text;
+		expect(text).toContain('"rly-9" is not an instance this session can reach');
+		expect(text).toContain("rly-1, rly-2");
+		expect(handler).not.toHaveBeenCalled();
+		expect(urls.filter((url) => url.includes("rly-9"))).toEqual([]);
+	});
+
+	it("routes a write tool's own required instance_id too, and leaves the argument in place", async () => {
+		const { server, handler, seen, call, instances } = harness(true);
+		server.registerTool("ha_write_config_file", { inputSchema: { instance_id: {}, path: {} } } as any, handler as any);
+		expect((await call("ha_write_config_file", { instance_id: "rly-2", path: "x" })).isError).toBeFalsy();
+		expect(seen[0]).toMatchObject({ args: { instance_id: "rly-2", path: "x" }, active: "rly-2", write: false });
+		expect(instances.sessionActiveId()).toBe("rly-1");
+	});
+
+	it("refuses to route in direct mode, but leaves omitted ids and the write tools' own argument alone", async () => {
 		const direct = harness(false);
 		direct.server.registerTool("ha_list_entities", { inputSchema: {} } as any, direct.handler as any);
-		expect((await direct.registered.get("ha_list_entities")!.handler({ instance_id: "other" }, {})).isError).toBeFalsy();
+		const refused = await direct.call("ha_list_entities", { instance_id: "other" });
+		expect(refused.isError).toBe(true);
+		expect((refused.content[0] as any).text).toMatch(/one Home Assistant directly/);
+		expect(direct.handler).not.toHaveBeenCalled();
+		expect((await direct.call("ha_list_entities", {})).isError).toBeFalsy();
+		expect((await direct.call("ha_list_entities", { instance_id: "(direct)" })).isError).toBeFalsy();
+		direct.server.registerTool("ha_write_config_file", { inputSchema: { instance_id: {} } } as any, direct.handler as any);
+		expect((await direct.call("ha_write_config_file", { instance_id: "direct" })).isError).toBeFalsy();
+	});
 
+	it("adds the optional argument to tools without one, and leaves the vomehome tools alone", async () => {
 		const { server, registered, handler } = harness(true);
 		server.registerTool("ha_list_entities", { inputSchema: {} } as any, handler as any);
-		expect((await registered.get("ha_list_entities")!.handler({}, {})).isError).toBeFalsy();
 		expect(registered.get("ha_list_entities")!.config.inputSchema).toHaveProperty("instance_id");
-
 		server.registerTool("vomehome_use_instance", { inputSchema: { instance_id: {} } } as any, handler as any);
 		expect(registered.get("vomehome_use_instance")!.config.inputSchema.instance_id).toEqual({});
 		server.registerTool("vomehome_list_instances", { inputSchema: {} } as any, handler as any);

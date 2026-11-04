@@ -2782,8 +2782,23 @@ describe("ha_delete_config_file", () => {
 		const server = buildHarness({ env: BROKERED });
 		const result = await server.call("ha_delete_config_file", { instance_id: "the-demo-vm", path: "x.yaml" });
 		expect(result.isError).toBe(true);
-		expect(textOf(result)).toContain("Nothing was deleted");
+		expect(textOf(result)).toMatch(/nothing was read, written or deleted/i);
 		expect(fetchMock).not.toHaveBeenCalled();
+		vi.unstubAllGlobals();
+	});
+
+	it("routes to another known home with that home's own permission", async () => {
+		const fetchMock = vi.fn(async () => new Response(JSON.stringify({ deleted: true }), { status: 200 }));
+		vi.stubGlobal("fetch", fetchMock);
+		const server = buildHarness({
+			env: { ...BROKERED, VOMEHOME_INSTANCES: JSON.stringify([{ id: "rly-1" }, { id: "rly-ro", write: false, config: false }, { id: "rly-2" }]) }
+		});
+		const locked = await server.call("ha_delete_config_file", { instance_id: "rly-ro", path: "x.yaml" });
+		expect(locked.isError).toBe(true);
+		expect(fetchMock).not.toHaveBeenCalled();
+		const routed = await server.call("ha_delete_config_file", { instance_id: "rly-2", path: "x.yaml" });
+		expect(routed.isError).toBeFalsy();
+		expect(String((fetchMock.mock.calls[0] as unknown[])[0])).toContain("/instances/rly-2/ha/files/delete");
 		vi.unstubAllGlobals();
 	});
 

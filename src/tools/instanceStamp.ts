@@ -4,6 +4,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { ToolContext } from "./helpers.js";
 import { HaRestartingError } from "../ha/restClient.js";
 import { isNotRunning } from "../ha/restart.js";
+import { DIRECT_INSTANCE_ID } from "../vomehome/instances.js";
 
 /**
  * Stamp every tool reply with which Home Assistant answered it.
@@ -172,10 +173,10 @@ const INSTANCE_ARG = "instance_id";
  * fact, and agents rarely read it: three times a read answered from the
  * wrong house ("entity not found", an empty history) because another window
  * of the same client had moved the shared starting choice. Naming the home on
- * a read turns that into a refusal, as it already is for writes. Optional,
+ * a call makes that impossible: the call goes to the home named. Optional,
  * so existing callers are unaffected; skipped for the vomehome_* tools, where
  * ``instance_id`` names the home to act on, and for tools that declare their
- * own (where it is required and checked by the tool itself).
+ * own (where it is required, and routed the same way — see {@link ownsInstanceArg}).
  */
 function guardableSchema(name: string, config: unknown): Record<string, unknown> | null {
 	if (name.startsWith("vomehome_") || !config || typeof config !== "object") return null;
@@ -190,36 +191,77 @@ function guardableSchema(name: string, config: unknown): Record<string, unknown>
 				.string()
 				.optional()
 				.describe(
-					"Optional: the instance you mean (as listed by vomehome_list_instances). When given, the call is " +
-						"refused if this session is targeting a different home, instead of answering from it."
+					"Optional: the instance to run this one call on (as listed by vomehome_list_instances). Routes this " +
+						"call to that home without switching the session, with that home's own write/config permission; " +
+						"the reply's stamp names it. An unknown id is refused. Omit to use the session's active instance."
 				)
 		}
 	};
 }
 
-/** A refusal when the caller named a home other than the one targeted, else null. */
-function wrongHome(ctx: ToolContext, named: unknown): CallToolResult | null {
-	if (!ctx.config.brokered || typeof named !== "string" || !named.trim()) return null;
-	const meant = named.trim();
-	const targeting = ctx.instances.activeId();
-	if (meant === targeting) return null;
+/** True for a (non-vomehome) tool that declares its own, required, ``instance_id``: the write tools. */
+function ownsInstanceArg(name: string, config: unknown): boolean {
+	if (name.startsWith("vomehome_") || !config || typeof config !== "object") return false;
+	const shape = (config as { inputSchema?: unknown }).inputSchema;
+	return Boolean(shape && typeof shape === "object" && INSTANCE_ARG in shape);
+}
+
+function refusal(text: string): CallToolResult {
+	return { isError: true, content: [{ type: "text", text }] };
+}
+
+/**
+ * Where a call naming ``named`` goes: routed to that instance (``id``), left
+ * on the session's (``id: null``), or refused.
+ *
+ * Only an instance the session knows — declared, listed for the token by the
+ * hosted server, created, or switched to — is routed to; anything else is
+ * refused with the ones it can use, so a typo or a stale id never quietly
+ * answers from the active home. Brokered calls route by instance id alone
+ * (another /api/v1/instances/<id> base). A direct connection has one Home
+ * Assistant and nowhere to route: an optional ``instance_id`` naming anything
+ * else is refused rather than answered from it, while the write tools' own
+ * required argument is left as it always was there (it cannot mean anything
+ * but the one home).
+ */
+function routeFor(
+	ctx: ToolContext,
+	named: unknown,
+	owned: boolean
+): { id: string | null; refusal?: undefined } | { refusal: CallToolResult } {
+	if (typeof named !== "string" || !named.trim()) return { id: null };
+	const id = named.trim();
+	if (!ctx.config.brokered) {
+		if (owned || id === DIRECT_INSTANCE_ID) return { id: null };
+		return {
+			refusal: refusal(
+				`Refused: this server talks to one Home Assistant directly (HA_URL), not through VomeHome, so ` +
+					`instance_id "${id}" cannot route the call anywhere. Nothing was read or changed. Omit instance_id.`
+			)
+		};
+	}
+	if (ctx.instances.has(id)) return { id };
+	const known = ctx.instances.list().map((entry) => entry.id);
 	return {
-		isError: true,
-		content: [
-			{
-				type: "text",
-				text:
-					`Refused: this session is targeting "${targeting}", but the call names "${meant}". ` +
-					`Nothing was read or changed. Select "${meant}" with vomehome_use_instance first if it is ` +
-					`the home you mean — the session may have resumed on another window's choice.`
-			}
-		]
+		refusal: refusal(
+			`Refused: "${id}" is not an instance this session can reach, so nothing was read, written or deleted. ` +
+				`Known instances: ${known.length > 0 ? known.join(", ") : "(none)"} (this session is on ` +
+				`"${ctx.instances.sessionActiveId()}"). Use one of those ids, or vomehome_use_instance for an instance ` +
+				"the API key can reach that is not listed yet."
+		)
 	};
 }
 
-/** Appends the stamp to a tool result as its own trailing text block. */
-export function appendStamp(result: CallToolResult, identity: Identity): CallToolResult {
-	const stamp = renderStamp(identity);
+/**
+ * Appends the stamp to a tool result as its own trailing text block. When the
+ * call was routed away from the session's own instance (``sessionId``), the
+ * stamp says so, so nobody takes the session to have moved.
+ */
+export function appendStamp(result: CallToolResult, identity: Identity, sessionId?: string): CallToolResult {
+	let stamp = renderStamp(identity);
+	if (sessionId !== undefined && sessionId !== identity.id) {
+		stamp += ` (this call only; session still on ${sessionId})`;
+	}
 	// A separate content block, never merged into the payload: callers that
 	// JSON.parse the first block keep working unchanged.
 	return {
@@ -243,24 +285,43 @@ export function withInstanceStamp(server: McpServer, ctx: ToolContext): McpServe
 
 	const wrapped = ((name: string, config: unknown, handler: unknown) => {
 		const guarded = guardableSchema(name, config);
+		const owned = !guarded && ownsInstanceArg(name, config);
 		const stampedHandler = async (...args: unknown[]): Promise<CallToolResult> => {
-			if (guarded) {
+			let named: unknown;
+			if (guarded || owned) {
 				const params = (args[0] ?? {}) as Record<string, unknown>;
-				const refusal = wrongHome(ctx, params[INSTANCE_ARG]);
-				if (refusal) {
-					return appendStamp(refusal, await identity().catch(() => ({ id: ctx.instances.activeId() })));
+				named = params[INSTANCE_ARG];
+				if (guarded) {
+					// The tool never sees the argument it did not declare.
+					const { [INSTANCE_ARG]: _named, ...rest } = params;
+					args[0] = rest;
 				}
-				const { [INSTANCE_ARG]: _named, ...rest } = params;
-				args[0] = rest;
 			}
-			const result = (await (handler as (...a: unknown[]) => Promise<CallToolResult>)(
-				...args
-			)) as CallToolResult;
-			try {
-				return appendStamp(result, await identity());
-			} catch {
-				return result;
+			const route = routeFor(ctx, named, owned);
+			if (route.refusal) {
+				return appendStamp(route.refusal, await identity().catch(() => ({ id: ctx.instances.activeId() })));
 			}
+			const run = async (): Promise<CallToolResult> => {
+				const result = (await (handler as (...a: unknown[]) => Promise<CallToolResult>)(
+					...args
+				)) as CallToolResult;
+				let stamp: Identity;
+				try {
+					stamp = await identity();
+				} catch {
+					return result;
+				}
+				let session: string | undefined;
+				try {
+					session = ctx.instances.sessionActiveId();
+				} catch {
+					session = undefined;
+				}
+				return appendStamp(result, stamp, session);
+			};
+			// Routed: the handler, its permission checks and the stamp all run
+			// against the named instance; the session's own stays put.
+			return route.id === null ? run() : ctx.instances.runOn(route.id, run);
 		};
 		return (original as (n: string, c: unknown, h: unknown) => unknown)(
 			name,

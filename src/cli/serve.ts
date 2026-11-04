@@ -468,7 +468,7 @@ export async function startMcpHttpServer(args: ServeArgs, logger: Logger): Promi
 
 		const remember = (sessionId: string): void => {
 			const sessionKey = sessionKeyFor(token, sessionId);
-			const active = ctx.instances.activeId();
+			const active = ctx.instances.sessionActiveId();
 			sessions.set(sessionId, {
 				transport,
 				server,
@@ -478,7 +478,7 @@ export async function startMcpHttpServer(args: ServeArgs, logger: Logger): Promi
 				},
 				tokenHash: hashToken(token),
 				tokenKey: memoryKey,
-				activeId: () => ctx.instances.activeId(),
+				activeId: () => ctx.instances.sessionActiveId(),
 				chosenId: () => ctx.instances.chosenId(),
 				startedOn: active,
 				clientName,

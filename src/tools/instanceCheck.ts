@@ -101,7 +101,8 @@ export async function checkStartingInstance(ctx: ToolContext): Promise<Notice | 
 	}
 	// The caller may have switched while the check ran; then it is their choice.
 	if (ctx.instances.chosenId() !== null) return null;
-	const startId = ctx.instances.activeId();
+	// The session's own start, not where this one call may be routed.
+	const startId = ctx.instances.sessionActiveId();
 	const start = instances.find((instance) => instance.id === startId);
 	if (!start || !isOffline(start)) return null;
 
@@ -169,7 +170,7 @@ export function withStartingInstanceCheck(server: McpServer, ctx: ToolContext): 
 			shown = true;
 			const stillOnIt =
 				notice.offlineId !== undefined &&
-				ctx.instances.activeId() === notice.offlineId &&
+				ctx.instances.sessionActiveId() === notice.offlineId &&
 				ctx.instances.chosenId() === null;
 			return first || (result.isError && stillOnIt) ? appendNotice(result, notice.text) : result;
 		};

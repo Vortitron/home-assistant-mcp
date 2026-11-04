@@ -220,8 +220,18 @@ start that somebody chose (`?instance=` pin, remembered switch,
 an offline default nobody chose falls back to the first online declared
 instance via `InstanceManager.fallBackTo`, which does not set `chosenId()`,
 so the hosted server (which now remembers only `chosenId()`) never saves the
-fallback. It wraps inside the instance stamp so the stamp's `instance_id`
-guard sees the fallback. `vomehome_list_instances` marks `offline: true`.
+fallback. It wraps inside the instance stamp, and reads the session's own
+instance (`sessionActiveId()`), not a call's routed one.
+`vomehome_list_instances` marks `offline: true`.
+
+Per-call routing (`tools/instanceStamp.ts` + `InstanceManager.runOn`, 0.17): a
+tool's `instance_id` (the optional one the stamp wrapper adds, or a write
+tool's own required one) runs that call inside an AsyncLocalStorage scope in
+which `activeId()`, `rest`, `currentSafety()` and the brokered WS/ESPHome
+clients all resolve to the named instance. The session's `active`, `chosenId()`
+and so the hosted server's memory are untouched (serve.ts reads
+`sessionActiveId()`). Unknown ids are refused by the wrapper; direct mode
+refuses any optional id but `(direct)`.
 
 Instance management (`portal/instances_api.py`):
 

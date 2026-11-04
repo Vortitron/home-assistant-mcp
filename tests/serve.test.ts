@@ -558,13 +558,43 @@ describe("MCP HTTP server", () => {
 			await client.close();
 		});
 
-		it("refuses a first call that names the offline default after the fallback, rather than answering from the other home", async () => {
+		it("sends a first call that names the offline default there after the fallback, rather than answering from the other home", async () => {
 			offlineInstances.add("inst-one");
 			const client = await connectTo(endpoint);
 			const result = await client.callTool({ name: "ha_get_config", arguments: { instance_id: "inst-one" } });
-			expect(result.isError).toBe(true);
-			expect(textsOf(result)[0]).toMatch(/targeting "inst-two", but the call names "inst-one"/);
+			// Answered by the home named, never by the fallback, and the stamp says the session stayed.
+			expect(textsOf(result)[0]).toContain("Test Home");
+			expect(textsOf(result).some((text) => text.includes("target=inst-one") && text.includes("session still on inst-two"))).toBe(true);
 			expect(noticeOf(result)).toMatch(/switch with vomehome_use_instance/);
+			expect(await activeOf(client)).toBe("inst-two");
+			await client.close();
+		});
+	});
+
+	describe("instance_id on a call", () => {
+		const textsOf = (result: Awaited<ReturnType<Client["callTool"]>>): string[] =>
+			(result.content as { text: string }[]).map((block) => block.text);
+		it("routes that one call without moving the session or what the server remembers", async () => {
+			const client = await connectTo(endpoint);
+			const routed = await client.callTool({ name: "ha_get_config", arguments: { instance_id: "inst-two" } });
+			expect(textsOf(routed)[0]).toContain("Test Cottage");
+			expect(textsOf(routed).some((text) => text.includes("(this call only; session still on inst-one)"))).toBe(true);
+			const plain = await client.callTool({ name: "ha_get_config", arguments: {} });
+			expect(textsOf(plain)[0]).toContain("Test Home");
+			expect(await activeOf(client)).toBe("inst-one");
+			await client.close();
+
+			// Nothing was remembered: the next session of this client starts where it did.
+			const next = await connectTo(endpoint);
+			expect(await activeOf(next)).toBe("inst-one");
+			await next.close();
+		});
+
+		it("refuses an instance the token cannot reach", async () => {
+			const client = await connectTo(endpoint);
+			const result = await client.callTool({ name: "ha_get_config", arguments: { instance_id: "inst-nine" } });
+			expect(result.isError).toBe(true);
+			expect(textsOf(result)[0]).toMatch(/Known instances: inst-one, inst-two/);
 			await client.close();
 		});
 	});

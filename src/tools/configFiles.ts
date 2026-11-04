@@ -225,6 +225,11 @@ async function writeAndVerify(
  * destructively. Only where there is more than one house to confuse: a direct
  * connection has exactly one Home Assistant and no ambient instance to drift,
  * so the check would be friction with nothing to catch.
+ *
+ * Since 0.17 the named instance is also where the call goes: the tool wrapper
+ * (instanceStamp.ts) routes it there for this call only, so belief and reality
+ * cannot disagree. The check stays as defence in depth for a handler run
+ * without the wrapper.
  */
 function refuseFileWrite(ctx: ToolContext, instanceId: string | undefined, noun: string): CallToolResult | null {
 	const meant = (instanceId ?? "").trim();
@@ -508,9 +513,9 @@ export function registerConfigFileTools(server: McpServer, ctx: ToolContext): vo
 				instance_id: z
 					.string()
 					.describe(
-						"The instance this write is meant for (as listed by vomehome_list_instances). " +
-							"Required, and checked against the one this session is actually targeting: " +
-							"if they differ the write is refused rather than applied to the wrong home."
+						"The instance this write is for (as listed by vomehome_list_instances). Required: it routes this " +
+							"call to that home (this call only; the session's active instance is unchanged), so the write " +
+							"never lands on whichever home the session happens to be on. An unknown id is refused."
 					),
 				path: z.string().describe("File relative to the config root, e.g. 'configuration.yaml'."),
 				content: z.string().describe("The complete new contents of the file (base64 if encoding='base64')."),
@@ -560,9 +565,9 @@ export function registerConfigFileTools(server: McpServer, ctx: ToolContext): vo
 				instance_id: z
 					.string()
 					.describe(
-						"The instance this upload is meant for (as listed by vomehome_list_instances). " +
-							"Required, and checked against the one this session is actually targeting: " +
-							"if they differ nothing is written."
+						"The instance this upload is for (as listed by vomehome_list_instances). Required: it routes this " +
+							"call to that home (this call only; the session's active instance is unchanged), so the upload " +
+							"never lands on whichever home the session happens to be on. An unknown id is refused."
 					),
 				local_path: z
 					.string()
@@ -622,8 +627,9 @@ export function registerConfigFileTools(server: McpServer, ctx: ToolContext): vo
 				instance_id: z
 					.string()
 					.describe(
-						"The instance this edit is meant for (as listed by vomehome_list_instances). Required, and " +
-							"checked against the one this session is targeting; refused if they differ."
+						"The instance this edit is for (as listed by vomehome_list_instances). Required: it routes this " +
+							"call to that home (this call only; the session's active instance is unchanged), so the edit " +
+							"never lands on whichever home the session happens to be on. An unknown id is refused."
 					),
 				path: z.string().describe("File relative to the config root, e.g. 'automations.yaml'."),
 				edits: z
@@ -700,9 +706,9 @@ export function registerConfigFileTools(server: McpServer, ctx: ToolContext): vo
 				instance_id: z
 					.string()
 					.describe(
-						"The instance this delete is meant for (as listed by vomehome_list_instances). " +
-							"Required, and checked against the one this session is targeting: if they " +
-							"differ nothing is deleted."
+						"The instance this delete is for (as listed by vomehome_list_instances). Required: it routes this " +
+							"call to that home (this call only; the session's active instance is unchanged), so the delete " +
+							"never lands on whichever home the session happens to be on. An unknown id is refused."
 					),
 				path: z.string().describe("File relative to the config root, e.g. 'packages/old.yaml'.")
 			},
@@ -759,8 +765,9 @@ export function registerConfigFileTools(server: McpServer, ctx: ToolContext): vo
 				instance_id: z
 					.string()
 					.describe(
-						"The instance this move is meant for (as listed by vomehome_list_instances). " +
-							"Required, and checked against the one this session is targeting."
+						"The instance this move is for (as listed by vomehome_list_instances). Required: it routes this " +
+							"call to that home (this call only; the session's active instance is unchanged), so the move " +
+							"never lands on whichever home the session happens to be on. An unknown id is refused."
 					),
 				path: z.string().describe("File to move, relative to the config root."),
 				to: z.string().describe("Its new path, relative to the config root."),

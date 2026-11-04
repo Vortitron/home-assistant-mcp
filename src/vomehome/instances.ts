@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { Config, InstanceAccess, SafetyConfig } from "../config.js";
 import type { Logger } from "../logger.js";
 import { HaApiError } from "../ha/restClient.js";
@@ -18,9 +19,19 @@ import { createBrokeredHaRestClient } from "../ha/brokeredClient.js";
  * It is created once in index.ts and threaded through the ToolContext — there is
  * no module-level mutable singleton. The only mutable state (active instance +
  * runtime-created instances) lives on this per-process object.
+ *
+ * One call can be routed to another instance without moving the session
+ * (`runOn`, used for a tool's `instance_id`): inside it, everything that asks
+ * for "the active instance" — `activeId`, `rest`, `currentSafety`, the
+ * brokered WebSocket and ESPHome clients — gets the routed one, through an
+ * AsyncLocalStorage scoped to that call, so concurrent calls of the same
+ * session each keep their own target. `sessionActiveId` always answers the
+ * session's own, which is what the hosted server remembers.
  */
 
-const DIRECT_ID = "(direct)";
+/** The one implicit instance of a direct connection. */
+export const DIRECT_INSTANCE_ID = "(direct)";
+const DIRECT_ID = DIRECT_INSTANCE_ID;
 
 export interface ResolvedTarget {
 	id: string;
@@ -34,8 +45,21 @@ export interface InstanceManager {
 	readonly brokered: boolean;
 	/** Stable client that always targets the active instance. Tools use this. */
 	readonly rest: HaRestClient;
-	/** The active instance id (what HA tools currently target). */
+	/**
+	 * The instance HA tools target right now: the one this call was routed to
+	 * with `runOn`, else the session's active instance.
+	 */
 	activeId(): string;
+	/** The session's own active instance, ignoring any per-call routing. */
+	sessionActiveId(): string;
+	/**
+	 * Runs `fn` with this one call routed to `instanceId` (a declared or
+	 * adopted instance — check with `has` first): HA tools, permission checks
+	 * and the stamp all see it as active, while the session's active instance
+	 * and its remembered choice stay as they were. Direct mode has only its
+	 * one Home Assistant and throws for any other id.
+	 */
+	runOn<T>(instanceId: string, fn: () => T): T;
 	/** The full access registry (copied), for tool output / diagnostics. */
 	list(): InstanceAccess[];
 	/** True when an instance id is declared in the registry. */
@@ -98,6 +122,10 @@ export function createInstanceManager(
 
 	let chosen: string | null = null;
 
+	// The instance one call was routed to (runOn), scoped to that call's async context.
+	const routed = new AsyncLocalStorage<string>();
+	const current = (): string => routed.getStore() ?? active;
+
 	const clientCache = new Map<string, HaRestClient>();
 
 	/**
@@ -120,7 +148,7 @@ export function createInstanceManager(
 	}
 
 	function access(instanceId?: string): InstanceAccess {
-		const id = instanceId ?? active;
+		const id = instanceId ?? current();
 		if (!brokered) {
 			return registry.get(DIRECT_ID) as InstanceAccess;
 		}
@@ -161,7 +189,26 @@ export function createInstanceManager(
 	}
 
 	function currentRest(): HaRestClient {
-		return restFor(active);
+		return restFor(current());
+	}
+
+	function runOn<T>(instanceId: string, fn: () => T): T {
+		const id = (instanceId ?? "").trim();
+		if (!brokered) {
+			if (id !== DIRECT_ID) {
+				throw new HaApiError(
+					"A single direct Home Assistant is configured (HA_URL/HA_TOKEN), so a call cannot be routed to " +
+						`another instance ("${id}").`,
+					0,
+					""
+				);
+			}
+			return fn();
+		}
+		if (!id) {
+			throw new HaApiError("instance_id is required.", 0, "");
+		}
+		return routed.run(id, fn);
 	}
 
 	function use(instanceId: string): ResolvedTarget {
@@ -241,12 +288,14 @@ export function createInstanceManager(
 	return {
 		brokered,
 		rest,
-		activeId: () => active,
+		activeId: current,
+		sessionActiveId: () => active,
+		runOn,
 		list: () => [...registry.values()].map((entry) => ({ ...entry })),
 		has: (id) => registry.has(id),
 		access,
 		safetyFor,
-		currentSafety: () => safetyFor(active),
+		currentSafety: () => safetyFor(current()),
 		currentRest,
 		use,
 		registerCreated,

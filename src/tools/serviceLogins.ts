@@ -180,8 +180,9 @@ export function registerServiceLoginTools(server: McpServer, ctx: ToolContext): 
 				instance_id: z
 					.string()
 					.describe(
-						"The instance this login is for (as listed by vomehome_list_instances). Checked " +
-							"against the one this session is targeting; refused if they differ."
+						"The instance this login is for (as listed by vomehome_list_instances). Required: it routes this " +
+							"call to that home (this call only; the session's active instance is unchanged), so the login " +
+							"never lands on whichever home the session happens to be on. An unknown id is refused."
 					),
 				name: z.string().min(1).max(60).describe("What the login is for, e.g. 'Zigbee2MQTT'."),
 				username: z.string().regex(USERNAME).describe("Login name: lowercase, e.g. 'zigbee2mqtt'."),

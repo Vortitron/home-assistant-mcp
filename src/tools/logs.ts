@@ -67,6 +67,88 @@ function inTimeOrder(entries: HaLogbookEntry[]): HaLogbookEntry[] {
 		.map(({ entry }) => entry);
 }
 
+/**
+ * Day-sized logbook reads.
+ *
+ * Home Assistant builds a logbook answer whole, in memory: a fortnight of a
+ * busy home's logbook in one request ran a 4 GB VM out of memory and moved
+ * the home to its standby (GamlaBio, 3 Nov 2026), and the portal now refuses
+ * a read longer than a day. So a longer window is read a day at a time,
+ * newest first, stopping once enough matching entries are in.
+ *
+ * Home Assistant's window is open at both ends (start < time < end, in its
+ * recorder queries), so two reads that merely meet would both miss an entry
+ * stamped exactly on the shared edge. Neighbouring reads therefore overlap by
+ * a millisecond at each inner edge, and every entry is kept only by the read
+ * whose own slice ([lo, hi), by the entry's time) it falls in: none dropped,
+ * none twice. Each request still spans under 24 hours, overlap included, so
+ * an exact 72-hour window takes four reads, not three.
+ */
+const DAY_MS = 24 * 60 * 60 * 1000;
+const CHUNK_OVERLAP_MS = 1;
+/** The most a read's own slice may span: a day less both overlaps (and a rounding millisecond each). */
+const CHUNK_MAX_SLICE_MS = DAY_MS - 4 * CHUNK_OVERLAP_MS;
+/** The most day-sized reads one call makes: about a month. */
+export const MAX_LOGBOOK_CHUNKS = 31;
+
+export interface LogbookChunk {
+	/** Absent only for the single read of a call with no start_time (Home Assistant's default window). */
+	startTime?: string;
+	endTime?: string;
+	/** Entries before this time (ms) belong to the next older read; absent at the window's start. */
+	lo?: number;
+	/** Entries at or after this time belong to the next newer read; absent at the window's end. */
+	hi?: number;
+}
+
+/**
+ * The window [start, end] as day-sized reads, newest first, or null when one
+ * read covers it (24 hours or less, or a time that does not parse: then Home
+ * Assistant is asked exactly as before). The window is split evenly into as
+ * few reads as fit. `skippedBefore` is set when that is more than
+ * {@link MAX_LOGBOOK_CHUNKS}: only the newest are made, and nothing before it
+ * was read.
+ */
+export function logbookChunks(start: string, end: string): { chunks: LogbookChunk[]; skippedBefore?: string } | null {
+	const from = Date.parse(start);
+	const to = Date.parse(end);
+	if (Number.isNaN(from) || Number.isNaN(to) || to - from <= DAY_MS) return null;
+	const iso = (ms: number) => new Date(ms).toISOString();
+	const span = to - from;
+	const count = Math.ceil(span / CHUNK_MAX_SLICE_MS);
+	const edge = (k: number) => (k >= count ? from : to - Math.round((k * span) / count));
+	const chunks: LogbookChunk[] = [];
+	for (let k = 0; k < Math.min(count, MAX_LOGBOOK_CHUNKS); k++) {
+		const hi = edge(k);
+		const lo = edge(k + 1);
+		const newest = k === 0;
+		const oldest = k === count - 1;
+		chunks.push({
+			startTime: oldest ? start : iso(lo - CHUNK_OVERLAP_MS),
+			endTime: newest ? end : iso(hi + CHUNK_OVERLAP_MS),
+			...(oldest ? {} : { lo }),
+			...(newest ? {} : { hi })
+		});
+	}
+	const last = chunks[chunks.length - 1] as LogbookChunk;
+	return count > MAX_LOGBOOK_CHUNKS ? { chunks, skippedBefore: iso(last.lo as number) } : { chunks };
+}
+
+/** The entries that are this read's own (see {@link logbookChunks}). */
+function ownEntries(entries: HaLogbookEntry[], chunk: LogbookChunk, untimed: Set<string>): HaLogbookEntry[] {
+	return entries.filter((entry) => {
+		const time = logbookTime(entry.when);
+		if (Number.isNaN(time)) {
+			// No time to place it by: kept once, by whichever read sees it first.
+			const key = JSON.stringify(entry);
+			if (untimed.has(key)) return false;
+			untimed.add(key);
+			return true;
+		}
+		return (chunk.lo === undefined || time >= chunk.lo) && (chunk.hi === undefined || time < chunk.hi);
+	});
+}
+
 /** Log levels ordered least → most severe, for "at least this level" filtering. */
 const LEVELS = ["debug", "info", "warning", "error", "critical"] as const;
 type Level = (typeof LEVELS)[number];
@@ -459,6 +541,7 @@ export function registerLogTools(server: McpServer, ctx: ToolContext): void {
 			description:
 				"Return human-readable logbook entries (what happened and when), optionally filtered to a single entity and time window. " +
 				"Times are ISO 8601; with a start_time and no end_time it runs up to now (Home Assistant on its own would stop 24 hours after the start). " +
+					`A window longer than a day is read a day at a time, newest first, stopping once 'limit' entries match (at most ${MAX_LOGBOOK_CHUNKS} days per call). ` +
 				`A busy home logs tens of thousands of entries a night, so filter with contains / name / domain, and at most 'limit' (default ${DEFAULT_LOGBOOK_LIMIT}) entries come back: ` +
 				"the newest ones, in time order. When more matched, truncated is true and older_entries_end_time says where to continue (pass it as end_time).",
 			inputSchema: {
@@ -488,26 +571,63 @@ export function registerLogTools(server: McpServer, ctx: ToolContext): void {
 		},
 		async ({ entity_id, start_time, end_time, contains, name, domain, limit }) =>
 			runTool(ctx.logger, "ha_get_logbook", async () => {
-				const fetched = await ctx.rest.getLogbook({
-					entityId: entity_id,
-					startTime: start_time,
-					// Same 24-hour default as history; see ha_get_history.
-					endTime: end_time ?? (start_time ? new Date().toISOString() : undefined)
-				});
-				const all = Array.isArray(fetched) ? fetched : [];
+				// Same 24-hour default as history; see ha_get_history.
+				const end = end_time ?? (start_time ? new Date().toISOString() : undefined);
+				const plan = start_time && end ? logbookChunks(start_time, end) : null;
+				const chunks: LogbookChunk[] = plan?.chunks ?? [{ startTime: start_time, endTime: end }];
 				const filters = { contains, name, domain };
-				const matched = inTimeOrder(all.filter((entry) => matchesLogbookFilters(entry, filters)));
 				const max = Math.max(1, limit ?? DEFAULT_LOGBOOK_LIMIT);
+				// Newest read first; each read's matches in time order.
+				const reads: HaLogbookEntry[][] = [];
+				const untimed = new Set<string>();
+				let fetchedCount = 0;
+				let matchedCount = 0;
+				let stoppedEarly = false;
+				for (const [index, chunk] of chunks.entries()) {
+					const fetched = await ctx.rest.getLogbook({
+						entityId: entity_id,
+						startTime: chunk.startTime,
+						endTime: chunk.endTime
+					});
+					const own = ownEntries(Array.isArray(fetched) ? fetched : [], chunk, untimed);
+					fetchedCount += own.length;
+					const matches = inTimeOrder(own.filter((entry) => matchesLogbookFilters(entry, filters)));
+					reads.push(matches);
+					matchedCount += matches.length;
+					if (matchedCount >= max && index < chunks.length - 1) {
+						stoppedEarly = true;
+						break;
+					}
+				}
+				const matched = reads.reverse().flat();
 				// Keep the newest: "what just happened" is the usual question, and
 				// older_entries_end_time lets the caller walk back from there.
 				const entries = matched.length > max ? matched.slice(matched.length - max) : matched;
-				const truncated = matched.length > entries.length;
+				const leftOut = matched.length - entries.length;
+				const notRead = stoppedEarly || plan?.skippedBefore !== undefined;
+				const truncated = leftOut > 0 || notRead;
 				const oldestTime = logbookTime(entries[0]?.when);
 				const oldestKept = Number.isNaN(oldestTime) ? undefined : new Date(oldestTime).toISOString();
+				const continueAt =
+					leftOut > 0 || stoppedEarly ? (oldestKept ?? null) : (plan?.skippedBefore ?? oldestKept ?? null);
+				const notes: string[] = [];
+				if (leftOut > 0) notes.push(`${leftOut} older matching entries were left out.`);
+				if (stoppedEarly) {
+					notes.push(
+						`Stopped after ${reads.length} of ${chunks.length} day-sized reads with ${max} matching entries; ` +
+							"earlier days were not read and may hold more."
+					);
+				} else if (plan?.skippedBefore) {
+					notes.push(
+						`The window is longer than ${MAX_LOGBOOK_CHUNKS} days, so only the newest ${MAX_LOGBOOK_CHUNKS} ` +
+							`day-sized reads were made; nothing before ${plan.skippedBefore} was read.`
+					);
+				}
 				return jsonResult({
 					count: entries.length,
 					count_before_limit: matched.length,
-					fetched: all.length,
+					fetched: fetchedCount,
+					...(chunks.length > 1 ? { requests: reads.length } : {}),
 					truncated,
 					filters: {
 						entity_id: entity_id ?? null,
@@ -517,10 +637,10 @@ export function registerLogTools(server: McpServer, ctx: ToolContext): void {
 					},
 					...(truncated
 						? {
-								older_entries_end_time: oldestKept ?? null,
+								older_entries_end_time: continueAt,
 								note:
-									`${matched.length - entries.length} older matching entries were left out. Narrow the window or the ` +
-									"filters, or call again with end_time set to older_entries_end_time to read further back."
+									`${notes.join(" ")} Narrow the window or the filters, or call again with end_time set to ` +
+									"older_entries_end_time to read further back."
 							}
 						: {}),
 					entries

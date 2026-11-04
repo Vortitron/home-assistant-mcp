@@ -9,6 +9,7 @@ import { REDACTED, SLOW_SUPERVISOR_TIMEOUT_SECONDS, defaultSupervisorTimeout, su
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { logbookChunks } from "../src/tools/logs.js";
 import { MAX_UPLOAD_BYTES, encodeForUpload, imageTypeFor, resolveLocalPath } from "../src/tools/configFiles.js";
 import { createUnavailableEsphomeClient, type EsphomeClient, type EsphomeCommandRequest } from "../src/esphome/client.js";
 import { createNodeRedClient } from "../src/nodered/client.js";
@@ -2864,7 +2865,7 @@ describe("ha_get_logbook filters and limit", () => {
 		const getLogbook = vi.fn(async () => night);
 		const server = buildHarness({ rest: { getLogbook } as any });
 
-		const body = jsonOf(await server.call("ha_get_logbook", { start_time: "2026-10-31T22:00:00Z", limit: 10 }));
+		const body = jsonOf(await server.call("ha_get_logbook", { start_time: "2026-10-31T22:00:00Z", end_time: "2026-11-01T00:00:00Z", limit: 10 }));
 		expect(body.count).toBe(10);
 		expect(body.count_before_limit).toBe(2002);
 		expect(body.fetched).toBe(2002);
@@ -2900,6 +2901,122 @@ describe("ha_get_logbook filters and limit", () => {
 		expect(text.count).toBe(1);
 		const byEntity = jsonOf(await server.call("ha_get_logbook", { contains: "night_heat" }));
 		expect(byEntity.count).toBe(1);
+	});
+});
+
+describe("ha_get_logbook reads a day at a time", () => {
+	const HOUR = 3600_000;
+	const at = (ms: number) => new Date(ms).toISOString();
+	const START = Date.parse("2026-11-01T00:00:00.000Z");
+	// Nov 1 to the last minute of Nov 3: three days. (Exactly 72 h takes four
+	// reads: Home Assistant's window is open at both ends, so reads overlap.)
+	const END = START + 72 * HOUR - 60_000;
+	// One entry every hour on the hour, plus one exactly on each 24 h mark, with
+	// Home Assistant answering inclusively at both edges (the worst case for
+	// duplicates) from this log.
+	const log = Array.from({ length: 72 }, (_, i) => ({
+		when: at(START + i * HOUR),
+		name: i % 2 === 0 ? "Vome" : "Hall",
+		message: `entry ${i}`,
+		entity_id: i % 2 === 0 ? "sensor.vome" : "binary_sensor.hall"
+	}));
+	function home(entries = log) {
+		const asked: Array<{ startTime?: string; endTime?: string }> = [];
+		const getLogbook = vi.fn(async (params: { startTime?: string; endTime?: string }) => {
+			asked.push(params);
+			const from = Date.parse(params.startTime as string);
+			const to = Date.parse(params.endTime as string);
+			return entries.filter((e) => Date.parse(e.when) >= from && Date.parse(e.when) <= to);
+		});
+		return { getLogbook, asked, server: buildHarness({ rest: { getLogbook } as any }) };
+	}
+
+	it("makes 3 requests for 3 days, newest first, none longer than 24 hours", async () => {
+		const { asked, server } = home();
+		const body = jsonOf(await server.call("ha_get_logbook", { start_time: at(START), end_time: at(END) }));
+		expect(asked).toHaveLength(3);
+		expect(asked[0]!.endTime).toBe(at(END));
+		expect(asked[2]!.startTime).toBe(at(START));
+		for (const [i, a] of asked.entries()) {
+			expect(Date.parse(a.endTime!) - Date.parse(a.startTime!)).toBeLessThanOrEqual(24 * HOUR);
+			if (i > 0) expect(Date.parse(a.endTime!)).toBeLessThan(Date.parse(asked[i - 1]!.endTime!));
+		}
+		// Every entry once, in time order: the overlapping edges neither drop nor repeat.
+		expect(body.count).toBe(72);
+		expect(body.entries.map((e: any) => e.message)).toEqual(log.map((e) => e.message));
+		expect(body.requests).toBe(3);
+		expect(body.truncated).toBe(false);
+
+		// Exactly 72 hours: four reads, each under a day, because they must overlap.
+		const exact = logbookChunks(at(START), at(START + 72 * HOUR))!.chunks;
+		expect(exact).toHaveLength(4);
+		for (const c of exact) expect(Date.parse(c.endTime!) - Date.parse(c.startTime!)).toBeLessThan(24 * HOUR);
+	});
+
+	it("does not lose or repeat an entry sitting on a chunk edge, whichever way HA treats edges", async () => {
+		const edges: Array<{ when: string; message: string }> = [];
+		const probe = home();
+		await probe.server.call("ha_get_logbook", { start_time: at(START), end_time: at(END) });
+		// Entries exactly at, just before and just after every edge any request had.
+		for (const a of probe.asked) {
+			for (const t of [Date.parse(a.startTime!), Date.parse(a.endTime!)]) {
+				for (const d of [-1, 0, 1]) edges.push({ when: at(t + d), message: `edge ${t + d}` });
+			}
+		}
+		const unique = [...new Map(edges.map((e) => [e.when, e])).values()].sort((a, b) => a.when.localeCompare(b.when));
+		const exclusive = vi.fn(async (params: { startTime?: string; endTime?: string }) => {
+			const from = Date.parse(params.startTime as string);
+			const to = Date.parse(params.endTime as string);
+			return unique.filter((e) => Date.parse(e.when) > from && Date.parse(e.when) < to);
+		});
+		const body = jsonOf(await buildHarness({ rest: { getLogbook: exclusive } as any }).call("ha_get_logbook", { start_time: at(START), end_time: at(END) }));
+		const inside = unique.filter((e) => Date.parse(e.when) > START && Date.parse(e.when) < END);
+		expect(body.entries.map((e: any) => e.when)).toEqual(inside.map((e) => e.when));
+	});
+
+	it("stops as soon as the limit is reached, keeping the newest", async () => {
+		const { asked, server } = home();
+		const body = jsonOf(await server.call("ha_get_logbook", { start_time: at(START), end_time: at(END), limit: 5 }));
+		expect(asked).toHaveLength(1);
+		expect(body.count).toBe(5);
+		expect(body.entries.map((e: any) => e.message)).toEqual(["entry 67", "entry 68", "entry 69", "entry 70", "entry 71"]);
+		expect(body.truncated).toBe(true);
+		expect(body.older_entries_end_time).toBe(at(START + 67 * HOUR));
+		expect(body.note).toMatch(/Stopped after 1 of 3/);
+	});
+
+	it("applies the filters in every chunk and keeps reading until enough match", async () => {
+		const { asked, server } = home();
+		const body = jsonOf(await server.call("ha_get_logbook", { start_time: at(START), end_time: at(END), name: "vome", limit: 20 }));
+		// 12-13 Vome entries a day: a second day is needed for 20.
+		expect(asked).toHaveLength(2);
+		expect(body.count).toBe(20);
+		expect(body.entries.every((e: any) => e.name === "Vome")).toBe(true);
+		expect(body.entries.at(-1).message).toBe("entry 70");
+		expect(body.entries.map((e: any) => e.when)).toEqual([...body.entries.map((e: any) => e.when)].sort());
+
+		const few = jsonOf(await server.call("ha_get_logbook", { start_time: at(START), end_time: at(END), contains: "entry 3" }));
+		// entry 3, entry 30..39: in two different days.
+		expect(few.entries.map((e: any) => e.message)).toEqual(["entry 3", ...Array.from({ length: 10 }, (_, i) => `entry ${30 + i}`)]);
+		expect(few.truncated).toBe(false);
+	});
+
+	it("reads at most 31 days and says where it stopped", async () => {
+		const { asked, server } = home([]);
+		const body = jsonOf(await server.call("ha_get_logbook", { start_time: at(START - 60 * 24 * HOUR), end_time: at(END) }));
+		expect(asked).toHaveLength(31);
+		expect(body.truncated).toBe(true);
+		expect(body.note).toMatch(/longer than 31 days/);
+		expect(Date.parse(body.older_entries_end_time)).toBe(Date.parse(asked[30]!.startTime!) + 1);
+	});
+
+	it("leaves a window of a day or less, and one with no start, as one request", async () => {
+		const { asked, server } = home();
+		await server.call("ha_get_logbook", { start_time: at(START), end_time: at(START + 24 * HOUR) });
+		await server.call("ha_get_logbook", {});
+		expect(asked).toHaveLength(2);
+		expect(asked[0]).toMatchObject({ startTime: at(START), endTime: at(START + 24 * HOUR) });
+		expect(asked[1]!.startTime).toBeUndefined();
 	});
 });
 

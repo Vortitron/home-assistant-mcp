@@ -170,8 +170,6 @@ export function registerPeopleTools(server: McpServer, ctx: ToolContext): void {
 					return errorResult("A new person needs a name.");
 				}
 
-				const trackersTouched =
-					device_trackers !== undefined || add_device_trackers !== undefined || remove_device_trackers !== undefined;
 				const trackers = nextTrackers(
 					existing?.device_trackers ?? [],
 					device_trackers,

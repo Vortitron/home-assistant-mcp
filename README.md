@@ -132,7 +132,7 @@ policy (see [Safety](#safety)).
 | Tool | Description |
 | --- | --- |
 | `esphome_dashboard_info` | How ESPHome is reached, and whether flashing/logs are available right now. |
-| `esphome_list_devices` | List dashboard configurations/devices; flags configs needing renames. |
+| `esphome_list_devices` | List dashboard configurations/devices as compact rows (name, friendly name, configuration, address/ip, versions, state); `filter` (substring of name, friendly name, filename or address/ip), `limit` (default 50, max 500), `full: true` for the dashboard's own rows. Says `total`, `matched` and `truncated`; flags configs needing renames. |
 | `esphome_list_migrations` | ESPHome spellings a config still uses that have been renamed. |
 | `esphome_get_config` | Read a configuration's YAML. |
 | `esphome_save_config` | Write a configuration's YAML, whole: for a new file or a large rewrite (write-gated). Inline as `yaml`, or `yaml_path`, a file on the MCP's own machine (npx / stdio; UTF-8, at most 2 MiB) so a long config is not pasted into the call. The hosted MCP cannot read your disk and answers with the REST upload into `esphome/` instead. |

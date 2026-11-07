@@ -303,6 +303,95 @@ describe("esphome tools with no route to a home", () => {
 	});
 });
 
+describe("esphome_list_devices filter, limit and compact rows", () => {
+	/* 7 Nov 2026: "The device list has no filter, so finding one filename
+	   returned about 1,000 lines." Device Builder's own row is ~80 lines. */
+	const row = (name: string, extra: Record<string, unknown> = {}) => ({
+		name,
+		friendly_name: `${name.replace(/-/g, " ")} friendly`,
+		configuration: `${name}.yaml`,
+		comment: null,
+		area: "",
+		board_id: "esp32-c3-devkitm-1",
+		target_platform: "esp32",
+		address: `${name}.local`,
+		ip: "",
+		current_version: "2026.10.2",
+		deployed_version: "2026.10.1",
+		loaded_integrations: ["adc", "binary_sensor", "wifi"],
+		expected_config_hash: "d85d36de",
+		has_pending_changes: false,
+		update_available: true,
+		migration_available: false,
+		state: "online",
+		ip_addresses: [],
+		mac_address: "",
+		...extra
+	});
+	const listing = {
+		configured: [
+			row("kitchen-detectorer", { ip: "192.168.1.40" }),
+			row("loft-c3", { migration_available: true }),
+			row("frontpath-rgb", { area: "Garden" }),
+			...Array.from({ length: 70 }, (_, i) => row(`plug-${i}`))
+		],
+		importable: []
+	};
+	const harness = () => buildHarness({ esphome: { listDevices: async () => listing } as Partial<EsphomeClient> });
+
+	it("filters by configuration filename, case-insensitively, and returns compact rows", async () => {
+		const body = jsonOf(await harness().call("esphome_list_devices", { filter: "KITCHEN-DETECTORER.yaml" }));
+		expect(body).toMatchObject({ total: 73, matched: 1, truncated: false });
+		expect(body.devices).toEqual([
+			{
+				name: "kitchen-detectorer",
+				friendly_name: "kitchen detectorer friendly",
+				configuration: "kitchen-detectorer.yaml",
+				address: "kitchen-detectorer.local",
+				ip: "192.168.1.40",
+				target_platform: "esp32",
+				deployed_version: "2026.10.1",
+				current_version: "2026.10.2",
+				state: "online",
+				update_available: true,
+				has_pending_changes: false
+			}
+		]);
+		expect(body.note).toBeUndefined();
+	});
+
+	it("filters by name, friendly name and address", async () => {
+		const server = harness();
+		expect(jsonOf(await server.call("esphome_list_devices", { filter: "loft" })).devices.map((d: any) => d.configuration)).toEqual(["loft-c3.yaml"]);
+		expect(jsonOf(await server.call("esphome_list_devices", { filter: "frontpath rgb friendly" })).matched).toBe(1);
+		expect(jsonOf(await server.call("esphome_list_devices", { filter: "192.168.1.40" })).devices[0].name).toBe("kitchen-detectorer");
+		// The migration flag still surfaces for the devices shown.
+		const loft = jsonOf(await server.call("esphome_list_devices", { filter: "loft" }));
+		expect(loft.configs_with_pending_migrations).toEqual(["loft-c3.yaml"]);
+		expect(loft.devices[0].migration_available).toBe(true);
+	});
+
+	it("stops at the limit (default 50) and says it did", async () => {
+		const server = harness();
+		const first = jsonOf(await server.call("esphome_list_devices"));
+		expect(first).toMatchObject({ total: 73, matched: 73, truncated: true });
+		expect(first.devices).toHaveLength(50);
+		expect(first.note).toMatch(/Showing 50 of 73.*filter/);
+		const plugs = jsonOf(await server.call("esphome_list_devices", { filter: "plug-", limit: 5 }));
+		expect(plugs).toMatchObject({ matched: 70, truncated: true });
+		expect(plugs.devices).toHaveLength(5);
+		const all = jsonOf(await server.call("esphome_list_devices", { limit: 500 }));
+		expect(all).toMatchObject({ matched: 73, truncated: false });
+		expect(all.devices).toHaveLength(73);
+	});
+
+	it("full=true returns the dashboard's own rows", async () => {
+		const body = jsonOf(await harness().call("esphome_list_devices", { filter: "frontpath", full: true }));
+		expect(body.devices).toEqual([listing.configured[2]]);
+		expect(body.devices[0].loaded_integrations).toEqual(["adc", "binary_sensor", "wifi"]);
+	});
+});
+
 describe("esphome_upload", () => {
 	const fakeEsphome = (exitCodes: Record<string, number>) => {
 		const ran: string[] = [];

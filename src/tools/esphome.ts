@@ -50,6 +50,75 @@ function pendingMigrationConfigs(devices: unknown): string[] {
 	return out;
 }
 
+/** Rows esphome_list_devices returns unless asked for more, and its ceiling. */
+const DEVICE_LIST_DEFAULT = 50;
+const DEVICE_LIST_MAX = 500;
+
+/** The fields a filter looks in: what an agent knows a device by. */
+const DEVICE_SEARCH_FIELDS = ["name", "friendly_name", "configuration", "address", "ip", "ip_addresses"] as const;
+
+/**
+ * The fields of a compact row, in order. Device Builder's own row runs to
+ * some fifty fields (integration lists, hashes, MACs, partition flags), about
+ * eighty lines of JSON per device, so a home with a dozen devices answered
+ * "which file is the kitchen detector" with a thousand lines.
+ */
+const DEVICE_COMPACT_FIELDS = [
+	"name",
+	"friendly_name",
+	"configuration",
+	"address",
+	"ip",
+	"area",
+	"target_platform",
+	"deployed_version",
+	"current_version",
+	"state",
+	"update_available",
+	"has_pending_changes",
+	"migration_available"
+] as const;
+
+function deviceRows(devices: unknown): { configured: unknown[]; importable: unknown[] } {
+	if (Array.isArray(devices)) return { configured: devices, importable: [] };
+	if (!devices || typeof devices !== "object") return { configured: [], importable: [] };
+	const shaped = devices as { configured?: unknown; importable?: unknown };
+	return {
+		configured: Array.isArray(shaped.configured) ? shaped.configured : [],
+		importable: Array.isArray(shaped.importable) ? shaped.importable : []
+	};
+}
+
+/** Case-insensitive substring match over the fields a device is known by. */
+function deviceMatches(row: unknown, needle: string): boolean {
+	if (!needle) return true;
+	if (!row || typeof row !== "object") return false;
+	const entry = row as Record<string, unknown>;
+	return DEVICE_SEARCH_FIELDS.some((field) => {
+		const value = entry[field];
+		const values = Array.isArray(value) ? value : [value];
+		return values.some((v) => (typeof v === "string" || typeof v === "number") && String(v).toLowerCase().includes(needle));
+	});
+}
+
+/** A row cut to the fields that identify a device and say how it is doing; empty values left out. */
+function compactDevice(row: unknown): unknown {
+	if (!row || typeof row !== "object") return row;
+	const entry = row as Record<string, unknown>;
+	const out: Record<string, unknown> = {};
+	for (const field of DEVICE_COMPACT_FIELDS) {
+		const value = entry[field];
+		if (value === undefined || value === null || value === "") continue;
+		// Only worth a line when it is set.
+		if (field === "migration_available" && value !== true) continue;
+		out[field] = value;
+	}
+	if (out.ip === undefined && Array.isArray(entry.ip_addresses) && entry.ip_addresses.length > 0) {
+		out.ip_addresses = entry.ip_addresses;
+	}
+	return out;
+}
+
 /**
  * What esphome_save_config says on the hosted server when given yaml_path.
  *
@@ -179,29 +248,68 @@ export function registerEsphomeTools(server: McpServer, ctx: ToolContext): void 
 		{
 			title: "List ESPHome devices",
 			description:
-				"List devices/configurations known to the ESPHome dashboard, including their configuration filenames (needed by the other ESPHome tools).",
-			inputSchema: {},
+				"List devices/configurations known to the ESPHome dashboard, including their configuration filenames " +
+				"(needed by the other ESPHome tools). Each device comes back as a compact row (name, friendly_name, " +
+				"configuration, address/ip, area, platform, deployed/current version, state, update and pending-change " +
+				"flags); full=true returns the dashboard's own rows, which run to about 80 lines a device. 'filter' " +
+				"narrows to devices whose name, friendly name, configuration filename or address/ip contains it " +
+				"(case-insensitive). The reply gives total, matched and truncated, and flags configs needing renames.",
+			inputSchema: {
+				filter: z
+					.string()
+					.optional()
+					.describe("Only devices whose name, friendly name, configuration filename or address/ip contains this (case-insensitive), e.g. 'kitchen'."),
+				limit: z
+					.number()
+					.int()
+					.positive()
+					.max(DEVICE_LIST_MAX)
+					.optional()
+					.describe(`Devices to return at most (default ${DEVICE_LIST_DEFAULT}, max ${DEVICE_LIST_MAX}).`),
+				full: z
+					.boolean()
+					.optional()
+					.describe("Return the dashboard's full row for each device instead of the compact one.")
+			},
 			annotations: { readOnlyHint: true, openWorldHint: true }
 		},
-		async () =>
+		async ({ filter, limit, full }) =>
 			runTool(ctx.logger, "esphome_list_devices", async () => {
-				const devices = await ctx.esphome.listDevices();
+				const rows = deviceRows(await ctx.esphome.listDevices());
+				const needle = (filter ?? "").trim().toLowerCase();
+				const cap = limit ?? DEVICE_LIST_DEFAULT;
+				const matched = rows.configured.filter((row) => deviceMatches(row, needle));
+				const shown = matched.slice(0, cap);
+				const importable = rows.importable.filter((row) => deviceMatches(row, needle));
 				// ESPHome shows a "Config migration available" banner in its own
 				// UI; nothing surfaces it to an agent, so deprecated spellings
 				// get carried forward until a release drops them. The flag is
 				// already in each row — this lifts it where it will be read.
-				const pending = pendingMigrationConfigs(devices);
-				return jsonResult(
-					pending.length > 0
+				const pending = pendingMigrationConfigs(matched);
+				const truncated = matched.length > shown.length;
+				return jsonResult({
+					total: rows.configured.length,
+					matched: matched.length,
+					truncated,
+					...(needle ? { filter: filter?.trim() } : {}),
+					devices: full ? shown : shown.map(compactDevice),
+					...(importable.length > 0 ? { importable } : {}),
+					...(truncated
 						? {
-								devices,
+								note:
+									`Showing ${shown.length} of ${matched.length} matching devices. Narrow with 'filter' ` +
+									`(a name or filename), or raise 'limit' (max ${DEVICE_LIST_MAX}).`
+							}
+						: {}),
+					...(pending.length > 0
+						? {
 								configs_with_pending_migrations: pending,
 								migration_hint:
 									"These configs use ESPHome spellings that have been renamed. " +
 									"Call esphome_list_migrations on one to see the exact renames."
 							}
-						: devices
-				);
+						: {})
+				});
 			})
 	);
 

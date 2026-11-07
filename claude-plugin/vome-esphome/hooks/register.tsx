@@ -707,10 +707,15 @@ function parseJson(raw: string): Record<string, unknown> | null {
   }
 }
 
-/** esphome_list_devices: the dashboard's own model, `{configured: [...]}` or a bare list, tolerated either way. */
+/**
+ * esphome_list_devices: `{devices: [...]}` (0.17.4), the dashboard's own `{configured: [...]}`, or a
+ * bare list, tolerated either way. A filtered or cut-short listing is only part of the home, so it
+ * leaves the pane's list as it was rather than replacing it with the part.
+ */
 function parseDevices(text: string): Device[] | null {
   const body = parseJson(text)
   if (!body) return null
+  if (body.filter !== undefined || body.truncated === true) return null
   const holder = (body.devices && typeof body.devices === 'object' ? body.devices : body) as Record<string, unknown>
   const rows = Array.isArray(holder.configured) ? holder.configured : Array.isArray(holder.list) ? holder.list : Array.isArray(holder) ? holder : []
   return (rows as Record<string, unknown>[])

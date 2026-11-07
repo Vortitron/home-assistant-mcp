@@ -123,6 +123,43 @@ test('a device listing shows which devices have newer firmware waiting', async (
   expect((await ui.find({ text: /Nothing building/ })) !== undefined).toBe(true)
 })
 
+test('the compact listing (MCP 0.17.4) shows the devices too', async ($, on) => {
+  base(on)
+  on('tool.call', { tool: tool('mcp__vome__esphome_list_devices') }, () =>
+    reply({
+      total: 1, matched: 1, truncated: false,
+      devices: [{ name: 'lr', friendly_name: 'Living room', configuration: 'lr.yaml', deployed_version: '2026.8.1', current_version: '2026.9.3' }],
+    }),
+  )
+  await $.tool.call({ tool: tool('mcp__vome__esphome_list_devices') } as never)
+  const ui = await mount($)
+  expect((await ui.find({ text: /2026\.8\.1 → 2026\.9\.3 available/ })) !== undefined).toBe(true)
+})
+
+test('a filtered listing leaves the device list as it was', async ($, on) => {
+  base(on)
+  let call = 0
+  on('tool.call', { tool: tool('mcp__vome__esphome_list_devices') }, () => {
+    call += 1
+    return call === 1
+      ? reply({
+          total: 2, matched: 2, truncated: false,
+          devices: [
+            { name: 'lr', friendly_name: 'Living room', configuration: 'lr.yaml', deployed_version: '2026.8.1', current_version: '2026.9.3' },
+            { name: 'hall', friendly_name: 'Hall', configuration: 'hall.yaml', deployed_version: '2026.9.3', current_version: '2026.9.3' },
+          ],
+        })
+      : reply({
+          total: 2, matched: 1, truncated: false, filter: 'hall',
+          devices: [{ name: 'hall', friendly_name: 'Hall', configuration: 'hall.yaml', deployed_version: '2026.9.3', current_version: '2026.9.3' }],
+        })
+  })
+  await $.tool.call({ tool: tool('mcp__vome__esphome_list_devices') } as never)
+  await $.tool.call({ tool: tool('mcp__vome__esphome_list_devices'), filter: 'hall' } as never)
+  const ui = await mount($)
+  expect((await ui.find({ text: /Living room/ })) !== undefined).toBe(true)
+})
+
 test('when auto mode refuses the progress read, the pane gives the exact line to allow', async ($, on) => {
   const clock = mock.clock(on)
   base(on)

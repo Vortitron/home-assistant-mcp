@@ -5,6 +5,7 @@ import { evaluateConfigWrite } from "../safety.js";
 import { supervisorApi, unwrap } from "./addons.js";
 import { readIfExists, writeConfigFile } from "./configFiles.js";
 import { errorResult, jsonResult, runTool, type ToolContext } from "./helpers.js";
+import { refuseWrongHome } from "./instanceStamp.js";
 
 /**
  * A login for a *program* — an MQTT client, a Zigbee bridge, an energy
@@ -179,10 +180,12 @@ export function registerServiceLoginTools(server: McpServer, ctx: ToolContext): 
 			inputSchema: {
 				instance_id: z
 					.string()
+					.optional()
 					.describe(
-						"The instance this login is for (as listed by vomehome_list_instances). Required: it routes this " +
-							"call to that home (this call only; the session's active instance is unchanged), so the login " +
-							"never lands on whichever home the session happens to be on. An unknown id is refused."
+						"The instance this login is for (as listed by vomehome_list_instances). Required when this key " +
+							"reaches more than one home; with only one in reach it defaults to that one, and the reply's stamp " +
+							"says so. It routes this call to that home (this call only; the session's active instance is " +
+							"unchanged), so the login never lands on whichever home the session happens to be on. An unknown id is refused."
 					),
 				name: z.string().min(1).max(60).describe("What the login is for, e.g. 'Zigbee2MQTT'."),
 				username: z.string().regex(USERNAME).describe("Login name: lowercase, e.g. 'zigbee2mqtt'."),
@@ -223,15 +226,8 @@ export function registerServiceLoginTools(server: McpServer, ctx: ToolContext): 
 			return result;
 
 			async function provision() {
-				const meant = (instance_id ?? "").trim();
-				const targeting = ctx.instances.activeId();
-				if (ctx.config.brokered && meant !== targeting) {
-					return errorResult(
-						`Refused: this session is targeting "${targeting}", but the request names ` +
-							`"${meant}". No login was created. Select it with vomehome_use_instance first ` +
-							`if "${meant}" is the home you mean.`
-					);
-				}
+				const wrongHome = refuseWrongHome(ctx, instance_id, "request", "No login was created.");
+				if (wrongHome) return wrongHome;
 				const decision = evaluateConfigWrite(ctx.instances.currentSafety());
 				if (!decision.allowed) {
 					return errorResult(`Refused: ${decision.reason}`);

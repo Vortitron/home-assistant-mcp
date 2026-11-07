@@ -592,8 +592,17 @@ home that answered, adding `(this call only; session still on <active>)` when
 that is not the session's. Only an instance the session knows (declared, listed
 for the token, created or switched to) is accepted; any other id is refused
 with the list of valid ones, so a typo never answers from the active home.
-Writes to files and logins require `instance_id`, so a write always lands on
-the home named. Use it to read a CHAP standby while failover is active, or to
+Writes to files and logins (`ha_write_config_file`, `ha_upload_file`,
+`ha_edit_config_file`, `ha_delete_config_file`, `ha_move_config_file`,
+`ha_provision_service_login`) need `instance_id` **when this key reaches more
+than one home**, so a write always lands on the home named: left out, they are
+refused with the homes to choose from ("This key reaches 3 homes (a, b, c):
+name the one this write is for with instance_id"). When only one home is in
+reach they default to it, and the stamp adds `(instance_id omitted: the only
+home this session reaches)`. "In reach" is the instances the portal lists for
+the token on the hosted server, and `VOMEHOME_INSTANCE_ID` /
+`VOMEHOME_INSTANCES` on stdio, plus any the session creates or switches to; a
+direct connection has one. Use it to read a CHAP standby while failover is active, or to
 compare two homes, without switching. A direct connection (`HA_URL`) has one
 Home Assistant and refuses an optional `instance_id` naming anything else.
 

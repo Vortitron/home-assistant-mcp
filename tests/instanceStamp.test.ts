@@ -394,3 +394,116 @@ describe("naming the home on any call routes that call", () => {
 		expect(registered.get("vomehome_list_instances")!.config.inputSchema).not.toHaveProperty("instance_id");
 	});
 });
+
+describe("a write names its home only when there is more than one to choose from", () => {
+	/* 7 Nov 2026: "Write tools require the instance id while read tools
+	   don't." The requirement is there for a session that reaches several
+	   homes, where the active one has drifted before; with one home in reach
+	   there is nothing to confuse, so the write goes there and says so. */
+	const logger = { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} } as unknown as Logger;
+
+	function harness(env: Record<string, string>) {
+		const config = loadConfig(env);
+		const direct = { getConfig: async () => ({ location_name: "Direct" }) } as unknown as HaRestClient;
+		const instances = createInstanceManager(config, logger, config.brokered ? undefined : direct);
+		const ctx = { config, logger, instances, rest: instances.rest } as unknown as ToolContext;
+		const registered = new Map<string, (...a: any[]) => Promise<CallToolResult>>();
+		const fake = {
+			registerTool: (name: string, _cfg: unknown, handler: any) => registered.set(name, handler)
+		} as unknown as McpServer;
+		const server = withInstanceStamp(fake, ctx);
+		const seen: Array<{ args: unknown; active: string }> = [];
+		const handler = vi.fn(async (args: unknown) => {
+			seen.push({ args, active: instances.activeId() });
+			const home = (await ctx.rest.getConfig()) as { location_name?: string };
+			return { content: [{ type: "text" as const, text: home.location_name ?? "" }] };
+		});
+		const urls: string[] = [];
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (url: string) => {
+				urls.push(String(url));
+				const id = /\/instances\/([^/]+)\/ha/.exec(String(url))?.[1];
+				return new Response(JSON.stringify({ location_name: id === "rly-2" ? "Standby" : "Main" }), { status: 200 });
+			})
+		);
+		server.registerTool("ha_write_config_file", { inputSchema: { instance_id: {}, path: {} } } as any, handler as any);
+		server.registerTool("ha_get_state", { inputSchema: { entity_id: {} } } as any, handler as any);
+		const call = (name: string, args: Record<string, unknown>) => registered.get(name)!(args, {});
+		return { handler, seen, urls, instances, call };
+	}
+
+	afterEach(() => vi.unstubAllGlobals());
+
+	const BROKERED = { HA_TOKEN: "", VOMEHOME_TOKEN: "vh_test", VOMEHOME_API_URL: "https://portal.test" };
+	const stampOf = (result: CallToolResult) => String((result.content.at(-1) as any).text);
+
+	it("defaults to the only home in reach, and the stamp says so", async () => {
+		const { seen, urls, call } = harness({ ...BROKERED, VOMEHOME_INSTANCE_ID: "rly-1" });
+		const result = await call("ha_write_config_file", { path: "x.yaml" });
+		expect(result.isError).toBeFalsy();
+		// The handler's own check sees the home it is going to.
+		expect(seen[0]).toMatchObject({ args: { instance_id: "rly-1", path: "x.yaml" }, active: "rly-1" });
+		expect(urls.every((url) => url.includes("/instances/rly-1/"))).toBe(true);
+		expect(stampOf(result)).toContain("target=rly-1");
+		expect(stampOf(result)).toContain("(instance_id omitted: the only home this session reaches)");
+		expect(stampOf(result)).not.toContain("this call only");
+	});
+
+	it("counts the token's listed instances on the hosted server, and one listed is enough", async () => {
+		const { seen, call } = harness({ ...BROKERED, VOMEHOME_INSTANCE_ID: "rly-1", VOMEHOME_INSTANCES: '["rly-1"]', MCP_HOSTED: "1" });
+		expect((await call("ha_write_config_file", { path: "x.yaml" })).isError).toBeFalsy();
+		expect(seen[0]?.active).toBe("rly-1");
+	});
+
+	it("refuses with the list when more than one home is in reach, without running the tool", async () => {
+		const { handler, urls, call } = harness({
+			...BROKERED,
+			VOMEHOME_INSTANCE_ID: "rly-1",
+			VOMEHOME_INSTANCES: '["rly-1", "rly-2", "rly-3"]',
+			MCP_HOSTED: "1"
+		});
+		const result = await call("ha_write_config_file", { path: "x.yaml" });
+		expect(result.isError).toBe(true);
+		const text = String((result.content[0] as any).text);
+		expect(text).toContain("this key reaches 3 homes (rly-1, rly-2, rly-3): name the one this write is for with instance_id");
+		expect(text).toContain("Nothing was changed");
+		expect(handler).not.toHaveBeenCalled();
+		// Only the stamp's identity read; no write was sent anywhere.
+		expect(urls.every((url) => url.includes("/ha/config") || url.includes("/api/config"))).toBe(true);
+	});
+
+	it("still routes a named write (0.17.0) when several are in reach", async () => {
+		const { seen, instances, call } = harness({ ...BROKERED, VOMEHOME_INSTANCE_ID: "rly-1", VOMEHOME_INSTANCES: '["rly-1", "rly-2"]' });
+		const result = await call("ha_write_config_file", { instance_id: "rly-2", path: "x.yaml" });
+		expect(result.isError).toBeFalsy();
+		expect(seen[0]).toMatchObject({ args: { instance_id: "rly-2" }, active: "rly-2" });
+		expect(stampOf(result)).toContain("(this call only; session still on rly-1)");
+		expect(stampOf(result)).not.toContain("instance_id omitted");
+		expect(instances.sessionActiveId()).toBe("rly-1");
+	});
+
+	it("asks again once the session reaches a second home", async () => {
+		const { instances, call } = harness({ ...BROKERED, VOMEHOME_INSTANCE_ID: "rly-1" });
+		expect((await call("ha_write_config_file", { path: "x.yaml" })).isError).toBeFalsy();
+		instances.use("rly-2");
+		const refused = await call("ha_write_config_file", { path: "x.yaml" });
+		expect(refused.isError).toBe(true);
+		expect(String((refused.content[0] as any).text)).toContain("this session reaches 2 homes (rly-1, rly-2)");
+	});
+
+	it("leaves reads as they were: no instance_id needed, whatever is in reach", async () => {
+		const { seen, call } = harness({ ...BROKERED, VOMEHOME_INSTANCE_ID: "rly-1", VOMEHOME_INSTANCES: '["rly-1", "rly-2"]' });
+		const result = await call("ha_get_state", { entity_id: "light.x" });
+		expect(result.isError).toBeFalsy();
+		expect(seen[0]).toMatchObject({ args: { entity_id: "light.x" }, active: "rly-1" });
+		expect(stampOf(result)).not.toContain("instance_id omitted");
+	});
+
+	it("lets a direct connection's write leave it out: there is one Home Assistant", async () => {
+		const { handler, call } = harness({ HA_URL: "http://ha.local:8123", HA_TOKEN: "tok", HA_ALLOW_WRITE: "true" });
+		const result = await call("ha_write_config_file", { path: "x.yaml" });
+		expect(result.isError).toBeFalsy();
+		expect(handler).toHaveBeenCalledOnce();
+	});
+});

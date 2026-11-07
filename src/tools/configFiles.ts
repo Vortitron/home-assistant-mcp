@@ -9,6 +9,7 @@ import { HaApiError, HaRestartingError } from "../ha/restClient.js";
 import { explainRestart } from "../ha/restart.js";
 import { errorResult, jsonResult, runTool, textResult, type ToolContext } from "./helpers.js";
 import { COMPONENT_MAX_ENTRIES, DEFAULT_LIST_LIMIT, shapeListing, type ComponentListing } from "./configListing.js";
+import { refuseWrongHome } from "./instanceStamp.js";
 
 /**
  * Files under Home Assistant's config directory — configuration.yaml and its
@@ -224,24 +225,23 @@ async function writeAndVerify(
  * that did the damage. Cheap to satisfy, and it fails loudly instead of
  * destructively. Only where there is more than one house to confuse: a direct
  * connection has exactly one Home Assistant and no ambient instance to drift,
- * so the check would be friction with nothing to catch.
+ * so the check would be friction with nothing to catch, and a
+ * session that reaches a single home may leave instance_id out altogether
+ * (instanceStamp.ts, writeTarget).
  *
  * Since 0.17 the named instance is also where the call goes: the tool wrapper
  * (instanceStamp.ts) routes it there for this call only, so belief and reality
  * cannot disagree. The check stays as defence in depth for a handler run
  * without the wrapper.
  */
-function refuseFileWrite(ctx: ToolContext, instanceId: string | undefined, noun: string): CallToolResult | null {
-	const meant = (instanceId ?? "").trim();
-	const targeting = ctx.instances.activeId();
-	if (ctx.config.brokered && meant !== targeting) {
-		return errorResult(
-			`Refused: this session is targeting "${targeting}", but the ${noun} names ` +
-				`"${meant}". Nothing was written. If "${meant}" is the home you mean, ` +
-				`select it with vomehome_use_instance first and try again — do not ` +
-				`assume the session is still where you left it.`
-		);
-	}
+function refuseFileWrite(
+	ctx: ToolContext,
+	instanceId: string | undefined,
+	noun: string,
+	nothing = "Nothing was written."
+): CallToolResult | null {
+	const wrongHome = refuseWrongHome(ctx, instanceId, noun, nothing);
+	if (wrongHome) return wrongHome;
 	const decision = evaluateConfigWrite(ctx.instances.currentSafety());
 	if (!decision.allowed) {
 		return errorResult(`Refused: ${decision.reason}`);
@@ -531,10 +531,12 @@ export function registerConfigFileTools(server: McpServer, ctx: ToolContext): vo
 			inputSchema: {
 				instance_id: z
 					.string()
+					.optional()
 					.describe(
-						"The instance this write is for (as listed by vomehome_list_instances). Required: it routes this " +
-							"call to that home (this call only; the session's active instance is unchanged), so the write " +
-							"never lands on whichever home the session happens to be on. An unknown id is refused."
+						"The instance this write is for (as listed by vomehome_list_instances). Required when this key " +
+							"reaches more than one home; with only one in reach it defaults to that one, and the reply's stamp " +
+							"says so. It routes this call to that home (this call only; the session's active instance is " +
+							"unchanged), so the write never lands on whichever home the session happens to be on. An unknown id is refused."
 					),
 				path: z.string().describe("File relative to the config root, e.g. 'configuration.yaml'."),
 				content: z.string().describe("The complete new contents of the file (base64 if encoding='base64')."),
@@ -583,10 +585,12 @@ export function registerConfigFileTools(server: McpServer, ctx: ToolContext): vo
 			inputSchema: {
 				instance_id: z
 					.string()
+					.optional()
 					.describe(
-						"The instance this upload is for (as listed by vomehome_list_instances). Required: it routes this " +
-							"call to that home (this call only; the session's active instance is unchanged), so the upload " +
-							"never lands on whichever home the session happens to be on. An unknown id is refused."
+						"The instance this upload is for (as listed by vomehome_list_instances). Required when this key " +
+							"reaches more than one home; with only one in reach it defaults to that one, and the reply's stamp " +
+							"says so. It routes this call to that home (this call only; the session's active instance is " +
+							"unchanged), so the upload never lands on whichever home the session happens to be on. An unknown id is refused."
 					),
 				local_path: z
 					.string()
@@ -645,10 +649,12 @@ export function registerConfigFileTools(server: McpServer, ctx: ToolContext): vo
 			inputSchema: {
 				instance_id: z
 					.string()
+					.optional()
 					.describe(
-						"The instance this edit is for (as listed by vomehome_list_instances). Required: it routes this " +
-							"call to that home (this call only; the session's active instance is unchanged), so the edit " +
-							"never lands on whichever home the session happens to be on. An unknown id is refused."
+						"The instance this edit is for (as listed by vomehome_list_instances). Required when this key " +
+							"reaches more than one home; with only one in reach it defaults to that one, and the reply's stamp " +
+							"says so. It routes this call to that home (this call only; the session's active instance is " +
+							"unchanged), so the edit never lands on whichever home the session happens to be on. An unknown id is refused."
 					),
 				path: z.string().describe("File relative to the config root, e.g. 'automations.yaml'."),
 				edits: z
@@ -669,19 +675,8 @@ export function registerConfigFileTools(server: McpServer, ctx: ToolContext): vo
 		},
 		async ({ instance_id, path, edits, verify }) =>
 			runTool(ctx.logger, "ha_edit_config_file", async () => {
-				const meant = (instance_id ?? "").trim();
-				const targeting = ctx.instances.activeId();
-				if (ctx.config.brokered && meant !== targeting) {
-					return errorResult(
-						`Refused: this session is targeting "${targeting}", but the edit names ` +
-							`"${meant}". Nothing was written. Select it with vomehome_use_instance first ` +
-							`if "${meant}" is the home you mean.`
-					);
-				}
-				const decision = evaluateConfigWrite(ctx.instances.currentSafety());
-				if (!decision.allowed) {
-					return errorResult(`Refused: ${decision.reason}`);
-				}
+				const refused = refuseFileWrite(ctx, instance_id, "edit", "Nothing was written.");
+				if (refused) return refused;
 				const before = await readIfExists(ctx, path, "utf8");
 				if (before === null) {
 					return errorResult(
@@ -724,10 +719,12 @@ export function registerConfigFileTools(server: McpServer, ctx: ToolContext): vo
 			inputSchema: {
 				instance_id: z
 					.string()
+					.optional()
 					.describe(
-						"The instance this delete is for (as listed by vomehome_list_instances). Required: it routes this " +
-							"call to that home (this call only; the session's active instance is unchanged), so the delete " +
-							"never lands on whichever home the session happens to be on. An unknown id is refused."
+						"The instance this delete is for (as listed by vomehome_list_instances). Required when this key " +
+							"reaches more than one home; with only one in reach it defaults to that one, and the reply's stamp " +
+							"says so. It routes this call to that home (this call only; the session's active instance is " +
+							"unchanged), so the delete never lands on whichever home the session happens to be on. An unknown id is refused."
 					),
 				path: z.string().describe("File relative to the config root, e.g. 'packages/old.yaml'.")
 			},
@@ -736,19 +733,8 @@ export function registerConfigFileTools(server: McpServer, ctx: ToolContext): vo
 		async ({ instance_id, path }) =>
 			runTool(ctx.logger, "ha_delete_config_file", async () => {
 				// Same rule as writes: a delete on the wrong house cannot be undone.
-				const meant = (instance_id ?? "").trim();
-				const targeting = ctx.instances.activeId();
-				if (ctx.config.brokered && meant !== targeting) {
-					return errorResult(
-						`Refused: this session is targeting "${targeting}", but the delete names ` +
-							`"${meant}". Nothing was deleted. Select it with vomehome_use_instance first ` +
-							`if "${meant}" is the home you mean.`
-					);
-				}
-				const decision = evaluateConfigWrite(ctx.instances.currentSafety());
-				if (!decision.allowed) {
-					return errorResult(`Refused: ${decision.reason}`);
-				}
+				const refused = refuseFileWrite(ctx, instance_id, "delete", "Nothing was deleted.");
+				if (refused) return refused;
 				try {
 					const result = await filesRequest<Record<string, unknown>>(
 						ctx,
@@ -783,10 +769,12 @@ export function registerConfigFileTools(server: McpServer, ctx: ToolContext): vo
 			inputSchema: {
 				instance_id: z
 					.string()
+					.optional()
 					.describe(
-						"The instance this move is for (as listed by vomehome_list_instances). Required: it routes this " +
-							"call to that home (this call only; the session's active instance is unchanged), so the move " +
-							"never lands on whichever home the session happens to be on. An unknown id is refused."
+						"The instance this move is for (as listed by vomehome_list_instances). Required when this key " +
+							"reaches more than one home; with only one in reach it defaults to that one, and the reply's stamp " +
+							"says so. It routes this call to that home (this call only; the session's active instance is " +
+							"unchanged), so the move never lands on whichever home the session happens to be on. An unknown id is refused."
 					),
 				path: z.string().describe("File to move, relative to the config root."),
 				to: z.string().describe("Its new path, relative to the config root."),
@@ -796,19 +784,8 @@ export function registerConfigFileTools(server: McpServer, ctx: ToolContext): vo
 		},
 		async ({ instance_id, path, to, overwrite }) =>
 			runTool(ctx.logger, "ha_move_config_file", async () => {
-				const meant = (instance_id ?? "").trim();
-				const targeting = ctx.instances.activeId();
-				if (ctx.config.brokered && meant !== targeting) {
-					return errorResult(
-						`Refused: this session is targeting "${targeting}", but the move names ` +
-							`"${meant}". Nothing was moved. Select it with vomehome_use_instance first ` +
-							`if "${meant}" is the home you mean.`
-					);
-				}
-				const decision = evaluateConfigWrite(ctx.instances.currentSafety());
-				if (!decision.allowed) {
-					return errorResult(`Refused: ${decision.reason}`);
-				}
+				const refused = refuseFileWrite(ctx, instance_id, "move", "Nothing was moved.");
+				if (refused) return refused;
 				const query =
 					`?path=${encodeURIComponent(path)}&to=${encodeURIComponent(to)}` +
 					`&overwrite=${overwrite ? 1 : 0}`;

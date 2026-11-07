@@ -252,12 +252,21 @@ the instance manager makes is wrapped so a `HaRestartingError` triggers one
 
 Per-call routing (`tools/instanceStamp.ts` + `InstanceManager.runOn`, 0.17): a
 tool's `instance_id` (the optional one the stamp wrapper adds, or a write
-tool's own required one) runs that call inside an AsyncLocalStorage scope in
+tool's own) runs that call inside an AsyncLocalStorage scope in
 which `activeId()`, `rest`, `currentSafety()` and the brokered WS/ESPHome
 clients all resolve to the named instance. The session's `active`, `chosenId()`
 and so the hosted server's memory are untouched (serve.ts reads
 `sessionActiveId()`). Unknown ids are refused by the wrapper; direct mode
 refuses any optional id but `(direct)`.
+
+Write tools' own `instance_id` (file writes, `ha_provision_service_login`) is
+optional in the schema; one rule in the wrapper (`writeTarget`) decides. Named,
+it routes as above. Omitted, the call goes to the only instance in reach
+(`visibleInstanceIds`: the registry when brokered — the token's listed instances
+on the hosted server, VOMEHOME_INSTANCE_ID/VOMEHOME_INSTANCES on stdio, plus
+created/adopted ones; `(direct)` otherwise), and the stamp says it was the
+default; with more than one in reach it is refused with the list. The handlers'
+own check (`refuseWrongHome`) applies the same rule as defence in depth.
 
 Instance management (`portal/instances_api.py`):
 

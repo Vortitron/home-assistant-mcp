@@ -185,7 +185,8 @@ const INSTANCE_ARG = "instance_id";
  * a call makes that impossible: the call goes to the home named. Optional,
  * so existing callers are unaffected; skipped for the vomehome_* tools, where
  * ``instance_id`` names the home to act on, and for tools that declare their
- * own (where it is required, and routed the same way — see {@link ownsInstanceArg}).
+ * own (the write tools, where it must be given whenever more than one home is
+ * in reach, and is routed the same way — see {@link ownsInstanceArg}).
  */
 function guardableSchema(name: string, config: unknown): Record<string, unknown> | null {
 	if (name.startsWith("vomehome_") || !config || typeof config !== "object") return null;
@@ -208,7 +209,11 @@ function guardableSchema(name: string, config: unknown): Record<string, unknown>
 	};
 }
 
-/** True for a (non-vomehome) tool that declares its own, required, ``instance_id``: the write tools. */
+/**
+ * True for a (non-vomehome) tool that declares its own ``instance_id``: the
+ * file and login writes, where naming the home is required whenever the
+ * session can reach more than one (see {@link writeTarget}).
+ */
 function ownsInstanceArg(name: string, config: unknown): boolean {
 	if (name.startsWith("vomehome_") || !config || typeof config !== "object") return false;
 	const shape = (config as { inputSchema?: unknown }).inputSchema;
@@ -217,6 +222,91 @@ function ownsInstanceArg(name: string, config: unknown): boolean {
 
 function refusal(text: string): CallToolResult {
 	return { isError: true, content: [{ type: "text", text }] };
+}
+
+/**
+ * The homes this session can reach, which is what decides whether a write
+ * may leave out ``instance_id``.
+ *
+ * Brokered, that is the instance registry: on the hosted server, the
+ * instances the portal lists for the token (each session's registry is built
+ * from that list); on stdio, VOMEHOME_INSTANCE_ID and VOMEHOME_INSTANCES. Both
+ * grow when the session creates an instance or switches to one not listed
+ * yet, so once a second home is in play, writes must name theirs again. A
+ * direct connection (HA_URL) has exactly one Home Assistant.
+ */
+export function visibleInstanceIds(ctx: ToolContext): string[] {
+	if (!ctx.config.brokered) return [DIRECT_INSTANCE_ID];
+	return ctx.instances.list().map((entry) => entry.id);
+}
+
+const LISTED_IN_REFUSAL = 10;
+
+/**
+ * Where a write that may or may not name its home goes: the named one, the
+ * only one in reach when it names none, or a refusal saying why it must.
+ *
+ * Writes used to require ``instance_id`` outright, while reads took it
+ * optionally ("write tools require the instance id while read tools
+ * don't"). The requirement exists for the case where it can be wrong: a
+ * session that reaches several homes, where the ambient active one has
+ * drifted before (2026-09-18, a customer's configuration.yaml). With one
+ * home in reach there is nothing to confuse, so the write goes there and the
+ * stamp says it was the default.
+ */
+export function writeTarget(
+	ctx: ToolContext,
+	named: unknown,
+	noun = "write"
+): { id: string; defaulted: boolean; refusal?: undefined } | { refusal: string } {
+	if (typeof named === "string" && named.trim()) return { id: named.trim(), defaulted: false };
+	const visible = visibleInstanceIds(ctx);
+	if (visible.length === 1) return { id: visible[0] as string, defaulted: true };
+	if (visible.length === 0) {
+		return {
+			refusal:
+				`Refused: this session has no home to ${noun} to yet. Nothing was changed. Select one with ` +
+				"vomehome_use_instance, then name it with instance_id."
+		};
+	}
+	const shown = visible.slice(0, LISTED_IN_REFUSAL).join(", ") + (visible.length > LISTED_IN_REFUSAL ? ", …" : "");
+	return {
+		refusal:
+			`Refused: ${ctx.config.hosted ? "this key reaches" : "this session reaches"} ${visible.length} homes ` +
+			`(${shown}): name the one this ${noun} is for with instance_id. Nothing was changed. It is only ` +
+			"optional when a single home is in reach, so a write never lands on whichever home the session " +
+			"happens to be on."
+	};
+}
+
+/**
+ * The write tools' own check, run inside the handler: refuses a write aimed
+ * at a home other than the one this call targets, or one that names no home
+ * while several are in reach; null when it may go ahead.
+ *
+ * Since 0.17 the tool wrapper routes the named instance for the call, so
+ * belief and reality cannot disagree there; this stays as defence in depth
+ * for a handler run without the wrapper. ``nothing`` is what the refusal
+ * says did not happen ("Nothing was written.").
+ */
+export function refuseWrongHome(
+	ctx: ToolContext,
+	instanceId: string | undefined,
+	noun: string,
+	nothing: string
+): CallToolResult | null {
+	if (!ctx.config.brokered) return null;
+	const target = writeTarget(ctx, instanceId, noun);
+	if (target.refusal !== undefined) return refusal(target.refusal);
+	const targeting = ctx.instances.activeId();
+	if (target.id !== targeting) {
+		return refusal(
+			`Refused: this session is targeting "${targeting}", but the ${noun} names "${target.id}". ${nothing} ` +
+				`If "${target.id}" is the home you mean, name it with instance_id (or select it with ` +
+				"vomehome_use_instance) and try again — do not assume the session is still where you left it."
+		);
+	}
+	return null;
 }
 
 /**
@@ -230,8 +320,8 @@ function refusal(text: string): CallToolResult {
  * (another /api/v1/instances/<id> base). A direct connection has one Home
  * Assistant and nowhere to route: an optional ``instance_id`` naming anything
  * else is refused rather than answered from it, while the write tools' own
- * required argument is left as it always was there (it cannot mean anything
- * but the one home).
+ * argument is left as it always was there (it cannot mean anything but the
+ * one home).
  */
 function routeFor(
 	ctx: ToolContext,
@@ -264,12 +354,22 @@ function routeFor(
 /**
  * Appends the stamp to a tool result as its own trailing text block. When the
  * call was routed away from the session's own instance (``sessionId``), the
- * stamp says so, so nobody takes the session to have moved.
+ * stamp says so, so nobody takes the session to have moved; when a write
+ * left out ``instance_id`` and went to the only home in reach
+ * (``defaulted``), it says that too.
  */
-export function appendStamp(result: CallToolResult, identity: Identity, sessionId?: string): CallToolResult {
+export function appendStamp(
+	result: CallToolResult,
+	identity: Identity,
+	sessionId?: string,
+	defaulted = false
+): CallToolResult {
 	let stamp = renderStamp(identity);
 	if (sessionId !== undefined && sessionId !== identity.id) {
 		stamp += ` (this call only; session still on ${sessionId})`;
+	}
+	if (defaulted) {
+		stamp += " (instance_id omitted: the only home this session reaches)";
 	}
 	// A separate content block, never merged into the payload: callers that
 	// JSON.parse the first block keep working unchanged.
@@ -297,6 +397,7 @@ export function withInstanceStamp(server: McpServer, ctx: ToolContext): McpServe
 		const owned = !guarded && ownsInstanceArg(name, config);
 		const stampedHandler = async (...args: unknown[]): Promise<CallToolResult> => {
 			let named: unknown;
+			let defaulted = false;
 			if (guarded || owned) {
 				const params = (args[0] ?? {}) as Record<string, unknown>;
 				named = params[INSTANCE_ARG];
@@ -304,6 +405,23 @@ export function withInstanceStamp(server: McpServer, ctx: ToolContext): McpServe
 					// The tool never sees the argument it did not declare.
 					const { [INSTANCE_ARG]: _named, ...rest } = params;
 					args[0] = rest;
+				} else {
+					// A write tool: one rule for all of them. Named, it routes as
+					// below; omitted, it goes to the only home in reach or is
+					// refused with the homes to choose from.
+					const target = writeTarget(ctx, named);
+					if (target.refusal !== undefined) {
+						return appendStamp(
+							refusal(target.refusal),
+							await identity().catch(() => ({ id: ctx.instances.activeId() }))
+						);
+					}
+					if (target.defaulted) {
+						defaulted = true;
+						named = target.id;
+						// The handler's own check sees the home it is going to.
+						args[0] = { ...params, [INSTANCE_ARG]: target.id };
+					}
 				}
 			}
 			const route = routeFor(ctx, named, owned);
@@ -326,7 +444,7 @@ export function withInstanceStamp(server: McpServer, ctx: ToolContext): McpServe
 				} catch {
 					session = undefined;
 				}
-				return appendStamp(result, stamp, session);
+				return appendStamp(result, stamp, session, defaulted);
 			};
 			// Routed: the handler, its permission checks and the stamp all run
 			// against the named instance; the session's own stays put.

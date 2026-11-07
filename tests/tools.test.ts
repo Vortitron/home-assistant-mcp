@@ -1471,6 +1471,52 @@ describe("ha_write_config_file names its target", () => {
 	});
 });
 
+describe("write tools leave out instance_id only with one home in reach", () => {
+	const env = { HA_TOKEN: "", VOMEHOME_TOKEN: "vh_test", HA_ALLOW_WRITE: "true", HA_ALLOW_CONFIG_WRITE: "true" };
+	afterEach(() => vi.unstubAllGlobals());
+
+	function stubFiles() {
+		const writes: string[] = [];
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (input: unknown) => {
+				const url = String(input);
+				if (url.includes("/files/write") || url.includes("/files/delete")) writes.push(url);
+				return new Response(JSON.stringify({ path: "x", written: true }), { status: 200 });
+			})
+		);
+		return writes;
+	}
+
+	it("writes to the only home and stamps that it was the default", async () => {
+		const writes = stubFiles();
+		const server = buildHarness({ env: { ...env, VOMEHOME_INSTANCE_ID: "rly-1" } });
+		const result = await server.call("ha_write_config_file", { path: "packages/x.yaml", content: "x\n", verify: false });
+		expect(result.isError).toBeFalsy();
+		expect(writes).toEqual([expect.stringContaining("/instances/rly-1/ha/files/write?path=packages%2Fx.yaml")]);
+		expect(String((result.content.at(-1) as any).text)).toContain("instance_id omitted");
+		const deleted = await server.call("ha_delete_config_file", { path: "packages/x.yaml" });
+		expect(deleted.isError).toBeFalsy();
+		expect(writes).toHaveLength(2);
+	});
+
+	it("refuses with the homes to choose from when there are several, and writes nothing", async () => {
+		const writes = stubFiles();
+		const server = buildHarness({ env: { ...env, VOMEHOME_INSTANCE_ID: "rly-1", VOMEHOME_INSTANCES: '["rly-1","rly-2"]' } });
+		for (const [tool, args] of [
+			["ha_write_config_file", { path: "x.yaml", content: "x" }],
+			["ha_edit_config_file", { path: "x.yaml", edits: [{ old_text: "a", new_text: "b" }] }],
+			["ha_delete_config_file", { path: "x.yaml" }],
+			["ha_move_config_file", { path: "x.yaml", to: "y.yaml" }]
+		] as const) {
+			const result = await server.call(tool, args);
+			expect(result.isError).toBe(true);
+			expect(textOf(result)).toMatch(/reaches 2 homes \(rly-1, rly-2\): name the one this write is for with instance_id/);
+		}
+		expect(writes).toEqual([]);
+	});
+});
+
 describe("ha_write_config_file verification", () => {
 	const BROKERED = {
 		HA_TOKEN: "",

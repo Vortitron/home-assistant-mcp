@@ -1159,6 +1159,103 @@ describe("ha_delete_config_entry", () => {
 	});
 });
 
+describe("esphome_save_config from a local file", () => {
+	/* 7 Nov 2026: an 18,000-character change to a real device's YAML was too
+	   big to send through the edit tool, so the agent went round the MCP. A
+	   file on the MCP's own machine can be named instead of pasted. */
+	const env = { HA_ALLOW_WRITE: "true", HA_ALLOW_CONFIG_WRITE: "true" };
+	let dir: string;
+	beforeEach(() => {
+		dir = mkdtempSync(join(tmpdir(), "esphome-yaml-"));
+	});
+	afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+	const saving = () => {
+		const saved: Array<{ configuration: string; yaml: string }> = [];
+		const client = {
+			saveConfig: vi.fn(async (configuration: string, yaml: string) => {
+				saved.push({ configuration, yaml });
+			})
+		};
+		return { saved, client: client as unknown as Partial<EsphomeClient> };
+	};
+
+	it("reads yaml_path and saves it through the same dashboard write as inline yaml", async () => {
+		const text = "esphome:\n  name: kitchen-detectorer\n" + "# padding\n".repeat(2000);
+		const local = join(dir, "kitchen.yaml");
+		writeFileSync(local, text, "utf8");
+		const files = saving();
+		const server = buildHarness({ env, esphome: files.client });
+
+		const fromFile = await server.call("esphome_save_config", { configuration: "kitchen.yaml", yaml_path: local });
+		expect(fromFile.isError).toBeFalsy();
+		expect(jsonOf(fromFile)).toMatchObject({ saved: true, configuration: "kitchen.yaml", read_from: local, bytes: text.length });
+		await server.call("esphome_save_config", { configuration: "kitchen.yaml", yaml: text });
+		expect(files.saved).toEqual([
+			{ configuration: "kitchen.yaml", yaml: text },
+			{ configuration: "kitchen.yaml", yaml: text }
+		]);
+	});
+
+	it("takes exactly one of yaml and yaml_path", async () => {
+		const local = join(dir, "a.yaml");
+		writeFileSync(local, "a: 1\n");
+		const files = saving();
+		const server = buildHarness({ env, esphome: files.client });
+		const both = await server.call("esphome_save_config", { configuration: "a.yaml", yaml: "a: 1\n", yaml_path: local });
+		const neither = await server.call("esphome_save_config", { configuration: "a.yaml" });
+		for (const result of [both, neither]) {
+			expect(result.isError).toBe(true);
+			expect(textOf(result)).toMatch(/exactly one of 'yaml'.*'yaml_path'/);
+		}
+		expect(files.saved).toEqual([]);
+	});
+
+	it("on the hosted server, reads nothing and gives the REST upload into esphome/ instead", async () => {
+		const local = join(dir, "secret.yaml");
+		writeFileSync(local, "wifi:\n  password: on-the-server\n");
+		const files = saving();
+		const server = buildHarness({
+			env: { ...env, HA_TOKEN: "", VOMEHOME_TOKEN: "vh_test", VOMEHOME_INSTANCE_ID: "rly-1", MCP_HOSTED: "1" },
+			esphome: files.client
+		});
+		const result = await server.call("esphome_save_config", { configuration: "loft.yaml", yaml_path: local });
+		const missing = await server.call("esphome_save_config", { configuration: "loft.yaml", yaml_path: join(dir, "nope.yaml") });
+
+		expect(result.isError).toBe(true);
+		const text = textOf(result);
+		expect(text).toMatch(/hosted Vome MCP/);
+		expect(text).toContain("https://vome.io/api/v1/instances/rly-1/ha/files/write?path=esphome%2Floft.yaml");
+		expect(text).toContain(`file=@${local}`);
+		expect(text).toMatch(/Vome app/);
+		expect(text).toMatch(/esphome_edit_config/);
+		expect(text).not.toContain("on-the-server");
+		// Never looked at the disk: a missing file gets the same answer, not "does not exist".
+		expect(textOf(missing)).not.toMatch(/does not exist/);
+		expect(textOf(missing)).toMatch(/hosted Vome MCP/);
+		expect(files.saved).toEqual([]);
+	});
+
+	it("refuses a file over 2 MiB, and one that is not UTF-8 text, without saving", async () => {
+		const big = join(dir, "big.yaml");
+		writeFileSync(big, Buffer.alloc(MAX_UPLOAD_BYTES + 1, 0x41));
+		const latin1 = join(dir, "latin1.yaml");
+		writeFileSync(latin1, Buffer.from([0x6e, 0x61, 0x6d, 0x65, 0x3a, 0x20, 0x4b, 0xf6, 0x6b, 0x0a])); // "name: Kök" in Latin-1
+		const files = saving();
+		const server = buildHarness({ env, esphome: files.client });
+
+		const tooBig = await server.call("esphome_save_config", { configuration: "big.yaml", yaml_path: big });
+		expect(tooBig.isError).toBe(true);
+		expect(textOf(tooBig)).toMatch(/^Nothing saved: .*2 MiB/);
+		const notText = await server.call("esphome_save_config", { configuration: "k.yaml", yaml_path: latin1 });
+		expect(notText.isError).toBe(true);
+		expect(textOf(notText)).toMatch(/not UTF-8 text/);
+		const missing = await server.call("esphome_save_config", { configuration: "k.yaml", yaml_path: join(dir, "nope.yaml") });
+		expect(textOf(missing)).toMatch(/does not exist \(yaml_path is resolved against/);
+		expect(files.saved).toEqual([]);
+	});
+});
+
 describe("config files", () => {
 	it("says it needs a relay rather than failing obscurely in direct mode", async () => {
 		// Files are served by the Vome component on the home; a direct HA

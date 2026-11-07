@@ -5,6 +5,7 @@ import { evaluateConfigWrite } from "../safety.js";
 import { summariseOutput } from "../esphome/summary.js";
 import { buildProgressFor, type ProgressExtra } from "../esphome/progress.js";
 import { errorResult, jsonResult, runTool, textResult, type ToolContext } from "./helpers.js";
+import { readLocalUpload, restFileWriteUrl } from "./configFiles.js";
 
 const SECONDS_TO_MS = 1000;
 /** Lines kept from the end of a long build's output, and of a long log read. */
@@ -47,6 +48,38 @@ function pendingMigrationConfigs(devices: unknown): string[] {
 		}
 	}
 	return out;
+}
+
+/**
+ * What esphome_save_config says on the hosted server when given yaml_path.
+ *
+ * There "local" is Vome's machine, not the agent's, so the file is never
+ * looked for. The routes that do work from there: send the file over the
+ * REST file write into esphome/ (where the ESPHome add-on keeps its configs)
+ * from the machine that has it, or keep to esphome_edit_config with edits
+ * small enough to send inline.
+ */
+export function hostedYamlPathMessage(apiUrl: string, instanceId: string, configuration: string, yamlPath: string): string {
+	const url = restFileWriteUrl(apiUrl, instanceId, `esphome/${configuration}`);
+	return [
+		"Nothing saved: this is the hosted Vome MCP. It runs on Vome's servers, so it cannot see files on " +
+			"your machine, and yaml_path is only read on the machine the MCP runs on.",
+		"",
+		"Either send the file over the Vome REST API from the machine that has it (the API key needs ha:files). " +
+			"It lands in the config directory at esphome/" +
+			configuration +
+			", where the ESPHome add-on keeps its configurations:",
+		"",
+		`  curl -X POST "${url}" \\`,
+		'    -H "Authorization: Bearer $VOMEHOME_TOKEN" \\',
+		`    -F "file=@${yamlPath}"`,
+		"",
+		"Writing a .yaml file this way needs the Vome app (add-on) on the home; the integration alone does not " +
+			"write YAML. It also skips the ESPHome dashboard, so run esphome_validate on it afterwards.",
+		"",
+		"Or, for a change to an existing file, use esphome_edit_config with smaller edits, sent as several " +
+			"calls if need be. Each edit only has to quote the text it changes."
+	].join("\n");
 }
 
 export function registerEsphomeTools(server: McpServer, ctx: ToolContext): void {
@@ -219,22 +252,64 @@ export function registerEsphomeTools(server: McpServer, ctx: ToolContext): void 
 		{
 			title: "Save ESPHome config",
 			description:
-				"Write YAML to an ESPHome configuration file, whole: for a new file. To change part of an existing one, use esphome_edit_config. Requires HA_ALLOW_WRITE=true and HA_ALLOW_CONFIG_WRITE=true. Follow with esphome_validate to confirm it compiles, then esphome_upload to flash it.",
+				"Write YAML to an ESPHome configuration file, whole: for a new file, or a rewrite too large to send " +
+				"as edits. Give the YAML inline as 'yaml', or as 'yaml_path', a file on the MCP server's machine " +
+				"(npx / stdio only; UTF-8 text, at most 2 MiB), so a long config is never pasted into the call. " +
+				"Both are saved the same way. The hosted Vome MCP cannot read your disk: there yaml_path reads nothing " +
+				"and the reply gives the REST upload to run instead. To change part of an existing file, use " +
+				"esphome_edit_config. Requires HA_ALLOW_WRITE=true and HA_ALLOW_CONFIG_WRITE=true. Follow with " +
+				"esphome_validate to confirm it compiles, then esphome_upload to flash it.",
 			inputSchema: {
 				configuration: z.string().describe("Configuration filename, e.g. 'living-room.yaml'."),
-				yaml: z.string().describe("Full YAML content to write.")
+				yaml: z.string().optional().describe("Full YAML content to write. Give this or yaml_path, not both."),
+				yaml_path: z
+					.string()
+					.min(1)
+					.optional()
+					.describe(
+						"Instead of 'yaml': a YAML file on the MCP server's machine (absolute, '~/...', or relative to the " +
+							"server's working directory), sent as the whole new config. UTF-8 text, at most 2 MiB. Not on " +
+							"the hosted Vome MCP."
+					)
 			},
 			annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true }
 		},
-		async ({ configuration, yaml }) =>
+		async ({ configuration, yaml, yaml_path }) =>
 			runTool(ctx.logger, "esphome_save_config", async () => {
+				const fromPath = typeof yaml_path === "string" && yaml_path.trim() !== "";
+				if ((typeof yaml === "string") === fromPath) {
+					return errorResult(
+						"Nothing saved: give exactly one of 'yaml' (the YAML itself) or 'yaml_path' (a file on the MCP " +
+							"server's machine)."
+					);
+				}
 				// Per-instance config policy (matches the active HA instance).
 				const decision = evaluateConfigWrite(ctx.instances.currentSafety());
 				if (!decision.allowed) {
 					return errorResult(`Refused: ${decision.reason}`);
 				}
-				await ctx.esphome.saveConfig(configuration, yaml);
-				return jsonResult({ saved: true, configuration });
+				if (!fromPath) {
+					await ctx.esphome.saveConfig(configuration, yaml as string);
+					return jsonResult({ saved: true, configuration });
+				}
+				// On the hosted server "local" is Vome's disk. Never read it.
+				if (ctx.config.hosted) {
+					return errorResult(
+						hostedYamlPathMessage(ctx.config.vomehome.apiUrl, ctx.instances.activeId(), configuration, yaml_path)
+					);
+				}
+				const local = await readLocalUpload(yaml_path, process.cwd(), { lead: "Nothing saved", argName: "yaml_path" });
+				if (!local.ok) {
+					return errorResult(local.message);
+				}
+				if (local.encoding !== "utf8") {
+					return errorResult(
+						`Nothing saved: ${local.resolved} is not UTF-8 text (it reads as binary), so it cannot be ESPHome YAML.`
+					);
+				}
+				// The same dashboard write as inline yaml, so validation and behaviour are identical.
+				await ctx.esphome.saveConfig(configuration, local.content);
+				return jsonResult({ saved: true, configuration, read_from: local.resolved, bytes: local.bytes });
 			})
 	);
 
@@ -247,7 +322,8 @@ export function registerEsphomeTools(server: McpServer, ctx: ToolContext): void 
 				"text with another, and must match exactly once. Prefer this to esphome_save_config for any " +
 				"change to an existing file: a real device's YAML runs to thousands of lines, and resending all " +
 				"of it to change a few is slow and risks a slip anywhere in it. Nothing is saved unless every " +
-				"edit applies. Requires HA_ALLOW_WRITE=true and HA_ALLOW_CONFIG_WRITE=true. Follow with " +
+				"edit applies. For a large rewrite, don't send huge edits: on a local MCP (npx / stdio) write the " +
+				"file and use esphome_save_config with yaml_path. Requires HA_ALLOW_WRITE=true and HA_ALLOW_CONFIG_WRITE=true. Follow with " +
 				"esphome_validate, then esphome_upload to flash it.",
 			inputSchema: {
 				configuration: z.string().describe("Configuration filename, e.g. 'living-room.yaml'."),

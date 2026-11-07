@@ -135,8 +135,8 @@ policy (see [Safety](#safety)).
 | `esphome_list_devices` | List dashboard configurations/devices; flags configs needing renames. |
 | `esphome_list_migrations` | ESPHome spellings a config still uses that have been renamed. |
 | `esphome_get_config` | Read a configuration's YAML. |
-| `esphome_save_config` | Write a configuration's YAML, whole: for a new file (write-gated). |
-| `esphome_edit_config` | Change part of a configuration in place with exact find-and-replace edits, so a long file is not resent (write-gated). |
+| `esphome_save_config` | Write a configuration's YAML, whole: for a new file or a large rewrite (write-gated). Inline as `yaml`, or `yaml_path`, a file on the MCP's own machine (npx / stdio; UTF-8, at most 2 MiB) so a long config is not pasted into the call. The hosted MCP cannot read your disk and answers with the REST upload into `esphome/` instead. |
+| `esphome_edit_config` | Change part of a configuration in place with exact find-and-replace edits, so a long file is not resent (write-gated). For a large rewrite, use `esphome_save_config` with `yaml_path` rather than huge edits. |
 | `vome_health_report` | Vome's health score for the home and every finding, with severity, evidence, a recommendation and the entities involved. |
 | `vome_health_check` | Run a fresh health check, to re-score after fixes (write-gated). |
 | `esphome_validate` | Validate a configuration. |

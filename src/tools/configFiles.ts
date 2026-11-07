@@ -324,8 +324,21 @@ type LocalUpload =
 	| { ok: true; resolved: string; bytes: number; encoding: FileEncoding; content: string }
 	| { ok: false; message: string };
 
-/** Reads a file from this process's own disk for upload, or says why not. */
-export async function readLocalUpload(localPath: string, cwd: string = process.cwd()): Promise<LocalUpload> {
+/**
+ * Reads a file from this process's own disk for upload, or says why not.
+ *
+ * `lead` opens every refusal ("Nothing uploaded", "Nothing saved") and
+ * `argName` names the argument the path came from, so a tool other than
+ * ha_upload_file (esphome_save_config's yaml_path) can share the same
+ * resolution, checks and 2 MiB cap and still speak in its own terms.
+ */
+export async function readLocalUpload(
+	localPath: string,
+	cwd: string = process.cwd(),
+	options: { lead?: string; argName?: string } = {}
+): Promise<LocalUpload> {
+	const lead = options.lead ?? "Nothing uploaded";
+	const argName = options.argName ?? "local_path";
 	const resolved = resolveLocalPath(localPath, cwd);
 	let info: Awaited<ReturnType<typeof stat>>;
 	try {
@@ -336,18 +349,18 @@ export async function readLocalUpload(localPath: string, cwd: string = process.c
 			ok: false,
 			message:
 				code === "ENOENT"
-					? `Nothing uploaded: ${resolved} does not exist (local_path is resolved against ${cwd}).`
-					: `Nothing uploaded: could not read ${resolved} (${code ?? String(error)}).`
+					? `${lead}: ${resolved} does not exist (${argName} is resolved against ${cwd}).`
+					: `${lead}: could not read ${resolved} (${code ?? String(error)}).`
 		};
 	}
 	if (!info.isFile()) {
-		return { ok: false, message: `Nothing uploaded: ${resolved} is not a regular file.` };
+		return { ok: false, message: `${lead}: ${resolved} is not a regular file.` };
 	}
 	if (info.size > MAX_UPLOAD_BYTES) {
 		return {
 			ok: false,
 			message:
-				`Nothing uploaded: ${resolved} is ${info.size} bytes, over the ${MAX_UPLOAD_BYTES}-byte ` +
+				`${lead}: ${resolved} is ${info.size} bytes, over the ${MAX_UPLOAD_BYTES}-byte ` +
 				`(2 MiB) limit for one file. Split it, compress it, or serve it from somewhere else.`
 		};
 	}
@@ -356,10 +369,18 @@ export async function readLocalUpload(localPath: string, cwd: string = process.c
 	if (bytes.length > MAX_UPLOAD_BYTES) {
 		return {
 			ok: false,
-			message: `Nothing uploaded: ${resolved} is over the ${MAX_UPLOAD_BYTES}-byte (2 MiB) limit.`
+			message: `${lead}: ${resolved} is over the ${MAX_UPLOAD_BYTES}-byte (2 MiB) limit.`
 		};
 	}
 	return { ok: true, resolved, bytes: bytes.length, ...encodeForUpload(bytes) };
+}
+
+/** The Vome REST endpoint that writes one file into the home's config directory. */
+export function restFileWriteUrl(apiUrl: string, instanceId: string, path: string): string {
+	return (
+		`${apiUrl}/api/v1/instances/${encodeURIComponent(instanceId || "<instance id>")}` +
+		`/ha/files/write?path=${encodeURIComponent(path)}`
+	);
 }
 
 /**
@@ -368,9 +389,7 @@ export async function readLocalUpload(localPath: string, cwd: string = process.c
  * agent can run from where the file is.
  */
 export function hostedUploadMessage(apiUrl: string, instanceId: string, path: string, localPath: string): string {
-	const url =
-		`${apiUrl}/api/v1/instances/${encodeURIComponent(instanceId || "<instance id>")}` +
-		`/ha/files/write?path=${encodeURIComponent(path)}`;
+	const url = restFileWriteUrl(apiUrl, instanceId, path);
 	return [
 		"Nothing uploaded: this is the hosted Vome MCP. It runs on Vome's servers, so it cannot see files " +
 			"on your machine, and ha_upload_file only reads the disk of the machine the MCP runs on.",

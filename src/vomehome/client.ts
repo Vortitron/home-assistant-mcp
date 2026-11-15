@@ -107,6 +107,20 @@ export interface VomeHomeClient {
 	 * (``/api/v1/instances/<id>/backups[/<path>]``).
 	 */
 	backups(id: string, path?: string, method?: string): Promise<Record<string, unknown>>;
+	/**
+	 * A single-use pass that stands in for VomeSync's CAPTCHA when this home
+	 * makes a switch public (``POST /api/v1/instances/<id>/vomesync-pass``).
+	 * Only an account paying for Vome gets one; a refusal (403) comes back as
+	 * ``{paying: false, error}`` rather than an exception.
+	 */
+	vomesyncPass(id: string): Promise<VomeSyncPass>;
+}
+
+export interface VomeSyncPass {
+	pass?: string;
+	expires_at?: number;
+	paying: boolean;
+	error?: string;
 }
 
 /** Which Home Assistant setup-wizard steps are still outstanding. */
@@ -416,9 +430,35 @@ export function createVomeHomeClient(config: Config, logger: Logger): VomeHomeCl
 		return isRecord(payload) ? payload : {};
 	}
 
+	async function vomesyncPass(id: string): Promise<VomeSyncPass> {
+		const url = `${INSTANCES_PATH}/${encodeURIComponent(id)}/vomesync-pass`;
+		try {
+			const payload = await request<unknown>(url, { method: "POST", body: {} });
+			const record = isRecord(payload) ? payload : {};
+			return {
+				pass: typeof record.pass === "string" ? record.pass : undefined,
+				expires_at: typeof record.expires_at === "number" ? record.expires_at : undefined,
+				paying: true
+			};
+		} catch (error) {
+			if (error instanceof VomeHomeError && error.status === 403) {
+				let reason = "This account has no Vome plan.";
+				try {
+					const parsed: unknown = JSON.parse(error.body);
+					if (isRecord(parsed) && typeof parsed.error === "string") reason = parsed.error;
+				} catch {
+					// not JSON: keep the plain reason
+				}
+				return { paying: false, error: reason };
+			}
+			throw error;
+		}
+	}
+
 	return {
 		isEnabled: () => config.vomehome.enabled,
 		chap,
+		vomesyncPass,
 		backups,
 		listInstances,
 		getInstance,

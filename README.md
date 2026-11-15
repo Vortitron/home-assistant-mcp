@@ -195,6 +195,14 @@ stays behind a full browser login on the portal.
 | `vomehome_create_guest_link` | Create a non-admin HA user + one-click login URL for sharing (needs `HA_ALLOW_CONFIG_WRITE`). Vome-hosted instances only. |
 | `vomehome_list_guest_links` | List guest links for an instance, revoked ones included. |
 | `vomehome_revoke_guest_link` | Revoke a guest link immediately. |
+| `vomesync_create_switch` | Make a VomeSync switch owned by the home (its Vome integration): name, description, category, link, pictures, public or not. Write-gated. |
+| `vomesync_update_switch` | Change a VomeSync switch's details, or make it public or private (Vome integration 0.9.68+). Write-gated. |
+
+**VomeSync switches.** Making a switch public can need a CAPTCHA, which an
+agent can't solve. When the home's owner pays for Vome (a plan, Connect or a
+package from Vome), `vomesync_create_switch` and `vomesync_update_switch` ask
+the portal for a single-use pass and send it instead. Without one they still
+try, and say why if VomeSync refuses.
 
 **Guest links** are self-serve, revocable sharing: a non-admin (unless you
 pass `admin: true`) Home Assistant account plus a one-click login URL, minted

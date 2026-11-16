@@ -2196,7 +2196,7 @@ describe("hacs", () => {
 			if (command.type === "hacs/repositories/list") {
 				return [{ id: "123", full_name: "me/repo", category: "integration", installed: true }];
 			}
-			if (command.type !== "hacs/info") {
+			if (command.type !== "hacs/info" && command.type !== "hacs/repository/info") {
 				seen.push(command.type as string);
 			}
 			return {};
@@ -2214,7 +2214,7 @@ describe("hacs", () => {
 			if (command.type === "hacs/repositories/list") {
 				return [{ id: "123", full_name: "me/repo", category: "integration", installed: false }];
 			}
-			if (command.type !== "hacs/info") {
+			if (command.type !== "hacs/info" && command.type !== "hacs/repository/info") {
 				seen.push(command.type as string);
 			}
 			return {};
@@ -2255,6 +2255,34 @@ describe("hacs", () => {
 			expect(body.store).toBe("marketplace");
 			expect(seen).toContainEqual({ type: "marketplace/repository/install", repository: "123", version: "v1.2.0" });
 			expect(seen.some((command) => String(command.type).startsWith("hacs/"))).toBe(false);
+		});
+
+		it("finds a repository without listing the whole catalogue: by id directly, by name one category at a time", async () => {
+			const seen: Array<Record<string, unknown>> = [];
+			const sendCommand = vi.fn(async (command: Record<string, unknown>) => {
+				seen.push(command);
+				if (command.type === "marketplace/info") {
+					return { version: "2026.11.0", categories: ["integration", "plugin", "theme"] };
+				}
+				if (command.type === "marketplace/repository/info") {
+					return command.repository_id === "123" ? ROW : null;
+				}
+				if (command.type === "marketplace/repositories/list") {
+					const cats = command.categories as string[] | undefined;
+					return cats && cats.includes("plugin") ? [{ ...ROW, id: "456", full_name: "me/card", category: "plugin" }] : [];
+				}
+				return {};
+			});
+			const server = buildHarness({ env: WRITE, ws: { sendCommand } });
+
+			await server.call("ha_hacs_download_repository", { repository: "123" });
+			expect(seen.some((c) => c.type === "marketplace/repositories/list")).toBe(false);
+
+			seen.length = 0;
+			await server.call("ha_hacs_download_repository", { repository: "me/card" });
+			const lists = seen.filter((c) => c.type === "marketplace/repositories/list");
+			expect(lists.every((c) => Array.isArray(c.categories) && (c.categories as string[]).length === 1)).toBe(true);
+			expect(seen).toContainEqual({ type: "marketplace/repository/install", repository: "456" });
 		});
 
 		it("uninstalls and untracks with the Marketplace's verbs", async () => {

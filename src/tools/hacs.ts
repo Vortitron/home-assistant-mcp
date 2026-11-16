@@ -82,10 +82,11 @@ export function summariseRepository(row: HacsRepositoryRow): Record<string, unkn
 
 type Store = "marketplace" | "hacs";
 
-const COMMANDS: Record<Store, Record<"info" | "list" | "add" | "install" | "uninstall" | "untrack", string>> = {
+const COMMANDS: Record<Store, Record<"info" | "list" | "repo" | "add" | "install" | "uninstall" | "untrack", string>> = {
 	marketplace: {
 		info: "marketplace/info",
 		list: "marketplace/repositories/list",
+		repo: "marketplace/repository/info",
 		add: "marketplace/repositories/add",
 		install: "marketplace/repository/install",
 		uninstall: "marketplace/repository/uninstall",
@@ -94,6 +95,7 @@ const COMMANDS: Record<Store, Record<"info" | "list" | "add" | "install" | "unin
 	hacs: {
 		info: "hacs/info",
 		list: "hacs/repositories/list",
+		repo: "hacs/repository/info",
 		add: "hacs/repositories/add",
 		install: "hacs/repository/download",
 		uninstall: "hacs/repository/remove",
@@ -181,15 +183,40 @@ async function listRepositories(store: StoreSession, categories?: string[]): Pro
 	return Array.isArray(result) ? (result as HacsRepositoryRow[]) : [];
 }
 
-/** Resolve a caller-supplied repository reference (an id or "owner/repo") to its row. */
+/**
+ * Resolve a caller-supplied repository reference (an id or "owner/repo") to its row.
+ *
+ * Never by listing the whole catalogue at once if it can be helped: a home with
+ * thousands of known repositories answers that with over 4 MB, more than the
+ * VomeHome relay passes in one message. An id asks for that one repository; a
+ * name is looked for one category at a time.
+ */
 async function resolveRepository(store: StoreSession, ref: string): Promise<HacsRepositoryRow | null> {
-	const repositories = await listRepositories(store);
-	const needle = ref.trim().toLowerCase();
-	return (
-		repositories.find(
-			(row) => String(row.id) === ref.trim() || (row.full_name ?? "").toLowerCase() === needle
-		) ?? null
-	);
+	const id = ref.trim();
+	const needle = id.toLowerCase();
+	const matches = (row: HacsRepositoryRow) => String(row.id) === id || (row.full_name ?? "").toLowerCase() === needle;
+	if (/^\d+$/.test(id)) {
+		try {
+			const one = await store.send<unknown>("repo", { repository_id: id });
+			if (one && typeof one === "object" && matches(one as HacsRepositoryRow)) {
+				return one as HacsRepositoryRow;
+			}
+		} catch {
+			// an older store, or an id it doesn't know: look in the lists
+		}
+	}
+	const info = store.info as { categories?: unknown } | null;
+	const categories = Array.isArray(info?.categories) ? (info?.categories as unknown[]).map(String) : [];
+	if (categories.length > 0) {
+		for (const category of categories) {
+			const hit = (await listRepositories(store, [category])).find(matches);
+			if (hit) {
+				return hit;
+			}
+		}
+		return null;
+	}
+	return (await listRepositories(store)).find(matches) ?? null;
 }
 
 function refuseWrite(ctx: ToolContext): string {

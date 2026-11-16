@@ -12,6 +12,7 @@ import { registerLogTools } from "./logs.js";
 import { registerCameraTools } from "./cameras.js";
 import { registerSpeechTools } from "./speech.js";
 import { registerAssistTools } from "./assist.js";
+import { registerRepairTools } from "./repairs.js";
 import { registerTraceTools } from "./traces.js";
 import { registerSystemTools } from "./system.js";
 import { registerEsphomeTools } from "./esphome.js";
@@ -59,6 +60,7 @@ export function registerAllTools(rawServer: McpServer, ctx: ToolContext): void {
 	registerCameraTools(server, ctx);
 	registerSpeechTools(server, ctx);
 	registerAssistTools(server, ctx);
+	registerRepairTools(server, ctx);
 	registerTraceTools(server, ctx);
 	registerEsphomeTools(server, ctx);
 	registerNodeRedTools(server, ctx);

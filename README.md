@@ -229,6 +229,8 @@ be revoked early at any time.
 | --- | --- |
 | `ha_list_config_entries` | List installed integrations (config entries). Optional domain filter. |
 | `ha_list_config_subentries` | List one config entry's subentries (Supernotify's recipients and transports, MQTT devices, AI agents): id, type, title, unique_id, and a count per type. Home Assistant doesn't expose their settings; use the integration's own read action for those. |
+| `ha_list_repairs` | List Settings → Repairs in the UI's own words (title, description), worst first, with severity, integration, fixable, breaks-in version and learn-more link. `domain` filter; ignored ones hidden unless `include_ignored`. |
+| `ha_ignore_repair` | Ignore a repair (or `ignore: false` to bring it back). Hides it; fixes nothing. Needs `HA_ALLOW_CONFIG_WRITE`. |
 | `ha_delete_config_entry` | Delete a config entry by id — the fix for an orphaned/duplicate entry left behind after a device was removed, which is otherwise why a re-added device's entities pick up a `_2` suffix. Needs `HA_ALLOW_CONFIG_WRITE`. |
 | `ha_list_discovery_flows` | List integrations Home Assistant has discovered on the network but not yet added. |
 | `ha_config_flow` | Start (`handler`), reconfigure an existing entry (`entry_id`) or continue (`flow_id` + `user_input`) an integration's config flow. Needs `HA_ALLOW_CONFIG_WRITE`. |

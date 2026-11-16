@@ -4224,3 +4224,86 @@ describe("Assist pipelines", () => {
 		expect(textOf(result)).toMatch(/Small screens \(01small\)/);
 	});
 });
+
+describe("repairs", () => {
+	const WRITE = { HA_ALLOW_WRITE: "true", HA_ALLOW_CONFIG_WRITE: "true" };
+	const ISSUES = [
+		{
+			domain: "supernotify",
+			issue_id: "yaml_recipients",
+			translation_key: "yaml_recipients",
+			translation_placeholders: { count: "6" },
+			severity: "warning",
+			is_fixable: false,
+			ignored: false
+		},
+		{ domain: "homeassistant", issue_domain: "hassio", issue_id: "x1", translation_key: "unhealthy", severity: "critical", ignored: false },
+		{ domain: "mqtt", issue_id: "old", translation_key: "deprecated", severity: "warning", ignored: true }
+	];
+	const RESOURCES = {
+		"component.supernotify.issues.yaml_recipients.title": "Supernotify recipients in YAML are ignored",
+		"component.supernotify.issues.yaml_recipients.description": "{count} recipients were imported.",
+		"component.hassio.issues.unhealthy.title": "Unhealthy system"
+	};
+
+	function repairsWs() {
+		return vi.fn(async (command: Record<string, unknown>) => {
+			if (command.type === "repairs/list_issues") return { issues: ISSUES };
+			if (command.type === "frontend/get_translations") return { resources: RESOURCES };
+			if (command.type === "repairs/ignore_issue") return null;
+			throw new Error(`unexpected ${String(command.type)}`);
+		});
+	}
+
+	it("lists repairs in the UI's words, worst first, ignored ones hidden", async () => {
+		const sendWsCommand = repairsWs();
+		const server = buildHarness({ rest: { sendWsCommand } as never });
+		const body = jsonOf(await server.call("ha_list_repairs"));
+		expect(body.count).toBe(2);
+		expect(body.ignored_hidden).toBe(1);
+		expect(body.issues[0].title).toBe("Unhealthy system");
+		expect(body.issues[0].issue_domain).toBe("hassio");
+		expect(body.issues[1].title).toBe("Supernotify recipients in YAML are ignored");
+		expect(body.issues[1].description).toBe("6 recipients were imported.");
+		expect(sendWsCommand).toHaveBeenCalledWith(
+			expect.objectContaining({ type: "frontend/get_translations", category: "issues", integration: ["supernotify", "hassio"] })
+		);
+	});
+
+	it("filters by domain and can include ignored ones", async () => {
+		const server = buildHarness({ rest: { sendWsCommand: repairsWs() } as never });
+		const body = jsonOf(await server.call("ha_list_repairs", { domain: "mqtt", include_ignored: true }));
+		expect(body.issues.map((i: { issue_id: string }) => i.issue_id)).toEqual(["old"]);
+		expect(body.issues[0].title).toBeNull();
+	});
+
+	it("still lists the issues when the translations can't be had", async () => {
+		const sendWsCommand = vi.fn(async (command: Record<string, unknown>) => {
+			if (command.type === "repairs/list_issues") return { issues: ISSUES };
+			throw new Error("unknown_command");
+		});
+		const server = buildHarness({ rest: { sendWsCommand } as never });
+		const body = jsonOf(await server.call("ha_list_repairs"));
+		expect(body.count).toBe(2);
+		expect(body.translations_error).toMatch(/unknown_command/);
+	});
+
+	it("ignores a repair only with config-write, and only one that exists", async () => {
+		const sendWsCommand = repairsWs();
+		const readOnly = buildHarness({ env: { HA_ALLOW_WRITE: "true" }, rest: { sendWsCommand } as never });
+		expect((await readOnly.call("ha_ignore_repair", { domain: "supernotify", issue_id: "yaml_recipients" })).isError).toBe(true);
+		expect(sendWsCommand).not.toHaveBeenCalled();
+
+		const server = buildHarness({ env: WRITE, rest: { sendWsCommand } as never });
+		const missing = await server.call("ha_ignore_repair", { domain: "supernotify", issue_id: "nope" });
+		expect(missing.isError).toBe(true);
+		const body = jsonOf(await server.call("ha_ignore_repair", { domain: "supernotify", issue_id: "yaml_recipients" }));
+		expect(sendWsCommand).toHaveBeenCalledWith({
+			type: "repairs/ignore_issue",
+			domain: "supernotify",
+			issue_id: "yaml_recipients",
+			ignore: true
+		});
+		expect(body.ignored).toBe(true);
+	});
+});

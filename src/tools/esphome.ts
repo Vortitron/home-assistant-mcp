@@ -155,13 +155,14 @@ export function registerEsphomeTools(server: McpServer, ctx: ToolContext): void 
 	const runStream = async (
 		command: EsphomeStreamCommand,
 		configuration: string,
-		options: { port?: string; timeoutSeconds?: number; openEnded?: boolean; fullOutput?: boolean; extra?: ProgressExtra } = {}
+		options: { port?: string; timeoutSeconds?: number; openEnded?: boolean; fullOutput?: boolean; tryOnHome?: boolean; extra?: ProgressExtra } = {}
 	) => {
 		const result = await ctx.esphome.runCommand({
 			command,
 			configuration,
 			onProgress: buildProgressFor(options.extra),
 			port: options.port,
+			tryOnHome: options.tryOnHome,
 			timeoutMs: options.timeoutSeconds ? options.timeoutSeconds * SECONDS_TO_MS : undefined
 		});
 		// `logs` has no natural end — it runs until the caller stops watching,
@@ -511,6 +512,14 @@ export function registerEsphomeTools(server: McpServer, ctx: ToolContext): void 
 			inputSchema: {
 				configuration: z.string().describe("Configuration filename, e.g. 'living-room.yaml'."),
 				timeout_seconds: z.number().int().positive().optional().describe("Override the command timeout."),
+				try_on_home: z
+					.boolean()
+					.optional()
+					.describe(
+						"Build on the home itself even though Vome refused because it is short of free memory. Only after " +
+							"such a refusal, and only if the owner agrees: Vome then watches the home's free memory and stops " +
+							"the build if it gets too low, so Home Assistant is never starved (Vome-hosted homes)."
+					),
 				full_output: z
 					.boolean()
 					.optional()
@@ -518,9 +527,14 @@ export function registerEsphomeTools(server: McpServer, ctx: ToolContext): void 
 			},
 			annotations: { readOnlyHint: false, openWorldHint: true }
 		},
-		async ({ configuration, timeout_seconds, full_output }, extra) =>
+		async ({ configuration, timeout_seconds, try_on_home, full_output }, extra) =>
 			runTool(ctx.logger, "esphome_compile", async () =>
-				runStream("compile", configuration, { timeoutSeconds: timeout_seconds, fullOutput: full_output, extra })
+				runStream("compile", configuration, {
+					timeoutSeconds: timeout_seconds,
+					fullOutput: full_output,
+					tryOnHome: try_on_home,
+					extra
+				})
 			)
 	);
 
@@ -536,6 +550,14 @@ export function registerEsphomeTools(server: McpServer, ctx: ToolContext): void 
 				configuration: z.string().describe("Configuration filename, e.g. 'living-room.yaml'."),
 				port: z.string().optional().describe("Device address (IP/hostname) or 'OTA'. Defaults to 'OTA'."),
 				timeout_seconds: z.number().int().positive().optional().describe("Override the command timeout."),
+				try_on_home: z
+					.boolean()
+					.optional()
+					.describe(
+						"Build on the home itself even though Vome refused because it is short of free memory. Only after " +
+							"such a refusal, and only if the owner agrees: Vome then watches the home's free memory and stops " +
+							"the build if it gets too low, so Home Assistant is never starved (Vome-hosted homes)."
+					),
 				full_output: z
 					.boolean()
 					.optional()
@@ -543,7 +565,7 @@ export function registerEsphomeTools(server: McpServer, ctx: ToolContext): void 
 			},
 			annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true }
 		},
-		async ({ configuration, port, timeout_seconds, full_output }, extra) =>
+		async ({ configuration, port, timeout_seconds, try_on_home, full_output }, extra) =>
 			runTool(ctx.logger, "esphome_upload", async () => {
 				if (!ctx.instances.currentSafety().allowWrite) {
 					return errorResult(
@@ -557,7 +579,13 @@ export function registerEsphomeTools(server: McpServer, ctx: ToolContext): void 
 				// that fails never reaches the device.
 				const progress = buildProgressFor(extra);
 				const timeoutMs = timeout_seconds ? timeout_seconds * SECONDS_TO_MS : undefined;
-				const built = await ctx.esphome.runCommand({ command: "compile", configuration, onProgress: progress, timeoutMs });
+				const built = await ctx.esphome.runCommand({
+					command: "compile",
+					configuration,
+					onProgress: progress,
+					timeoutMs,
+					tryOnHome: try_on_home
+				});
 				if (built.exitCode !== 0 || built.timedOut) {
 					const summary = full_output ? null : summariseOutput(built.output, BUILD_TAIL);
 					return jsonResult({
@@ -573,7 +601,14 @@ export function registerEsphomeTools(server: McpServer, ctx: ToolContext): void 
 						...(summary?.summarised ? { output_lines: summary.total_lines, output_summarised: true } : {})
 					});
 				}
-				const sent = await ctx.esphome.runCommand({ command: "upload", configuration, port: port ?? "OTA", onProgress: progress, timeoutMs });
+				const sent = await ctx.esphome.runCommand({
+					command: "upload",
+					configuration,
+					port: port ?? "OTA",
+					onProgress: progress,
+					timeoutMs,
+					tryOnHome: try_on_home
+				});
 				const both = `${built.output}${built.output.endsWith("\n") ? "" : "\n"}${sent.output}`;
 				const summary = full_output ? null : summariseOutput(both, BUILD_TAIL);
 				return jsonResult({

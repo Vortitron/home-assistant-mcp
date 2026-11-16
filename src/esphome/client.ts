@@ -22,6 +22,8 @@ export interface EsphomeCommandRequest {
 	command: EsphomeStreamCommand;
 	configuration: string;
 	port?: string;
+	/** Build on the home itself even when Vome says it is short of memory; Vome then watches and stops the build if it runs short. Vome-hosted homes only. */
+	tryOnHome?: boolean;
 	timeoutMs?: number;
 	maxLines?: number;
 	/** Called after each poll of a running job: lines so far and the newest one (for MCP progress). */

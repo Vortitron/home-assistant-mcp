@@ -117,6 +117,25 @@ describe("createBrokeredEsphomeDashboardClient", () => {
 		expect(String(fetchMock.mock.calls[2]![0])).toContain("cursor=1");
 	});
 
+	it("asks to build on the home anyway only when told to", async () => {
+		// 16 Nov 2026: a build Vome refused for want of memory can be tried
+		// anyway; Vome then watches the home's memory and stops it if needed.
+		const fetchMock = vi
+			.fn()
+			.mockImplementation(async () => jsonResponse({ lines: [], cursor: 0, done: true, exit_code: 0, job_id: "job-1" }));
+		vi.stubGlobal("fetch", fetchMock);
+
+		await client().runCommand({ command: "compile", configuration: "lr.yaml", tryOnHome: true });
+		expect(JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string)).toEqual({
+			command: "compile",
+			configuration: "lr.yaml",
+			try_on_home: true
+		});
+		fetchMock.mockClear();
+		await client().runCommand({ command: "compile", configuration: "lr.yaml", tryOnHome: false });
+		expect(JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string)).not.toHaveProperty("try_on_home");
+	});
+
 	it("rides out a poll that fails, picking up from the same cursor", async () => {
 		// GamlaBio, 21 Oct 2026: one slow poll (the compile box still pairing)
 		// failed the whole upload while the job carried on.

@@ -152,7 +152,8 @@ export function createBrokeredEsphomeDashboardClient(
 			body: {
 				command: request.command,
 				configuration: request.configuration,
-				...(request.port ? { port: request.port } : {})
+				...(request.port ? { port: request.port } : {}),
+				...(request.tryOnHome === true ? { try_on_home: true } : {})
 			}
 		});
 		const jobId = started?.job_id;

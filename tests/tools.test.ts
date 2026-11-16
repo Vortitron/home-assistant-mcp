@@ -4102,3 +4102,125 @@ describe("ha_speech_to_text", () => {
 		expect(textOf(result)).toContain('{"text":null,"result":"error"}');
 	});
 });
+
+describe("ha_list_config_subentries", () => {
+	const ROWS = [
+		{ subentry_id: "a", subentry_type: "recipient", title: "Andy", unique_id: "person.superduper" },
+		{ subentry_id: "b", subentry_type: "recipient", title: "Mama", unique_id: "person.sofie" },
+		{ subentry_id: "c", subentry_type: "transport", title: "mobile_push", unique_id: null }
+	];
+
+	it("lists one entry's subentries over WebSocket, with a count per type", async () => {
+		const sendWsCommand = vi.fn(async () => ROWS);
+		const server = buildHarness({ rest: { sendWsCommand } as never });
+		const body = jsonOf(await server.call("ha_list_config_subentries", { entry_id: "01M6" }));
+		expect(sendWsCommand).toHaveBeenCalledWith({ type: "config_entries/subentries/list", entry_id: "01M6" });
+		expect(body.count).toBe(3);
+		expect(body.by_type).toEqual({ recipient: 2, transport: 1 });
+	});
+
+	it("filters by subentry_type but still counts every type", async () => {
+		const sendWsCommand = vi.fn(async () => ROWS);
+		const server = buildHarness({ rest: { sendWsCommand } as never });
+		const body = jsonOf(
+			await server.call("ha_list_config_subentries", { entry_id: "01M6", subentry_type: "recipient" })
+		);
+		expect(body.subentries.map((r: { title: string }) => r.title)).toEqual(["Andy", "Mama"]);
+		expect(body.by_type.transport).toBe(1);
+	});
+});
+
+describe("Assist pipelines", () => {
+	const WRITE = { HA_ALLOW_WRITE: "true", HA_ALLOW_CONFIG_WRITE: "true" };
+	const SMALL = {
+		id: "01small",
+		name: "Small screens",
+		language: "sv",
+		conversation_engine: "conversation.claude",
+		conversation_language: "sv",
+		stt_engine: "stt.faster_whisper",
+		stt_language: "sv",
+		tts_engine: "tts.piper",
+		tts_language: "sv_SE",
+		tts_voice: "nst-medium",
+		wake_word_entity: null,
+		wake_word_id: null,
+		prefer_local_intents: true
+	};
+	const HA = { ...SMALL, id: "01ha", name: "Home Assistant", stt_engine: null };
+
+	function pipelineWs() {
+		return vi.fn(async (command: Record<string, unknown>) => {
+			if (command.type === "assist_pipeline/pipeline/list") {
+				return { pipelines: [HA, SMALL], preferred_pipeline: "01ha" };
+			}
+			if (command.type === "assist_pipeline/pipeline/update") {
+				const { type: _t, pipeline_id, ...rest } = command;
+				return { id: pipeline_id, ...rest };
+			}
+			if (command.type === "assist_pipeline/pipeline/set_preferred") return null;
+			throw new Error(`unexpected ${String(command.type)}`);
+		});
+	}
+
+	it("lists pipelines, marks the preferred one and the satellites on each", async () => {
+		const sendWsCommand = pipelineWs();
+		const getStates = vi.fn(async () => [
+			{ entity_id: "select.kitchen_assistant", state: "Small screens", attributes: { options: ["preferred", "Home Assistant", "Small screens"] } },
+			{ entity_id: "select.hall_assistant", state: "preferred", attributes: { options: ["preferred", "Home Assistant", "Small screens"] } },
+			{ entity_id: "select.heat_mode", state: "eco", attributes: { options: ["eco", "comfort"] } }
+		]);
+		const server = buildHarness({ rest: { sendWsCommand, getStates } as never });
+		const body = jsonOf(await server.call("ha_list_assist_pipelines"));
+		expect(body.preferred_pipeline).toBe("01ha");
+		const byId = Object.fromEntries(body.pipelines.map((p: { id: string }) => [p.id, p]));
+		expect(byId["01ha"].preferred).toBe(true);
+		expect(byId["01ha"].used_by).toEqual(["select.hall_assistant"]);
+		expect(byId["01small"].used_by).toEqual(["select.kitchen_assistant"]);
+	});
+
+	it("changing one field sends the whole pipeline back, the rest untouched", async () => {
+		// HA's update replaces the pipeline with what it is sent: one field alone would wipe the rest.
+		const sendWsCommand = pipelineWs();
+		const server = buildHarness({ env: WRITE, rest: { sendWsCommand } as never });
+		const body = jsonOf(
+			await server.call("ha_set_assist_pipeline", { pipeline: "small screens", stt_engine: "stt.vome_hearing" })
+		);
+		const { id: _id, ...rest } = SMALL;
+		expect(sendWsCommand).toHaveBeenCalledWith({
+			type: "assist_pipeline/pipeline/update",
+			pipeline_id: "01small",
+			...rest,
+			stt_engine: "stt.vome_hearing"
+		});
+		expect(body.changed).toEqual(["stt_engine"]);
+		expect(body.before).toEqual({ stt_engine: "stt.faster_whisper" });
+		expect(body.pipeline.tts_voice).toBe("nst-medium");
+	});
+
+	it("refuses without config-write, before reading anything", async () => {
+		const sendWsCommand = pipelineWs();
+		const server = buildHarness({ env: { HA_ALLOW_WRITE: "true" }, rest: { sendWsCommand } as never });
+		const result = await server.call("ha_set_assist_pipeline", { pipeline: "01small", stt_engine: "stt.vome_hearing" });
+		expect(result.isError).toBe(true);
+		expect(sendWsCommand).not.toHaveBeenCalled();
+	});
+
+	it("sends no update when nothing changes, and can just make a pipeline preferred", async () => {
+		const sendWsCommand = pipelineWs();
+		const server = buildHarness({ env: WRITE, rest: { sendWsCommand } as never });
+		const body = jsonOf(
+			await server.call("ha_set_assist_pipeline", { pipeline: "01small", stt_engine: "stt.faster_whisper", make_preferred: true })
+		);
+		expect(sendWsCommand).not.toHaveBeenCalledWith(expect.objectContaining({ type: "assist_pipeline/pipeline/update" }));
+		expect(sendWsCommand).toHaveBeenCalledWith({ type: "assist_pipeline/pipeline/set_preferred", pipeline_id: "01small" });
+		expect(body.made_preferred).toBe(true);
+	});
+
+	it("names the pipelines there are when the one asked for is missing", async () => {
+		const server = buildHarness({ env: WRITE, rest: { sendWsCommand: pipelineWs() } as never });
+		const result = await server.call("ha_set_assist_pipeline", { pipeline: "Loft", stt_engine: "stt.x" });
+		expect(result.isError).toBe(true);
+		expect(textOf(result)).toMatch(/Small screens \(01small\)/);
+	});
+});

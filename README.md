@@ -87,6 +87,8 @@ policy (see [Safety](#safety)).
 | --- | --- |
 | `ha_call_service` | Call any service (turn_on, set_temperature, …). A service that can return a response (`shell_command`'s stdout/stderr/returncode, `script`, `weather.get_forecasts` …) is asked for it, and it comes back as `service_response`. |
 | `ha_speech_to_text` | Run a WAV (16-bit PCM, at most 30 s) through one of the home's speech-to-text engines (`stt.*`) and get back the words it heard, to test an assistant's hearing without speaking to a device. `audio_path` reads a local file (npx servers only); `audio_base64` sends the bytes (the hosted MCP). Language defaults to the home's own. Engines want 16 kHz mono (`ffmpeg -i in.wav -ar 16000 -ac 1 -sample_fmt s16 out.wav`). A write because some engines (Vome Hearing, cloud ones) charge per request: needs `HA_ALLOW_WRITE` / `ha:write`; not for external homes through VomeHome. |
+| `ha_list_assist_pipelines` | List the voice assistants (Assist pipelines): conversation agent, speech-to-text, text-to-speech, wake word, which is preferred and which satellites use each. |
+| `ha_set_assist_pipeline` | Change a voice assistant's fields (e.g. `stt_engine: stt.vome_hearing`), by id or name; the rest are kept, since the pipeline is read and sent back whole. `make_preferred` makes it the preferred one. Needs `HA_ALLOW_CONFIG_WRITE` / `ha:config`. |
 | `ha_clear_system_log` | Empty the structured error store (only needs `HA_ALLOW_WRITE`). |
 | `ha_set_log_level` | Change logging for one integration at runtime (only needs `HA_ALLOW_WRITE`). |
 | `ha_set_automation` | Create or update an automation (also needs `HA_ALLOW_CONFIG_WRITE`). |
@@ -226,6 +228,7 @@ be revoked early at any time.
 | Tool | Description |
 | --- | --- |
 | `ha_list_config_entries` | List installed integrations (config entries). Optional domain filter. |
+| `ha_list_config_subentries` | List one config entry's subentries (Supernotify's recipients and transports, MQTT devices, AI agents): id, type, title, unique_id, and a count per type. Home Assistant doesn't expose their settings; use the integration's own read action for those. |
 | `ha_delete_config_entry` | Delete a config entry by id — the fix for an orphaned/duplicate entry left behind after a device was removed, which is otherwise why a re-added device's entities pick up a `_2` suffix. Needs `HA_ALLOW_CONFIG_WRITE`. |
 | `ha_list_discovery_flows` | List integrations Home Assistant has discovered on the network but not yet added. |
 | `ha_config_flow` | Start (`handler`), reconfigure an existing entry (`entry_id`) or continue (`flow_id` + `user_input`) an integration's config flow. Needs `HA_ALLOW_CONFIG_WRITE`. |

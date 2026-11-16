@@ -188,6 +188,43 @@ export function registerIntegrationTools(server: McpServer, ctx: ToolContext): v
 	);
 
 	server.registerTool(
+		"ha_list_config_subentries",
+		{
+			title: "List a config entry's subentries",
+			description:
+				"List the subentries of one config entry: the items an integration keeps under its own " +
+				"entry and shows as a list on its Settings → Devices & services page (Supernotify's " +
+				"recipients and transports, MQTT's devices, an AI integration's conversation agents, " +
+				"and so on). ha_list_config_entries gives num_subentries and supported_subentry_types; this " +
+				"says what they are. Home Assistant gives each one's id, type, title and unique_id, " +
+				"not its settings: for those, ask the integration itself if it has a read action (e.g. " +
+				"supernotify.enquire_recipients), or open its reconfigure form.",
+			inputSchema: {
+				entry_id: z.string().describe("Config entry id, from ha_list_config_entries."),
+				subentry_type: z
+					.string()
+					.optional()
+					.describe("Only this type, e.g. 'recipient' (see supported_subentry_types).")
+			},
+			annotations: { readOnlyHint: true, openWorldHint: true }
+		},
+		async ({ entry_id, subentry_type }) =>
+			runTool(ctx.logger, "ha_list_config_subentries", async () => {
+				const rows = await ctx.rest.sendWsCommand<
+					Array<{ subentry_id?: string; subentry_type?: string; title?: string; unique_id?: string | null }>
+				>({ type: "config_entries/subentries/list", entry_id });
+				const all = Array.isArray(rows) ? rows : [];
+				const subentries = subentry_type ? all.filter((row) => row?.subentry_type === subentry_type) : all;
+				const by_type: Record<string, number> = {};
+				for (const row of all) {
+					const key = row?.subentry_type ?? "unknown";
+					by_type[key] = (by_type[key] ?? 0) + 1;
+				}
+				return jsonResult({ entry_id, count: subentries.length, by_type, subentries });
+			})
+	);
+
+	server.registerTool(
 		"ha_delete_config_entry",
 		{
 			title: "Delete a config entry (integration)",

@@ -11,6 +11,7 @@ edit automations itself — and iterate until the code actually works.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](./LICENSE)
 [![Reviewed by HOL Guard](https://img.shields.io/badge/HOL_Guard%20|%20Home_Assistant_MCP_Vome-2E5AAC?logo=shield&logoColor=white)](https://hol.org/guard/extensions/mcp.vome-home-assistant)
+[![Vortitron/home-assistant-mcp MCP server](https://glama.ai/mcp/servers/Vortitron/home-assistant-mcp/badges/score.svg)](https://glama.ai/mcp/servers/Vortitron/home-assistant-mcp)
 
 ![Claude Code asked to set two lights to 40% and switch a socket on; the dashboard pane beside it lights them up as the home reports the change.](docs/images/vome-dash.gif)
 

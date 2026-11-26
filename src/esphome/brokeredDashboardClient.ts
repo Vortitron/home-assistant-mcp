@@ -7,6 +7,7 @@ import {
 	type EsphomeCommandResult
 } from "./client.js";
 import { createEsphomeActivityLog } from "./activity.js";
+import { userAgent } from "../version.js";
 
 /** Build output is polled; these bound how eagerly and for how long. */
 const POLL_MIN_MS = 500;
@@ -97,6 +98,7 @@ export function createBrokeredEsphomeDashboardClient(
 				method,
 				headers: {
 					Authorization: `Bearer ${config.vomehome.token}`,
+					"User-Agent": userAgent(),
 					"Content-Type": "application/json"
 				},
 				body: options.body === undefined ? undefined : JSON.stringify(options.body),

@@ -29,7 +29,8 @@ import type { Logger, LogLevel } from "../logger.js";
 import { createToolContext } from "../context.js";
 import { createVomeHomeClient, VomeHomeError } from "../vomehome/client.js";
 import { registerAllTools } from "../tools/index.js";
-import { SERVER_NAME, SERVER_VERSION } from "../version.js";
+import { SERVER_NAME, SERVER_VERSION, setClientMode } from "../version.js";
+import { ToolUsage, withToolUsage } from "./toolUsage.js";
 import {
 	createInstanceMemory,
 	SESSION_FILE_NAME,
@@ -65,6 +66,9 @@ const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_PATH = "/mcp";
 const DEFAULT_SESSION_TTL_MS = 30 * 60 * 1000;
 const SWEEP_INTERVAL_MS = 60 * 1000;
+
+/** How often the per-tool call counts are logged (see toolUsage.ts). */
+const USAGE_INTERVAL_MS = 60 * 60 * 1000;
 /** Refuse oversized bodies before parsing; MCP requests are small. */
 const MAX_BODY_BYTES = 4 * 1024 * 1024;
 
@@ -268,6 +272,8 @@ export interface RunningMcpServer {
  * path against an ephemeral port without the process-level signal handling.
  */
 export async function startMcpHttpServer(args: ServeArgs, logger: Logger): Promise<RunningMcpServer> {
+	setClientMode("hosted");
+	const usage = new ToolUsage();
 	const sessions = new Map<string, Session>();
 
 	/**
@@ -464,7 +470,7 @@ export async function startMcpHttpServer(args: ServeArgs, logger: Logger): Promi
 		}
 
 		const server = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION });
-		registerAllTools(server, ctx);
+		registerAllTools(withToolUsage(server, usage), ctx);
 
 		const remember = (sessionId: string): void => {
 			const sessionKey = sessionKeyFor(token, sessionId);
@@ -656,6 +662,13 @@ export async function startMcpHttpServer(args: ServeArgs, logger: Logger): Promi
 	}, SWEEP_INTERVAL_MS);
 	sweep.unref();
 
+	const logUsage = (): void => {
+		const line = usage.flush();
+		if (line) logger.info(line);
+	};
+	const usageTimer = setInterval(logUsage, USAGE_INTERVAL_MS);
+	usageTimer.unref();
+
 	await new Promise<void>((resolve, reject) => {
 		httpServer.once("error", reject);
 		httpServer.listen(args.port, args.host, resolve);
@@ -671,6 +684,9 @@ export async function startMcpHttpServer(args: ServeArgs, logger: Logger): Promi
 		sessionCount: () => sessions.size,
 		close: async () => {
 			clearInterval(sweep);
+			clearInterval(usageTimer);
+			// A restart (every deploy) would otherwise lose the window so far.
+			logUsage();
 			await Promise.all([...sessions.keys()].map((id) => dropSession(id)));
 			await new Promise<void>((resolve) => {
 				httpServer.close(() => resolve());

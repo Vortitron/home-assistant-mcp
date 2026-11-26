@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { evaluateConfigWrite } from "../safety.js";
 import { errorResult, jsonResult, runTool, type ToolContext } from "./helpers.js";
+import { userAgent } from "../version.js";
 
 const VOME_DOMAIN = "vomesync";
 
@@ -26,6 +27,7 @@ async function configEntriesGet<T>(ctx: ToolContext, haApiPath: string): Promise
 	const response = await fetch(url, {
 		headers: {
 			Authorization: `Bearer ${ctx.config.vomehome.token}`,
+			"User-Agent": userAgent(),
 			"Content-Type": "application/json"
 		}
 	});
@@ -51,6 +53,7 @@ async function configEntriesPost<T>(
 		method: "POST",
 		headers: {
 			Authorization: `Bearer ${ctx.config.vomehome.token}`,
+			"User-Agent": userAgent(),
 			"Content-Type": "application/json"
 		},
 		body: JSON.stringify(body)
@@ -73,6 +76,7 @@ async function configEntriesDelete<T>(ctx: ToolContext, haApiPath: string): Prom
 		method: "DELETE",
 		headers: {
 			Authorization: `Bearer ${ctx.config.vomehome.token}`,
+			"User-Agent": userAgent(),
 			"Content-Type": "application/json"
 		}
 	});

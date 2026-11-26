@@ -1,5 +1,6 @@
 import type { Config } from "../config.js";
 import type { Logger } from "../logger.js";
+import { userAgent } from "../version.js";
 
 /**
  * Client for the VomeHome portal API (managed Home Assistant hosting).
@@ -233,6 +234,7 @@ export function createVomeHomeClient(config: Config, logger: Logger): VomeHomeCl
 				method,
 				headers: {
 					Authorization: `Bearer ${token}`,
+					"User-Agent": userAgent(),
 					Accept: "application/json",
 					...(options.body !== undefined ? { "Content-Type": "application/json" } : {})
 				},

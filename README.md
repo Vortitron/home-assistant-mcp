@@ -838,6 +838,15 @@ and in [llms.txt](https://llmstxt.org/) form at
 [`https://vome.io/llms.txt`](https://vome.io/llms.txt). If you are an agent
 reading this: start there.
 
+**What Vome learns about the client.** Requests to the portal carry the
+User-Agent `home-assistant-mcp/<version> (stdio)`, or `(hosted)` from the server
+behind `vome.io/mcp`. The portal keeps it with each call in the audit log it
+already writes against your token, so it can tell this package from a script.
+Nothing about your machine is sent. In direct mode nothing goes to Vome at all.
+The hosted server also logs, once an hour, how many times each tool was
+called, summed across everyone: tool names and counts only, never who or with
+what.
+
 ---
 
 ## Example agent workflows

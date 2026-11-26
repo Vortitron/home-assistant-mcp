@@ -5,6 +5,7 @@ import type { HaState } from "../ha/types.js";
 import { errorResult, jsonResult, runTool, type ToolContext } from "./helpers.js";
 import { readStates } from "./states.js";
 import { briefly } from "../ha/restart.js";
+import { userAgent } from "../version.js";
 
 /**
  * Live states: wait for the next change instead of polling.
@@ -253,7 +254,7 @@ async function read(grant: StateWatchGrant, cursor: number, waitSeconds: number)
 	const timer = setTimeout(() => controller.abort(), (waitSeconds + 15) * 1000);
 	try {
 		const response = await fetch(`${grant.read_url}?cursor=${cursor}&wait=${waitSeconds}`, {
-			headers: { Authorization: `Bearer ${grant.token}` },
+			headers: { Authorization: `Bearer ${grant.token}`, "User-Agent": userAgent() },
 			signal: controller.signal
 		});
 		if (response.status === 401 || response.status === 404) return "gone";

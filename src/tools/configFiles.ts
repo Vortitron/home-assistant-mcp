@@ -10,6 +10,7 @@ import { explainRestart } from "../ha/restart.js";
 import { errorResult, jsonResult, runTool, textResult, type ToolContext } from "./helpers.js";
 import { COMPONENT_MAX_ENTRIES, DEFAULT_LIST_LIMIT, shapeListing, type ComponentListing } from "./configListing.js";
 import { refuseWrongHome } from "./instanceStamp.js";
+import { userAgent } from "../version.js";
 
 /**
  * Files under Home Assistant's config directory — configuration.yaml and its
@@ -55,6 +56,7 @@ async function filesRequest<T>(
 		method: init.method,
 		headers: {
 			Authorization: `Bearer ${ctx.config.vomehome.token}`,
+			"User-Agent": userAgent(),
 			"Content-Type": "application/json"
 		},
 		body: init.body === undefined ? undefined : JSON.stringify(init.body)

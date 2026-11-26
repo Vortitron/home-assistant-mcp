@@ -25,6 +25,7 @@ import type {
 	HaState,
 	HaTarget
 } from "./types.js";
+import { userAgent } from "../version.js";
 
 /**
  * Home Assistant REST client that talks to a VomeHome instance *through* the
@@ -122,6 +123,7 @@ export function createBrokeredHaRestClient(
 				method,
 				headers: {
 					Authorization: `Bearer ${config.vomehome.token}`,
+					"User-Agent": userAgent(),
 					"Content-Type": "application/json"
 				},
 				body: options.body === undefined ? undefined : JSON.stringify(options.body),

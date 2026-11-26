@@ -55,6 +55,10 @@ describe("createBrokeredHaRestClient", () => {
 		const [url, init] = fetchMock.mock.calls[0]!;
 		expect(url).toBe("https://vome.io/api/v1/instances/srv-1/ha/states");
 		expect((init as RequestInit).headers).toMatchObject({ Authorization: "Bearer vh_test" });
+		// The portal tells the hosted server from an npm copy by this (see version.ts).
+		expect((init as RequestInit).headers).toMatchObject({
+			"User-Agent": expect.stringMatching(/^home-assistant-mcp\/\d+\.\d+\.\d+ \((stdio|hosted)\)$/)
+		});
 	});
 
 	it("POSTs service calls to the broker endpoint with a merged body", async () => {
